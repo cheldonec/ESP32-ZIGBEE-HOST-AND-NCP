@@ -1,0 +1,381 @@
+/*MIT License
+
+Copyright (c) 2025 Lyxt
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.*/
+
+#include "ssdp_server.h"
+#include "esp_log.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "lwip/sockets.h"
+#include "lwip/inet.h"
+#include "esp_netif.h"
+#include <string.h>
+#include <stdio.h>
+#include "esp_mac.h"
+#include "esp_event.h"
+
+#define SSDP_PORT 1900
+#define SSDP_MCAST_GROUP "239.255.255.250"
+#define SSDP_MX 3  // max wait time (seconds)
+#define SSDP_NOTIFY_INTERVAL_MS 30000
+
+// Настройки — можно вынести в config.h
+#define SSDP_DEVICE_TYPE "upnp:rootdevice"
+#define SSDP_FRIENDLY_NAME "ESP32 Zigbee Gateway"
+#define SSDP_MANUFACTURER "Lyxt"
+#define SSDP_MODEL_NAME "Zigbee NCP Host"
+#define SSDP_MODEL_NUMBER "1.0"
+#define SSDP_SERIAL_NUMBER "00000001"
+#define SSDP_PRESENTATION_URL "/"
+
+static const char *TAG = "ssdp_server";
+static bool s_ssdp_running = false;
+static TaskHandle_t s_ssdp_task_handle = NULL;
+
+// Уникальный UUID для устройства (можно генерировать из MAC)
+//static char s_uuid[64] = "uuid:12345678-1234-1234-1234-123456789abc";
+static char s_uuid[64];
+
+static char current_ip[16] = "192.168.4.1";  // будет обновляться
+
+// Прототипы
+static void send_ssdp_notify(const char *ip_addr, bool is_alive);
+static void handle_ssdp_search(const char *ip_addr, struct sockaddr_in *client_addr);
+
+static void generate_uuid_from_mac()
+{
+    uint8_t mac[6];
+    esp_err_t ret = esp_read_mac(mac, ESP_MAC_WIFI_SOFTAP);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to read MAC address");
+        return;
+    }
+    snprintf(s_uuid, sizeof(s_uuid),
+             "uuid:%02x%02x%02x-0000-1000-8000-%02x%02x%02x%02x%02x%02x",
+             mac[0], mac[1], mac[2],
+             mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+}
+
+// Получение IP-адреса ESP32
+static void get_current_ip(char *ip_buf, size_t buf_len)
+{
+    esp_netif_t *netif = NULL;
+    esp_netif_ip_info_t ip_info;
+
+    // Сначала пробуем STA
+    netif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+    if (netif && esp_netif_get_ip_info(netif, &ip_info) == ESP_OK && ip_info.ip.addr != 0) {
+        strncpy(ip_buf, inet_ntoa(ip_info.ip), buf_len);
+        return;
+    }
+
+    // Потом AP
+    netif = esp_netif_get_handle_from_ifkey("WIFI_AP_DEF");
+    if (netif && esp_netif_get_ip_info(netif, &ip_info) == ESP_OK) {
+        strncpy(ip_buf, inet_ntoa(ip_info.ip), buf_len);
+        return;
+    }
+
+    // По умолчанию
+    strncpy(ip_buf, "192.168.4.1", buf_len);
+}
+
+static void ssdp_ip_event_handler(void *arg, esp_event_base_t event_base,
+                                  int32_t event_id, void *event_data)
+{
+    if (event_id == IP_EVENT_STA_GOT_IP) {
+        ip_event_got_ip_t *event = (ip_event_got_ip_t *)event_data;
+        strcpy(current_ip, inet_ntoa(event->ip_info.ip));
+        ESP_LOGI(TAG, "IP_EVENT_STA_GOT_IP → SSDP: IP обновлён: %s", current_ip);
+        send_ssdp_notify(current_ip, true);
+    }
+}
+
+
+// Формат NOTIFY-сообщения
+static const char *ssdp_notify_alive =
+    "NOTIFY * HTTP/1.1\r\n"
+    "HOST: 239.255.255.250:1900\r\n"
+    "CACHE-CONTROL: max-age=1800\r\n"
+    "LOCATION: http://%s:80/description.xml\r\n"
+    "SERVER: ESP32/Zigbee-Gateway v1.0\r\n"
+    "NT: upnp:rootdevice\r\n"
+    "USN: %s::upnp:rootdevice\r\n"
+    "NTS: ssdp:alive\r\n"
+    "\r\n";
+
+
+// Формат ответа на M-SEARCH
+static const char *ssdp_response_ok =
+    "HTTP/1.1 200 OK\r\n"
+    "CACHE-CONTROL: max-age=1800\r\n"
+    "LOCATION: http://%s:80/description.xml\r\n"
+    "SERVER: ESP32/Zigbee-Gateway v1.0\r\n"
+    "ST: upnp:rootdevice\r\n"
+    "USN: %s::upnp:rootdevice\r\n"
+    "EXT:\r\n"
+    "\r\n";
+
+
+// Формат multicast NOTIFY (периодическая рассылка)
+static const char *ssdp_notify_byebye =
+    "NOTIFY * HTTP/1.1\r\n"
+    "HOST: 239.255.255.250:1900\r\n"
+    "NT: upnp:rootdevice\r\n"
+    "USN: %s::upnp:rootdevice\r\n"
+    "NTS: ssdp:byebye\r\n"
+    "\r\n";
+
+
+// Отправка SSDP NOTIFY (alive)
+static void send_ssdp_notify(const char *ip_addr, bool is_alive)
+{
+    int sock = socket(AF_INET, SOCK_DGRAM, 0);
+    if (sock < 0) return;
+
+    struct sockaddr_in dest;
+    dest.sin_family = AF_INET;
+    dest.sin_port = htons(SSDP_PORT);
+    dest.sin_addr.s_addr = inet_addr(SSDP_MCAST_GROUP);
+
+    char buffer[512];
+    int len;
+
+    if (is_alive) {
+        len = snprintf(buffer, sizeof(buffer), ssdp_notify_alive,
+               ip_addr,      // %s — IP в LOCATION
+               s_uuid);      // %s — UUID в USN
+    } else {
+        len = snprintf(buffer, sizeof(buffer), ssdp_notify_byebye, s_uuid);
+        // Для byebye не нужен LOCATION и SERVER
+    }
+
+    if (len > 0) {
+        sendto(sock, buffer, len, 0, (struct sockaddr*)&dest, sizeof(dest));
+    }
+
+    close(sock);
+}
+
+// Ответ на M-SEARCH
+static void handle_ssdp_search(const char *ip_addr, struct sockaddr_in *client_addr)
+{
+    int sock = socket(AF_INET, SOCK_DGRAM, 0);
+    if (sock < 0) {
+        ESP_LOGE(TAG, "Failed to create socket for SSDP response");
+        return;
+    }
+
+    char buffer[512];
+    int len = snprintf(buffer, sizeof(buffer), ssdp_response_ok, ip_addr, s_uuid);
+
+
+    if (len > 0) {
+        int sent = sendto(sock, buffer, len, 0, (struct sockaddr*)client_addr, sizeof(*client_addr));
+        if (sent < 0) {
+            ESP_LOGE(TAG, "SSDP: sendto failed to %s", inet_ntoa(client_addr->sin_addr));
+        } else {
+            ESP_LOGI(TAG, "SSDP: Sent %d bytes to %s:%d", sent, inet_ntoa(client_addr->sin_addr), ntohs(client_addr->sin_port));
+        }
+    } else {
+        ESP_LOGE(TAG, "SSDP: snprintf failed");
+    }
+
+    close(sock);
+}
+
+
+// Основная задача SSDP
+// Основная задача SSDP
+static void ssdp_server_task(void *pvParameters)
+{
+    int sock;
+    struct sockaddr_in server_addr;
+    char buffer[512];
+    struct sockaddr_in client_addr;
+    socklen_t client_len;
+
+    sock = socket(AF_INET, SOCK_DGRAM, 0);
+    if (sock < 0) {
+        ESP_LOGE(TAG, "Failed to create SSDP socket");
+        vTaskDelete(NULL);
+        return;
+    }
+
+    int opt = 1;
+    setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+
+    memset(&server_addr, 0, sizeof(server_addr));
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_addr.s_addr = inet_addr(SSDP_MCAST_GROUP);
+    server_addr.sin_port = htons(SSDP_PORT);
+
+    if (bind(sock, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0) {
+        ESP_LOGE(TAG, "SSDP bind failed");
+        close(sock);
+        vTaskDelete(NULL);
+        return;
+    }
+
+    struct ip_mreq mreq;
+    mreq.imr_multiaddr.s_addr = inet_addr(SSDP_MCAST_GROUP);
+    mreq.imr_interface.s_addr = htonl(INADDR_ANY);
+    setsockopt(sock, IPPROTO_IP, IP_ADD_MEMBERSHIP, &mreq, sizeof(mreq));
+
+    ESP_LOGI(TAG, "SSDP server started on %s:%d", SSDP_MCAST_GROUP, SSDP_PORT);
+
+    // Получаем IP и UUID
+    get_current_ip(current_ip, sizeof(current_ip));
+    generate_uuid_from_mac();
+    send_ssdp_notify(current_ip, true);
+
+    TickType_t last_notify = xTaskGetTickCount();
+    const TickType_t NOTIFY_INTERVAL = pdMS_TO_TICKS(SSDP_NOTIFY_INTERVAL_MS);
+
+    while (s_ssdp_running) {
+        TickType_t now = xTaskGetTickCount();
+
+        // Периодическая рассылка NOTIFY
+        if ((now - last_notify) >= NOTIFY_INTERVAL) {
+            send_ssdp_notify(current_ip, true);
+            ESP_LOGI(TAG, "SSDP: Periodic NOTIFY sent (IP: %s)", current_ip);
+            last_notify = now;
+        }
+
+        // Приём M-SEARCH
+        client_len = sizeof(client_addr);
+        int len = recvfrom(sock, buffer, sizeof(buffer) - 1, 0,
+                          (struct sockaddr *)&client_addr, &client_len);
+        if (len < 16) {
+            vTaskDelay(pdMS_TO_TICKS(100));
+            continue;
+        }
+
+        buffer[len] = 0;
+
+        // Проверяем: это M-SEARCH?
+        if (strncmp(buffer, "M-SEARCH * HTTP/1.1", 17) == 0) {
+            char *st_line = strstr(buffer, "ST: ");
+            if (st_line) {
+                st_line += 4;  // пропускаем "ST: "
+
+                // Обрезаем до \r\n
+                char *end = strpbrk(st_line, "\r\n");
+                if (end) {
+                    *end = '\0';
+                }
+
+                ESP_LOGI(TAG, "M-SEARCH from %s, ST: %s", inet_ntoa(client_addr.sin_addr), st_line);
+
+                // Проверяем: совпадает ли ST с нашим типом или это ssdp:all
+                bool is_match = 
+                    (strcmp(st_line, SSDP_DEVICE_TYPE) == 0) ||           // upnp:rootdevice
+                    (strcmp(st_line, "ssdp:all") == 0) ||                 // все устройства
+                    (strcmp(st_line, "upnp:rootdevice") == 0) ||          // ещё раз rootdevice
+                    (strcmp(st_line, "urn:schemas-wifialliance-org:device:WFADevice:1") == 0) ||
+                    (strcmp(st_line, "urn:schemas-upnp-org:device:InternetGatewayDevice:1") == 0) ||
+                    (strncmp(st_line, "uuid:", 5) == 0 && strcmp(st_line + 5, s_uuid + 5) == 0);
+
+                if (is_match) {
+                    ESP_LOGI(TAG, "M-SEARCH from %s (ST: %s) → responding", inet_ntoa(client_addr.sin_addr), st_line);
+                    handle_ssdp_search(current_ip, &client_addr);
+                } else {
+                    ESP_LOGD(TAG, "M-SEARCH ignored (ST: %s)", st_line);
+                }
+
+                // Восстанавливаем \r\n, если нужно (не обязательно, но чисто)
+                if (end) {
+                    *end = '\r';
+                }
+            } else {
+                ESP_LOGD(TAG, "M-SEARCH без ST");
+            }
+        }
+
+        vTaskDelay(pdMS_TO_TICKS(100));  // не нагружаем CPU
+    }
+
+    // Отправляем byebye перед остановкой
+    send_ssdp_notify(current_ip, false);
+    close(sock);
+    s_ssdp_task_handle = NULL;
+    vTaskDelete(NULL);
+}
+
+
+
+// Запуск SSDP
+void start_ssdp_server()
+{
+    if (s_ssdp_running) return;
+    s_ssdp_running = true;
+    // Подписываемся на IP_EVENT_STA_GOT_IP
+    ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, ssdp_ip_event_handler, NULL));
+
+    xTaskCreatePinnedToCore(ssdp_server_task, "ssdp_server", 4096, NULL, 5, &s_ssdp_task_handle, 0);
+    ESP_LOGI(TAG, "SSDP server starting...");
+}
+
+// Остановка
+void stop_ssdp_server()
+{
+    if (!s_ssdp_running) return;
+    s_ssdp_running = false;
+    if (s_ssdp_task_handle) {
+        vTaskDelete(s_ssdp_task_handle);
+        s_ssdp_task_handle = NULL;
+    }
+    // Удаляем обработчик событий
+    esp_event_handler_unregister(IP_EVENT, IP_EVENT_STA_GOT_IP, ssdp_ip_event_handler);
+
+    ESP_LOGI(TAG, "SSDP server stopped");
+}
+
+esp_err_t description_xml_handler(httpd_req_t *req)
+{
+    const char *desc = 
+        "<?xml version=\"1.0\"?>\r\n"
+        "<root xmlns=\"urn:schemas-upnp-org:device-1-0\">\r\n"
+        "  <specVersion>\r\n"
+        "    <major>1</major>\r\n"
+        "    <minor>0</minor>\r\n"
+        "  </specVersion>\r\n"
+        "  <device>\r\n"
+        "    <deviceType>urn:schemas-upnp-org:device:Basic:1</deviceType>\r\n"
+        "    <friendlyName>ESP32 Zigbee Gateway</friendlyName>\r\n"
+        "    <manufacturer>Lyxt</manufacturer>\r\n"
+        "    <manufacturerURL>https://github.com/cheldonec</manufacturerURL>\r\n"
+        "    <modelDescription>ESP32 Zigbee NCP Host</modelDescription>\r\n"
+        "    <modelName>Zigbee NCP Host</modelName>\r\n"
+        "    <modelNumber>1.0</modelNumber>\r\n"
+        "    <modelURL>https://github.com/cheldonec</modelURL>\r\n"
+        "    <serialNumber>00000001</serialNumber>\r\n"
+        "    <UDN>uuid:12345678-1234-1234-1234-123456789abc</UDN>\r\n"
+        "    <UPC>000000000000</UPC>\r\n"
+        "    <presentationURL>/</presentationURL>\r\n"
+        "  </device>\r\n"
+        "</root>\r\n";
+
+    httpd_resp_set_type(req, "text/xml");
+    httpd_resp_set_hdr(req, "Server", "ESP32/Zigbee-Gateway v1.0");
+    httpd_resp_send(req, desc, strlen(desc));
+    return ESP_OK;
+}

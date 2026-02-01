@@ -1,0 +1,63 @@
+{
+  "version": "1.0",
+  "description": "TUYA quirks database for temperature/humidity sensors",
+  "models": [
+    {
+      "name": "TUYA Temperature & Humidity Sensor",
+      "manufacturer": "Tuya",
+      "model_ids": ["TS0601", "_TZE200_ahtzzx8u", "_TZE200_s4gk0wnz", "TS0201"],
+      "type": "thermostat",
+      "description": "Generic TUYA TH sensor",
+      "entities": [
+        {
+          "type": "sensor",
+          "name": "Temperature",
+          "role": "temperature",
+          "dp": 2,
+          "value_type": "int",
+          "scale": 0.1,
+          "unit": "°C",
+          "state": "measured_value"
+        },
+        {
+          "type": "sensor",
+          "name": "Humidity",
+          "role": "humidity",
+          "dp": 1,
+          "value_type": "int",
+          "scale": 0.1,
+          "unit": "%",
+          "state": "measured_value"
+        }
+      ]
+    },
+    {
+      "name": "Moeshouse TH Sensor",
+      "manufacturer": "Moeshouse",
+      "model_ids": ["TS0601", "_TZE200_qoy0ekbd"],
+      "type": "thermostat",
+      "entities": [
+        {
+          "type": "sensor",
+          "name": "Temperature",
+          "role": "temperature",
+          "dp": 2,
+          "value_type": "int",
+          "scale": 0.1,
+          "unit": "°C",
+          "state": "measured_value"
+        },
+        {
+          "type": "sensor",
+          "name": "Humidity",
+          "role": "humidity",
+          "dp": 1,
+          "value_type": "int",
+          "scale": 0.1,
+          "unit": "%",
+          "state": "measured_value"
+        }
+      ]
+    }
+  ]
+}

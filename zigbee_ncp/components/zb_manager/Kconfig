@@ -1,0 +1,126 @@
+menu "Zigbee Manager"
+    depends on ZB_ENABLED
+     config MANUFACTURER_NAME_ID
+        string "MANUFACTURER NAME"
+        default "CheldonecCo"
+        help
+            Set your device MANUFACTURER NAME max 31
+
+    config MODEL_NAME_ID
+        string "MODEL NAME"
+        default "TestDevice"
+        help
+            Set your device MODEL NAME max 31
+
+    config MODEL_SW_VER_ID
+        string "SOFTWARE VERSION"
+        default "ver-0.1"
+        help
+            Set your device SOFTWARE BUILD VERSION
+
+    config MODEL_HW_VER_ID
+        int "HARDWARE VERSION"
+        default 1
+        help
+            Set your device HARDWARE VERSION
+
+    config MODEL_DATE_CODE
+        string "MODEL DATE CODE"
+        default "20250911"
+        help
+            Set your device MODEL DATE CODE YYYYMMDD, e.g., 20060814 max 16
+
+    config DISABLE_LOCAL_CONFIG
+        int "DISABLE LOCAL CONFIG"
+        default 0
+        help
+            If set to 1 - Disable buttons on device (reset to def, bind, etc)
+
+    choice POWER_SOURCE_TYPE
+        prompt "Select POWER SOURCE"
+        default POWER_SOURCE_TYPE_UNKNOWN
+        config POWER_SOURCE_TYPE_UNKNOWN
+            bool "POWER_SOURCE_UNKNOWN"
+            
+        config POWER_SOURCE_TYPE_MAINS_SINGLE_PHASE
+            bool "POWER_SOURCE_MAINS_SINGLE_PHASE"
+        
+        config POWER_SOURCE_MAINS_THREE_PHASE
+            bool "POWER_SOURCE_MAINS_THREE_PHASE"
+
+        config POWER_SOURCE_BATTERY
+            bool "POWER_SOURCE_BATTERY"
+
+        config POWER_SOURCE_DC_SOURCE
+            bool "POWER_SOURCE_DC_SOURCE"
+
+        config POWER_SOURCE_EMERGENCY_MAINS_CONST
+            bool "POWER_SOURCE_EMERGENCY_MAINS_CONST"
+
+        config POWER_SOURCE_EMERGENCY_MAINS_TRANSF
+            bool "POWER_SOURCE_EMERGENCY_MAINS_TRANSF"
+        
+        
+    endchoice     
+
+     choice ZB_ZCZR_TYPE
+        depends on ZB_ZCZR
+        prompt "Configure the Zigbee coordinator or router"
+        default ZB_MANAGER_ZR
+        config ZB_MANAGER_ZC
+            bool "Zigbee Coordinator device"
+            help
+                Select this to enable Zigbee Coordinator.
+           
+        config ZB_MANAGER_ZR
+            bool "Zigbee Router device"
+            help
+                Select this to enable Zigbee  Router.
+    endchoice
+
+    choice RCP_OR_NCP
+        depends on !SOC_IEEE802154_SUPPORTED
+        config ZIGBEE_OVER_RCP
+            bool "Zigbee over RCP chip"
+            default False
+            help
+                Select.
+           
+        config ZIGBEE_OVER_NCP
+            bool "Zigbee over NCP chip"
+            default False
+            help
+                Select.
+    endchoice
+    menu "ZB RCP Board Configuration"
+        depends on ZIGBEE_OVER_RCP
+        config PIN_TO_RCP_RESET
+            int "Pin to RCP reset"
+            default "15"
+
+        config PIN_TO_RCP_BOOT
+            int "Pin to RCP boot"
+            default "13"
+
+        config PIN_TO_RCP_TX
+            int "Pin to RCP TX"
+            default "17"
+
+        config PIN_TO_RCP_RX
+            int "Pin to RCP RX"
+            default "18"
+    endmenu
+    
+    config ZIGBEE_GW_AUTO_UPDATE_RCP
+        depends on ZIGBEE_OVER_RCP
+        bool 'Update RCP automatically'
+        default True
+        help
+            If enabled, the Zigbee gateway will store the RCP image in its firmware and
+            compare the stored image version with the running RCP image upon boot. The RCP
+            will be automatically updated upon version mismatch.
+            
+endmenu
+
+
+

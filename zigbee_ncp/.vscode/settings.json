@@ -1,0 +1,30 @@
+{
+  "idf.openOcdConfigs": [
+    "board/esp32h2-ftdi.cfg"
+  ],
+  "idf.customExtraVars": {
+    "OPENOCD_SCRIPTS": "C:\\Espressif\\tools\\openocd-esp32\\v0.12.0-esp32-20240318/openocd-esp32/share/openocd/scripts",
+    "IDF_CCACHE_ENABLE": "1",
+    "ESP_ROM_ELF_DIR": "C:\\Espressif\\tools\\esp-rom-elfs\\20240305/",
+    "IDF_TARGET": "esp32h2"
+  },
+  "clangd.path": "C:\\Espressif\\tools\\esp-clang\\esp-18.1.2_20240912\\esp-clang\\bin\\clangd.exe",
+  "clangd.arguments": [
+    "--background-index",
+    "--query-driver=C:\\Espressif\\tools\\riscv32-esp-elf\\esp-14.2.0_20241119\\riscv32-esp-elf\\bin\\riscv32-esp-elf-gcc.exe",
+    "--compile-commands-dir=c:\\Users\\User\\Documents\\esp32\\ZIGBEE\\ncp_slip_conn\\zb_manager_ncp\\build"
+  ],
+  "files.associations": {
+    "zb_manager_ncp_main.h": "c",
+    "esp_ncp_frame.h": "c",
+    "esp_ncp_main.h": "c",
+    "esp_ncp_bus.h": "c",
+    "esp_zigbee_core.h": "c",
+    "zb_config.h": "c",
+    "sdkconfig.h": "c",
+    "*.new": "c",
+    "gptimer.h": "c"
+  },
+  "idf.portWin": "COM6",
+  "idf.flashType": "UART"
+}

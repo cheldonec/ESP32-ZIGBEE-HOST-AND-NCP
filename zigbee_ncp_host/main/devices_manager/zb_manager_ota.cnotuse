@@ -1,0 +1,149 @@
+/// @brief [zb_manager_ota.c] Модуль управления OTA-обновлениями для Zigbee-устройств
+/// Реализует логику загрузки, проверки и инициации OTA-апдейта
+
+#include "zb_manager_ota.h"
+#include "esp_log.h"
+#include "esp_ota_ops.h"
+#include "string.h"
+#include "esp_zb_ota.h"
+
+/// @brief Тег для логирования в этом модуле
+static const char *TAG = "zb_ota_mgr";
+
+/// @brief Структура для хранения информации о текущем OTA-процессе
+static struct {
+    bool ota_in_progress;               ///< Идёт ли сейчас OTA-обновление
+    uint16_t target_short_addr;         ///< Адрес устройства, которому шлём обновление
+    uint8_t target_endpoint;            ///< Эндпоинт устройства
+    uint32_t image_offset;              ///< Текущее смещение в образе
+    uint32_t image_total_size;          ///< Общий размер образа
+    const void* image_data;             ///< Указатель на данные образа
+    uint32_t last_block_time_ms;        ///< Время последнего блока (для таймаута)
+} ota_context;
+
+/// @brief Инициализирует систему OTA-обновлений
+void zb_manager_ota_init(void)
+{
+    memset(&ota_context, 0, sizeof(ota_context));
+    ESP_LOGI(TAG, "✅ OTA Manager initialized");
+}
+
+/// @brief Проверяет, поддерживает ли устройство OTA-обновления
+/// @param dev Указатель на устройство
+/// @return true, если есть OTA-кластер
+bool zb_manager_ota_is_supported(zigbee_manager_device_t* dev)
+{
+    if (dev == NULL) {
+        ESP_LOGW(TAG, "⚠️  ota_is_supported: dev is NULL");
+        return false;
+    }
+
+    // Простая проверка — если есть кластер OTA, значит поддерживается
+    // В реальности можно проверить по cluster list в descriptor'е
+    for (uint8_t i = 0; i < dev->endpoint_count; i++) {
+        if (dev->endpoints[i].cluster_list[ESP_ZB_ZCL_CLUSTER_ID_OTA_UPGRADE]) {
+            ESP_LOGI(TAG, "✅ Device 0x%04x supports OTA", dev->short_addr);
+            return true;
+        }
+    }
+    ESP_LOGD(TAG, "❌ Device 0x%04x does not support OTA", dev->short_addr);
+    return false;
+}
+
+/// @brief Начинает процесс OTA-обновления для устройства
+/// @param dev Указатель на устройство
+/// @param image_data Указатель на бинарный образ
+/// @param image_size Размер образа в байтах
+/// @return ESP_OK при старте, ошибка иначе
+esp_err_t zb_manager_ota_start(zigbee_manager_device_t* dev, const void* image_data, uint32_t image_size)
+{
+    if (dev == NULL || image_data == NULL || image_size == 0) {
+        ESP_LOGE(TAG, "❌ OTA start failed: invalid args");
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    if (ota_context.ota_in_progress) {
+        ESP_LOGE(TAG, "❌ OTA already in progress for 0x%04x", ota_context.target_short_addr);
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    ota_context.ota_in_progress = true;
+    ota_context.target_short_addr = dev->short_addr;
+    ota_context.target_endpoint = 1; // FIXME: временно, нужно извлекать
+    ota_context.image_data = image_data;
+    ota_context.image_total_size = image_size;
+    ota_context.image_offset = 0;
+    ota_context.last_block_time_ms = esp_log_timestamp();
+
+    ESP_LOGI(TAG, "🚀 OTA started for 0x%04x | Size: %u bytes", dev->short_addr, image_size);
+
+    // Здесь должна быть инициация OTA через ZCL-команды
+    // Например: отправка Query Next Image Request и т.д.
+
+    // Пока заглушка
+    ESP_LOGW(TAG, "💡 OTA: Initiate handshake (not implemented yet)");
+
+    return ESP_OK;
+}
+
+/// @brief Отправляет следующий блок данных OTA-образа
+/// @return ESP_OK если блок отправлен, ESP_ERR_NOT_FINISHED если есть ещё, ESP_OK если завершено
+esp_err_t zb_manager_ota_send_next_block(void)
+{
+    if (!ota_context.ota_in_progress) {
+        ESP_LOGW(TAG, "⚠️  OTA not in progress");
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    if (ota_context.image_offset >= ota_context.image_total_size) {
+        ESP_LOGI(TAG, "✅ OTA completed successfully for 0x%04x", ota_context.target_short_addr);
+        zb_manager_ota_reset();
+        return ESP_OK;
+    }
+
+    uint32_t block_size = 128; // Пример
+    uint32_t remaining = ota_context.image_total_size - ota_context.image_offset;
+    uint32_t send_size = (remaining < block_size) ? remaining : block_size;
+
+    // Здесь должна быть отправка через ZCL OTA cluster
+    ESP_LOGD(TAG, "📤 OTA block: offset=%u, size=%u", ota_context.image_offset, send_size);
+
+    // Имитация отправки
+    // zb_send_ota_block(...);
+
+    ota_context.image_offset += send_size;
+    ota_context.last_block_time_ms = esp_log_timestamp();
+
+    return (ota_context.image_offset < ota_context.image_total_size) ? ESP_ERR_NOT_FINISHED : ESP_OK;
+}
+
+/// @brief Сбрасывает состояние OTA-процесса
+void zb_manager_ota_reset(void)
+{
+    ESP_LOGI(TAG, "🗑️  OTA context reset");
+    memset(&ota_context, 0, sizeof(ota_context));
+}
+
+/// @brief Проверяет, идёт ли сейчас OTA-обновление
+/// @return true если идёт
+bool zb_manager_ota_is_in_progress(void)
+{
+    return ota_context.ota_in_progress;
+}
+
+/// @brief Возвращает прогресс OTA в процентах
+/// @return 0–100
+uint8_t zb_manager_ota_get_progress(void)
+{
+    if (!ota_context.ota_in_progress || ota_context.image_total_size == 0) {
+        return 0;
+    }
+    return (uint8_t)((ota_context.image_offset * 100) / ota_context.image_total_size);
+}
+
+/// @brief Возвращает адрес устройства, для которого идёт OTA
+/// @return short_addr или 0xFFFF
+uint16_t zb_manager_ota_get_target_addr(void)
+{
+    return ota_context.ota_in_progress ? ota_context.target_short_addr : 0xFFFF;
+}

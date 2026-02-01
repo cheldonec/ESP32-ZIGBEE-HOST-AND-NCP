@@ -1,0 +1,70 @@
+📦 Шаг 1: Установи Docker Desktop
+Перейди на сайт: https://www.docker.com/products/docker-desktop/
+Скачай и установи Docker Desktop for Windows
+После установки — перезагрузи компьютер
+Запусти Docker Desktop и дождись, пока он запустится (иконка в трее)
+
+🐳 Шаг 2: Создай папку для конфигурации
+Создай папку, где будет храниться вся конфигурация:
+
+C:\homeassistant\config
+→ Внутри будет:
+
+configuration.yaml
+Логи
+Интеграции
+Автоматизации
+
+▶️ Шаг 3: Запусти Home Assistant через Docker
+Открой PowerShell (от имени администратора) и выполни:
+
+powershell
+docker run -d `
+  --name homeassistant `
+  --privileged `
+  -v C:/homeassistant/config:/config `
+  -p 8123:8123 `
+  --network=host `
+  ghcr.io/home-assistant/home-assistant:stable
+⚠️ В Windows PowerShell: обрати внимание на символ ` — это перенос строки
+
+✅ Если не сработает — выполни одной строкой:
+
+powershell
+docker run -d --name homeassistant --privileged -v C:/homeassistant/config:/config -p 8123:8123 --network=host ghcr.io/home-assistant/home-assistant:stable
+
+🌐 Шаг 4: Открой Home Assistant
+Открой браузер
+
+Перейди по адресу:
+→ http://localhost:8123
+
+Подожди 2–5 минут — инициализация
+
+Создай учётную запись (логин/пароль)
+
+Готово! 🎉
+
+🔍 Шаг 5: Проверь SSDP
+Убедись, что твой ESP32 в той же сети
+В Home Assistant:
+Перейди в Settings → Devices & Services
+Нажми + Add Integration
+Начни вводить: SSDP
+Должен появиться "ESP32 Zigbee Gateway"
+Нажми и добавь
+🔥 Если не видит — подожди 1–2 минуты. SSDP работает с задержкой.
+
+💡 Альтернативы (если Docker не подходит)
+| Способ | Плюсы | Минусы | |------|------|-------| | Docker (рекомендуется) | Быстро, стабильно, обновляется | Нужно 4 ГБ ОЗУ | | VirtualBox + Home Assistant OS | Полноценная VM | Медленнее, сложнее | | WSL2 + Docker | Работает в Linux-окружении | Сложно для новичков |
+
+🛠️ Полезные команды
+powershell
+# Остановить Home Assistant
+docker stop homeassistant
+
+# Запустить снова
+docker start homeassistant
+
+# Посмотреть логи
+docker logs homeassistant

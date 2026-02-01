@@ -1,0 +1,162 @@
+# === Настройка компонента ===
+set(PRIV_REQ_var
+    spiffs
+    vfs
+    esp_wifi
+    nvs_flash
+    driver
+    esp_event
+    esp_timer
+    esp_http_server
+    mqtt
+    mdns
+    mbedtls
+    lwip
+)
+
+set(SRCS_var main.c)
+
+file(GLOB_RECURSE SRCS_dir
+    "${CMAKE_CURRENT_LIST_DIR}/spiffs_manager/*.c"
+    "${CMAKE_CURRENT_LIST_DIR}/srcs_ncp_host/*.c"
+    "${CMAKE_CURRENT_LIST_DIR}/srcs_ncp_host/zcl/*.c"
+    "${CMAKE_CURRENT_LIST_DIR}/devices_manager/*.c"
+    "${CMAKE_CURRENT_LIST_DIR}/wifi_manager/*.c"
+    "${CMAKE_CURRENT_LIST_DIR}/web_server/*.c"
+    "${CMAKE_CURRENT_LIST_DIR}/zb_quirks/*.c"
+    "${CMAKE_CURRENT_LIST_DIR}/ha_integration/*.c"
+)
+
+list(APPEND SRCS_var ${SRCS_dir})
+
+set(INC_DIR_var
+    "."
+    "spiffs_manager"
+    "srcs_ncp_host"
+    "srcs_ncp_host/zcl"
+    "devices_manager"
+    "wifi_manager"
+    "web_server"
+    "zb_quirks"
+    "ha_integration"
+)
+
+# =============================================================== Сборка образов SPIFFS =====================================================
+
+# --- 1. Сборка spiffs_ui.bin (4M) ---
+set(WEB_STATIC_DIR ${CMAKE_SOURCE_DIR}/zigbee-manager-ui/build)
+set(SPIFFS_TEMP_DIR ${CMAKE_BINARY_DIR}/spiffs_temp)
+set(SPIFFS_UI_IMAGE ${CMAKE_BINARY_DIR}/spiffs_ui.bin)
+
+# --- 2. Сборка spiffs_quirks.bin (320K) ---
+set(QUIRKS_JSON_DIR "${CMAKE_CURRENT_LIST_DIR}/zb_quirks/json")
+set(SPIFFS_QUIRKS_TEMP_DIR ${CMAKE_BINARY_DIR}/spiffs_quirks_temp)
+set(SPIFFS_QUIRKS_IMAGE ${CMAKE_BINARY_DIR}/spiffs_quirks.bin)
+
+# --- Триггер-файл для пересборки при изменении кода ---
+set(SPIFFS_TRIGGER ${CMAKE_BINARY_DIR}/spiffs_trigger.timestamp)
+
+add_custom_command(
+    OUTPUT ${SPIFFS_TRIGGER}
+    COMMAND ${CMAKE_COMMAND} -E remove ${SPIFFS_TRIGGER}
+    COMMAND ${CMAKE_COMMAND} -E touch ${SPIFFS_TRIGGER}
+    DEPENDS ${SRCS_var}
+    COMMENT "🔄 Updating SPIFFS trigger (on code change)..."
+)
+
+# === Сборка spiffs_ui.bin ===
+if(EXISTS ${WEB_STATIC_DIR})
+    add_custom_command(
+        OUTPUT ${SPIFFS_UI_IMAGE}
+        COMMAND ${CMAKE_COMMAND} -E remove_directory ${SPIFFS_TEMP_DIR}
+        COMMAND ${CMAKE_COMMAND} -E make_directory ${SPIFFS_TEMP_DIR}
+        COMMAND ${CMAKE_COMMAND} -E copy_directory ${WEB_STATIC_DIR} ${SPIFFS_TEMP_DIR}
+        COMMAND ${CMAKE_COMMAND} -E remove
+            ${SPIFFS_TEMP_DIR}/*.bak
+            ${SPIFFS_TEMP_DIR}/*~
+            ${SPIFFS_TEMP_DIR}/static/js/*.map
+            ${SPIFFS_TEMP_DIR}/static/css/*.map
+            ${SPIFFS_TEMP_DIR}/asset-manifest.json
+            ${SPIFFS_TEMP_DIR}/robots.txt
+            ${SPIFFS_TEMP_DIR}/LICENSE
+            ${SPIFFS_TEMP_DIR}/web_server.c
+            ${SPIFFS_TEMP_DIR}/web_server.h
+        COMMAND ${PYTHON} ${IDF_PATH}/components/spiffs/spiffsgen.py
+            --page-size 256
+            --block-size 4096
+            --obj-name-len 64
+            --meta-len 4
+            --use-magic
+            --use-magic-len
+            0x400000
+            ${SPIFFS_TEMP_DIR}
+            ${SPIFFS_UI_IMAGE}
+        DEPENDS ${SPIFFS_TRIGGER}
+        COMMENT "🔨 Building SPIFFS image for UI..."
+    )
+
+    add_custom_target(spiffs_ui ALL DEPENDS ${SPIFFS_UI_IMAGE})
+
+    add_custom_command(TARGET spiffs_ui POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E echo "💡 Flash UI: make flash-ui"
+    )
+else()
+    message(WARNING "⚠️ WEB_STATIC_DIR not found: ${WEB_STATIC_DIR}")
+endif()
+
+# === Сборка spiffs_quirks.bin ===
+if(EXISTS ${QUIRKS_JSON_DIR}/tuya_models.json)
+    add_custom_command(
+        OUTPUT ${SPIFFS_QUIRKS_IMAGE}
+        COMMAND ${CMAKE_COMMAND} -E remove_directory ${SPIFFS_QUIRKS_TEMP_DIR}
+        COMMAND ${CMAKE_COMMAND} -E make_directory ${SPIFFS_QUIRKS_TEMP_DIR}
+        COMMAND ${CMAKE_COMMAND} -E copy ${QUIRKS_JSON_DIR}/tuya_models.json ${SPIFFS_QUIRKS_TEMP_DIR}/
+        COMMAND ${PYTHON} ${IDF_PATH}/components/spiffs/spiffsgen.py
+            --page-size 256
+            --block-size 4096
+            --obj-name-len 64
+            --meta-len 4
+            --use-magic
+            --use-magic-len
+            0x50000
+            ${SPIFFS_QUIRKS_TEMP_DIR}
+            ${SPIFFS_QUIRKS_IMAGE}
+        DEPENDS ${SPIFFS_TRIGGER}
+        COMMENT "🔨 Building SPIFFS image for quirks..."
+    )
+
+    add_custom_target(spiffs_quirks ALL DEPENDS ${SPIFFS_QUIRKS_IMAGE})
+
+    add_custom_command(TARGET spiffs_quirks POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E echo "🔧 Flash quirks: make flash-quirks"
+    )
+else()
+    message(WARNING "⚠️ tuya_models.json not found: ${QUIRKS_JSON_DIR}/tuya_models.json")
+endif()
+
+# ✅ Регистрация компонента — В КОНЦЕ
+idf_component_register(
+    SRCS ${SRCS_var}
+    INCLUDE_DIRS ${INC_DIR_var}
+    PRIV_REQUIRES ${PRIV_REQ_var}
+)
+
+# === Алиасы для прошивки ===
+if(TARGET spiffs_ui)
+    add_custom_target(flash-ui
+        COMMAND parttool.py --port $ENV{ESPPORT} write_partition --partition-name=spiffs_ui --input ${SPIFFS_UI_IMAGE}
+        DEPENDS spiffs_ui
+    )
+    message(STATUS "✅ make flash-ui — прошивка UI")
+endif()
+
+if(TARGET spiffs_quirks)
+    add_custom_target(flash-quirks
+        COMMAND parttool.py --port $ENV{ESPPORT} write_partition --partition-name=quirks --input ${SPIFFS_QUIRKS_IMAGE}
+        DEPENDS spiffs_quirks
+    )
+    message(STATUS "✅ make flash-quirks — прошивка quirks")
+endif()
+
+#parttool.py --port COM4 write_partition --partition-name=spiffs_ui --input "build/spiffs_ui.bin"
+#parttool.py --port COM4 write_partition --partition-name=quirks --input "build/spiffs_quirks.bin"

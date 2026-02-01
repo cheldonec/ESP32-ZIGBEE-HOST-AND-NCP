@@ -1,0 +1,20 @@
+Registry Hive   HKEY_LOCAL_MACHINE
+Registry Path   Software\Policies\Microsoft\Windows\NetworkConnectivityStatusIndicator
+Value Name  NoActiveProbe
+Value Type  REG_DWORD
+Enabled Value   1
+Disabled Value  0
+
+
+Если на компьютере установлена Windows Pro или Корпоративная, можно использовать редактор локальной групповой политики: 
+remontka.pro
+Нажать клавиши Win+R, ввести gpedit.msc и нажать Enter.
+Перейти к разделу «Конфигурация компьютера» — «Административные шаблоны» — «Система» — «Управление связью через Интернет» — «Параметры связи через Интернет».
+Дважды нажать по параметру «Отключить активные проверки индикатора работоспособности сетевых подключений», установить его в значение «Включено» и применить настройки.
+
+route -f
+ipconfig /flushdns
+netsh int ip reset
+netsh int ipv4 reset
+netsh int tcp reset
+netsh winsock reset

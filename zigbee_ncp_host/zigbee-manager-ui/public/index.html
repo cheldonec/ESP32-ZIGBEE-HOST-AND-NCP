@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Zigbee UI</title>
+    <style>
+        #memory-monitor {
+            position: fixed;
+            bottom: 10px;
+            right: 10px;
+            background: #ffffff;
+            border: 1px solid #cccccc;
+            padding: 10px;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            font-size: 13px;
+            color: #333;
+            z-index: 10000;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+            border-radius: 6px;
+            max-width: 280px;
+            transition: opacity 0.3s;
+        }
+        #memory-monitor h4 {
+            margin: 0 0 8px 0;
+            color: #1976d2;
+            font-size: 14px;
+        }
+        #memory-monitor .value {
+            font-weight: 500;
+            color: #000;
+        }
+        #memory-monitor .label {
+            color: #555;
+            font-size: 12px;
+        }
+        #memory-monitor .timestamp {
+            font-size: 11px;
+            color: #777;
+            margin-top: 4px;
+        }
+        .error {
+            color: #d32f2f !important;
+        }
+    </style>
+</head>
+<body>
+    <noscript>Вам нужно включить JavaScript.</noscript>
+    <div id="root"></div>
+
+    <!-- Memory Monitor -->
+    <div id="memory-monitor">
+        <h4>📊 Память (ESP32)</h4>
+        <div><span class="label">Свободно:</span> <span id="free-heap" class="value">?</span> КБ</div>
+        <div><span class="label">Минимум:</span> <span id="min-free" class="value">?</span> КБ</div>
+        <div><span class="label">Largest:</span> <span id="largest-heap" class="value">?</span> КБ</div>
+        <div><span class="label">Фрагментация:</span> <span id="frag-pct" class="value">?</span>%</div>
+        <div class="timestamp">Обновлено: <span id="update-time">—</span></div>
+    </div>
+
+    <script>
+        function updateMemory() {
+            fetch('/api/memory')
+                .then(res => {
+                    if (!res.ok) throw new Error('Network error');
+                    return res.json();
+                })
+                .then(data => {
+                    const freeHeap = (data.free / 1024).toFixed(1);
+                    const minFree = (data.min / 1024).toFixed(1);
+                    const largest = (data.largest / 1024).toFixed(1);
+
+                    document.getElementById('free-heap').textContent = freeHeap;
+                    document.getElementById('min-free').textContent = minFree;
+                    document.getElementById('largest-heap').textContent = largest;
+                    document.getElementById('frag-pct').textContent = data.frag_pct;
+
+                    document.getElementById('update-time').textContent = new Date().toLocaleTimeString();
+
+                    // Цветовая индикация
+                    const freeVal = parseFloat(freeHeap);
+                    const fragVal = data.frag_pct;
+
+                    const freeEl = document.getElementById('free-heap');
+                    if (freeVal < 30) {
+                        freeEl.className = 'value error';
+                    } else {
+                        freeEl.className = 'value';
+                    }
+
+                    const fragEl = document.getElementById('frag-pct');
+                    if (fragVal > 70) {
+                        fragEl.className = 'value error';
+                    } else if (fragVal > 50) {
+                        fragEl.className = 'value';
+                        // можно добавить warning стиль
+                    } else {
+                        fragEl.className = 'value';
+                    }
+                })
+                .catch(err => {
+                    console.warn('❌ Не удалось получить данные о памяти:', err.message);
+                    document.getElementById('update-time').textContent = 'ошибка';
+                });
+        }
+
+
+        // Первое обновление
+        updateMemory();
+
+        // Обновляем каждые 5 секунд
+        setInterval(updateMemory, 5000);
+    </script>
+</body>
+</html>
+

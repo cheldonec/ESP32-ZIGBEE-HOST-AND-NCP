@@ -11,7 +11,7 @@ bool esp_zb_aps_data_indication_handler(esp_zb_apsde_data_ind_t ind)
 {
     ESP_LOGI(TAG, "aps_data_indication_handler");
     
-     ESP_LOGI(TAG,"data_indication status %02x profileId: %04x clusterId: %04x srcAddr: %04x dstAddr: %04x srcEndpoint: %02x dstEndpoint: %02x data: %d  lqi: %d",ind.status, ind.profile_id, ind.cluster_id,ind.src_short_addr,ind.dst_short_addr, ind.src_endpoint,ind.dst_endpoint,(int)ind.asdu_length, ind.lqi);
+     ESP_LOGI(TAG,"data_indication status %02x profileId: %04x clusterId: %04x srcAddr: %04x dstAddr: %04x srcEndpoint: %02x dstEndpoint: %02x data: %d  lqi: %d",ind.status, ind.profile_id, ind.cluster_id ,ind.src_short_addr,ind.dst_short_addr, ind.src_endpoint,ind.dst_endpoint,(int)ind.asdu_length, ind.lqi);
     ESP_LOG_BUFFER_HEX_LEVEL(TAG, ind.asdu, ind.asdu_length, ESP_LOG_INFO);
 
     update_device_lqi(ind.src_short_addr, ind.lqi);

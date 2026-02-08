@@ -900,7 +900,7 @@ esp_err_t esp_ncp_zb_action_handler(esp_zb_core_action_callback_id_t callback_id
         ESP_LOGI(TAG, "  Custom Data: none or empty");
     }
 
-    // --- Твой обработчик ---
+    
     // zb_manager_process_custom_cluster_command(custom_cluster_req);
 
     break;

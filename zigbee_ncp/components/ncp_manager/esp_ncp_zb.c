@@ -2350,12 +2350,24 @@ static esp_err_t zb_manager_report_config_req_fn(const uint8_t *input, uint16_t 
     }
 
     // === Отправляем в ZCL ===
-    esp_zb_zcl_config_report_cmd_req(cmd);
-    ESP_LOGI(TAG, "ConfigReport command enqueued to ZCL");
+    esp_ncp_status_t status = ESP_NCP_ERR_FATAL;
+    uint8_t sec_n = 0xff;
+    if (esp_zb_lock_acquire(500/portTICK_PERIOD_MS)) {
+             sec_n = esp_zb_zcl_config_report_cmd_req(cmd);
+            esp_zb_lock_release();
+        }
+   
+    if (sec_n != 0xff) {
+        status = ESP_NCP_SUCCESS;
+    }
+    
+    *outlen = sizeof(uint8_t);
+    *output = calloc(1, *outlen);
 
-    *output = NULL;
-    *outlen = 0;
-    return ESP_OK;
+    if (*output) {
+        memcpy(*output, &sec_n, *outlen);
+    }
+    return (*output) ? ESP_OK : ESP_ERR_NO_MEM;
 
 /*invalid_size:
     ESP_LOGE(TAG, "Not enough data for record %d", i);

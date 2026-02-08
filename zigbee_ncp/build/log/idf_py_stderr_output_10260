@@ -1,0 +1,6 @@
+Command: cmake -G Ninja -DPYTHON_DEPS_CHECKED=1 -DPYTHON=C:\Espressif\python_env\idf5.5_py3.11_env\Scripts\python.exe -DESP_PLATFORM=1 -DSDKCONFIG='c:\Users\User\Documents\esp32\ZIGBEE_HOST_AND_NCP\zigbee_ncp\sdkconfig' -DCCACHE_ENABLE=1 C:\Users\User\Documents\esp32\ZIGBEE_HOST_AND_NCP\zigbee_ncp
+warning: <choice RCP_OR_NCP> (defined at C:/Users/User/Documents/esp32/ZIGBEE_HOST_AND_NCP/zigbee_ncp/components/zb_manager/Kconfig:81) defined without a prompt
+warning: default on the choice symbol ZIGBEE_OVER_RCP (defined at C:/Users/User/Documents/esp32/ZIGBEE_HOST_AND_NCP/zigbee_ncp/components/zb_manager/Kconfig:83) will have no effect, as defaults do not affect choice symbols
+warning: default on the choice symbol ZIGBEE_OVER_NCP (defined at C:/Users/User/Documents/esp32/ZIGBEE_HOST_AND_NCP/zigbee_ncp/components/zb_manager/Kconfig:89) will have no effect, as defaults do not affect choice symbols
+fatal: not a git repository (or any of the parent directories): .git
+30aaf6452--1.6.4-2026-02-06 04:44:56 UTC

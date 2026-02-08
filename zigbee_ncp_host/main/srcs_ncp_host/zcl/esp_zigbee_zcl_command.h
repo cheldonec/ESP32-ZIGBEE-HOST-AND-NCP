@@ -972,6 +972,9 @@ typedef struct {
     uint16_t short_addr;
     uint8_t src_endpoint;
     uint16_t cluster_id;
+    uint16_t min_interval;
+    uint16_t max_interval;
+    uint16_t reportable_change;
 } delayed_configure_report_req_t;
 
 

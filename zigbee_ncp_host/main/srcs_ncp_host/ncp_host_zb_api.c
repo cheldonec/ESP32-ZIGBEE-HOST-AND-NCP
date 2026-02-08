@@ -1076,37 +1076,39 @@ esp_err_t esp_host_zb_input(esp_host_header_t *host_header, const void *buffer, 
 
 esp_err_t esp_host_zb_output(uint16_t id, const void *buffer, uint16_t len, void *output, uint16_t *outlen)
 {
-    esp_host_header_t data_header = {
+    
+    
+        esp_host_header_t data_header = {
         .id = id,
         .sn = esp_random() % 0xFF,
         .len = len,
         .flags = {
             .version = 0,
-        }
-    };
-    data_header.flags.type = ESP_ZNSP_TYPE_REQUEST;
+            }
+        };
+        data_header.flags.type = ESP_ZNSP_TYPE_REQUEST;
 
-    xSemaphoreTakeRecursive(lock_semaphore, portMAX_DELAY);
-    esp_host_frame_output(&data_header, buffer, len);
+        xSemaphoreTakeRecursive(lock_semaphore, portMAX_DELAY);
+        esp_host_frame_output(&data_header, buffer, len);
 
-    esp_host_zb_ctx_t host_ctx;
-    xQueueReceive(output_queue, &host_ctx, portMAX_DELAY);
-    if (host_ctx.data) {
-        if ((host_ctx.id == id)) {
-            if (output) {
-                memcpy(output, host_ctx.data, host_ctx.size);
+        esp_host_zb_ctx_t host_ctx;
+        xQueueReceive(output_queue, &host_ctx, portMAX_DELAY);
+        if (host_ctx.data) {
+            if ((host_ctx.id == id)) {
+                if (output) {
+                    memcpy(output, host_ctx.data, host_ctx.size);
+                }
+
+                if (outlen) {
+                    *outlen = host_ctx.size;
+                }
             }
 
-            if (outlen) {
-                *outlen = host_ctx.size;
-            }
+            free(host_ctx.data);
+            host_ctx.data = NULL;
         }
-
-        free(host_ctx.data);
-        host_ctx.data = NULL;
-    }
-    xSemaphoreGiveRecursive(lock_semaphore);
-
+        xSemaphoreGiveRecursive(lock_semaphore);
+    
     return  ESP_OK;
 }
 
@@ -1117,20 +1119,42 @@ esp_err_t esp_host_zb_output(uint16_t id, const void *buffer, uint16_t len, void
     return app_signal_msg ? (void *)app_signal_msg->msg : (void *)app_signal_msg;
 }*/
 
+void esp_zb_stack_cleanup(void)
+{
+    if (output_queue) {
+        vQueueDelete(output_queue);
+        output_queue = NULL;
+        ESP_LOGD(TAG, "✅ Cleaned up output_queue");
+    }
+    if (notify_queue) {
+        vQueueDelete(notify_queue);
+        notify_queue = NULL;
+        ESP_LOGD(TAG, "✅ Cleaned up notify_queue");
+    }
+    if (lock_semaphore) {
+        vSemaphoreDelete(lock_semaphore);
+        lock_semaphore = NULL;
+        ESP_LOGD(TAG, "✅ Cleaned up lock_semaphore");
+    }
+}
+
 void esp_zb_stack_main_loop(void)
 {
     esp_host_zb_ctx_t host_ctx;
     while (1) {
         // Проверяем, не пришло ли уведомление о рестарте NCP
-        uint32_t notify_value = ulTaskNotifyTake(pdTRUE, 100); // ждём 100 мс
-        if (notify_value > 0 || g_zigbee_restarting) {
-            ESP_LOGW(TAG, "🔄 Zigbee stack main loop interrupted for restart");
-            zb_manager_ncp_host_restart_on_ncp_foulture();
-            if (host_ctx.data) {
-            free(host_ctx.data);
-            host_ctx.data = NULL;
+        if (zigbee_ncp_module_state == WORKING)
+        {
+            uint32_t notify_value = ulTaskNotifyTake(pdTRUE, 100); // ждём 100 мс
+            if (notify_value > 0 || g_zigbee_restarting) {
+                ESP_LOGW(TAG, "🔄 Zigbee stack main loop interrupted for restart");
+                zb_manager_ncp_host_restart_on_ncp_foulture();
+                if (host_ctx.data) {
+                free(host_ctx.data);
+                host_ctx.data = NULL;
+                }
+                continue; // выходим из цикла
             }
-            continue; // выходим из цикла
         }
 
        if (xQueueReceive(notify_queue, &host_ctx, pdMS_TO_TICKS(100)) != pdTRUE) {
@@ -1165,11 +1189,19 @@ esp_err_t esp_zb_device_register(esp_zb_ep_list_t *ep_list)
 
 esp_err_t esp_zb_platform_config(esp_zb_platform_config_t *config)
 {
+    ESP_LOGI(TAG, "start esp_zb_platform_config -> cleanup");
+    //esp_zb_stack_cleanup();  //
+
+    ESP_LOGI(TAG, "start esp_zb_platform_config -> esp_host_init");
     ESP_ERROR_CHECK(esp_host_init(config->host_config.host_mode));
+    ESP_LOGI(TAG, "start esp_zb_platform_config -> esp_host_start");
     ESP_ERROR_CHECK(esp_host_start());
 
+    ESP_LOGI(TAG, "start esp_zb_platform_config -> output_queue = xQueueCreate");
     output_queue = xQueueCreate(HOST_EVENT_QUEUE_LEN, sizeof(esp_host_zb_ctx_t));
+    ESP_LOGI(TAG, "start esp_zb_platform_config -> notify_queue = xQueueCreate");
     notify_queue = xQueueCreate(HOST_EVENT_QUEUE_LEN, sizeof(esp_host_zb_ctx_t));
+    ESP_LOGI(TAG, "start esp_zb_platform_config -> lock_semaphore = xSemaphoreCreateRecursiveMutex");
     lock_semaphore = xSemaphoreCreateRecursiveMutex();
 
     return ESP_OK;

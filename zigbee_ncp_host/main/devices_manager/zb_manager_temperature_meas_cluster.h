@@ -166,4 +166,7 @@ esp_err_t update_temperature(zigbee_temp_read_cb_t read_cb, void *sensor_ctx) {
 esp_err_t zb_manager_temp_meas_cluster_update_attribute(zb_manager_temperature_measurement_cluster_t* cluster, uint16_t attr_id, void* value);
 
 const char* zb_manager_get_temperature_measurement_cluster_attr_name(uint16_t attrID);
+
+esp_err_t zb_manager_configure_reporting_temperature_ext(uint16_t short_addr, uint8_t endpoint,
+                                                   uint16_t min_interval, uint16_t max_interval, uint16_t change);
 #endif

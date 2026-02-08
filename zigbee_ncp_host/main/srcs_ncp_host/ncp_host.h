@@ -17,10 +17,10 @@
 #define HOST_TIMEOUT_MS       10
 #define HOST_EVENT_QUEUE_LEN  32
 */
-#define HOST_TASK_STACK               3072      // Было: 5120
+#define HOST_TASK_STACK               5120      // Было: 5120
 #define HOST_TASK_PRIORITY            20        // Было: 23 (слишком высокий)
 #define HOST_TIMEOUT_MS               10
-#define HOST_EVENT_QUEUE_LEN          10        // Было: 32
+#define HOST_EVENT_QUEUE_LEN          24        // Было: 32
 /**
  * @brief Enum of the event id for HOST.
  *
@@ -31,7 +31,6 @@ typedef enum {
     HOST_EVENT_RESET,                /*!< Reset event */
     HOST_EVENT_APS,                  /*!< Application event */
     HOST_EVENT_LOOP_STOP,            /*!< Stop loop event */
-    HOST_EVENT_SHUTDOWN,             /*!< Shutdown event При падении NCP*/
 } esp_host_event_t;
 
 /**
@@ -107,9 +106,7 @@ esp_err_t esp_host_start(void);
  */
 esp_err_t esp_host_stop(void);
 
-esp_err_t esp_host_full_stop(void);
 
-void esp_zb_stack_shutdown(void);
 #endif // ZB_MANAGER_NCP_HOST_H
 
 /*

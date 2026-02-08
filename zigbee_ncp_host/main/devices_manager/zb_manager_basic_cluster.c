@@ -6,6 +6,7 @@
 #include "string.h"
 #include "esp_log.h"
 #include "ncp_host_zb_api.h"
+#include "zb_manager_ncp_host.h"
 
 /// @brief Тег для логирования в этом модуле
 static const char *TAG = "ZB_BASIC_CL";
@@ -339,7 +340,10 @@ uint8_t zb_manager_basic_factory_reset_cmd_req(esp_zb_zcl_basic_fact_reset_cmd_t
 
     uint8_t output = 0;
     uint16_t outlen = sizeof(uint8_t);
-    esp_host_zb_output(ZB_MANAGER_BASIC_RESET_CMD_REQ, &data, sizeof(data), &output, &outlen);
+    if (zigbee_ncp_module_state == WORKING)
+        {
+            esp_host_zb_output(ZB_MANAGER_BASIC_RESET_CMD_REQ, &data, sizeof(data), &output, &outlen);
+        }
 
     return output;
 }

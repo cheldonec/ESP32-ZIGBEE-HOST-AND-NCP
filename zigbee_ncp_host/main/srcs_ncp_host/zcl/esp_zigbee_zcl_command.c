@@ -11,6 +11,7 @@
 #include "esp_zigbee_zcl_command.h"
 #include "esp_log.h"
 #include "zb_manager_clusters.h"
+#include "zb_manager_ncp_host.h"
 
 static const char *TAG = "ESP_ZB_ZCL_COMMAND_C";
 
@@ -71,7 +72,10 @@ uint8_t esp_zb_zcl_custom_cluster_cmd_req(esp_zb_zcl_custom_cluster_cmd_t *cmd_r
     uint8_t output = 0;
     uint16_t outlen = sizeof(uint8_t);
 
-    esp_host_zb_output(ESP_NCP_ZCL_WRITE_CMD, data, data_len, &output, &outlen);
+    if (zigbee_ncp_module_state == WORKING)
+        {
+            esp_host_zb_output(ESP_NCP_ZCL_WRITE_CMD, data, data_len, &output, &outlen);
+        }
     if (data) {
         free(data);
         data = NULL;
@@ -125,8 +129,11 @@ uint8_t zb_manager_zcl_read_attr_cmd_req(esp_zb_zcl_read_attr_cmd_t *cmd_req)
     
     memcpy(input, &req, sizeof(esp_host_zb_read_attr_t));
     memcpy(input + sizeof(esp_host_zb_read_attr_t), cmd_req->attr_field,cmd_req->attr_number * sizeof(uint16_t));
-    esp_err_t err = esp_host_zb_output(ESP_NCP_ZCL_ATTR_READ_CMD, input, inlen, &output, &outlen);
-        
+    esp_err_t err = ESP_FAIL;
+    if (zigbee_ncp_module_state == WORKING)
+        {
+            err = esp_host_zb_output(ESP_NCP_ZCL_ATTR_READ_CMD, input, inlen, &output, &outlen);
+        }
     free(input);
     input = NULL;
 
@@ -557,7 +564,11 @@ esp_err_t zb_manager_reporting_config_req(esp_zb_zcl_config_report_cmd_t *cmd_re
     uint8_t output = 0;
     uint16_t outlen = sizeof(output);
     
-    esp_err_t err = esp_host_zb_output(ZB_MANAGER_REPORT_CONFIG_CMD, input, inlen, &output, &outlen);
+    esp_err_t err = ESP_FAIL;
+    if (zigbee_ncp_module_state == WORKING)
+        {
+            err = esp_host_zb_output(ZB_MANAGER_REPORT_CONFIG_CMD, input, inlen, &output, &outlen);
+        }
     free(input);
 
     if (err == ESP_OK) {

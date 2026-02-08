@@ -3,6 +3,7 @@
 #include "esp_log.h"
 #include "esp_err.h"
 #include "string.h"
+#include "zb_manager_ncp_host.h"
 static const char* TAG = "NCP_HOST_ZB_API_ZDO";
 
 
@@ -49,7 +50,14 @@ esp_err_t zb_manager_zdo_active_ep_req(local_esp_zb_zdo_active_ep_req_param_t *p
         //ESP_LOGI(TAG, "esp_zb_zdo_active_ep_req _before memcopy");
         memcpy(input, &zdo_data, sizeof(esp_zb_zdo_active_ep_t));
         //ESP_LOGI(TAG, "esp_zb_zdo_active_ep_req _after memcopy");
-        esp_host_zb_output(ZB_MANAGER_ACTIVE_EP_REQ_CMD, input, inlen, &output, &outlen);
+        if (zigbee_ncp_module_state == WORKING)
+        {
+            if (esp_host_zb_output(ZB_MANAGER_ACTIVE_EP_REQ_CMD, input, inlen, &output, &outlen)==ESP_OK){
+                ESP_LOGI(TAG, "esp_zb_zdo_active_ep_req _after esp_host_zb_output");
+            }
+        }else {
+            ESP_LOGW(TAG, "esp_zb_zdo_active_ep_req zigbee_ncp_module_state != WORKING");
+        }
         //ESP_LOGI(TAG, "esp_zb_zdo_active_ep_req _after esp_host_zb_output");
         free(input);
         input = NULL;
@@ -92,7 +100,10 @@ esp_err_t zb_manager_zdo_simple_desc_req(local_esp_zb_zdo_simple_desc_req_param_
     uint8_t  *input = calloc(1, inlen);
     if (input) {
         memcpy(input, &zdo_data, sizeof(zb_manager_simple_desc_pack_req_t));
-        esp_host_zb_output(ZB_MANAGER_SIMPLE_DESC_REQ_CMD, input, inlen, &output, &outlen);
+        if (zigbee_ncp_module_state == WORKING)
+        {
+            esp_host_zb_output(ZB_MANAGER_SIMPLE_DESC_REQ_CMD, input, inlen, &output, &outlen);
+        }
         free(input);
         input = NULL;
     }
@@ -159,7 +170,11 @@ esp_err_t zb_manager_zdo_node_desc_req(uint16_t short_addr)
         .nwk_addr = short_addr,
     };
 
-    esp_err_t err = esp_host_zb_output(ZB_MANAGER_NODE_DESC_REQ, &req, sizeof(req), NULL, NULL);
+    esp_err_t err = ESP_FAIL;
+    if (zigbee_ncp_module_state == WORKING)
+        {
+            err = esp_host_zb_output(ZB_MANAGER_NODE_DESC_REQ, &req, sizeof(req), NULL, NULL);
+        }
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to send node_desc_req to 0x%04x", short_addr);
     } else {
@@ -207,7 +222,10 @@ esp_err_t zb_manager_zdo_match_desc_cluster(local_esp_zb_zdo_match_desc_req_para
             memcpy(input + sizeof(esp_zb_zdo_match_desc_t), param->cluster_list, clusters_len);
         }
 
-        esp_host_zb_output(ESP_NCP_ZDO_FIND_MATCH, input, inlen, &output, &outlen);
+        if (zigbee_ncp_module_state == WORKING)
+        {
+            esp_host_zb_output(ESP_NCP_ZDO_FIND_MATCH, input, inlen, &output, &outlen);
+        }
 
         free(input);
         input = NULL;

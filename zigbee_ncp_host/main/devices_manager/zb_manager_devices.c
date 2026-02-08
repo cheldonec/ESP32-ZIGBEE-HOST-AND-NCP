@@ -42,6 +42,7 @@ static uint32_t last_status_print_ms = 0;
 
 static void check_all_devices_status(void *arg)
 {
+    
     const uint32_t POLLING_INTERVAL_MS = 20 * 1000;    // Опрос OnOff каждые 20 сек
     const uint32_t BIND_RETRY_DELAY_MS = 30 * 1000;    // Повтор Bind не чаще, чем раз в 30 сек
 
@@ -54,118 +55,118 @@ static void check_all_devices_status(void *arg)
         for (int i = 0; i < RemoteDevicesCount; i++) {
             device_custom_t *dev = RemoteDevicesArray[i];
             if (!dev) continue;
-
-            bool was_online = dev->is_online;
-            bool now_online = false;
-
             // === 1. Обновление ONLINE статуса ===
-            if (zb_manager_is_device_always_powered(dev)) {
-                if (dev->has_pending_read) {
-                    if (dev->has_pending_response) {
-                        now_online = true;
-                    } else if (now - dev->last_pending_read_ms > 10000) {
-                        // Таймаут: устройство НЕ ответило на ReadAttr
-                        now_online = false;
-                        dev->has_pending_read = false;
+            if(dev->is_in_build_status != 2) continue;
+                bool was_online = dev->is_online;
+                bool now_online = false;
+                if (zb_manager_is_device_always_powered(dev)) {
+                    if (dev->has_pending_read) {
+                        if (dev->has_pending_response) {
+                            now_online = true;
+                        } else if (now - dev->last_pending_read_ms > 10000) {
+                            // Таймаут: устройство НЕ ответило на ReadAttr
+                            now_online = false;
+                            dev->has_pending_read = false;
 
-                        // 🔁 Попробовать Bind, если прошло достаточно времени
-                        if (now - dev->last_bind_attempt_ms > BIND_RETRY_DELAY_MS) {
-                            // Ищем первый endpoint с OnOff кластером
-                            bool sent_bind = false;
-                            for (int ep_idx = 0; ep_idx < dev->endpoints_count; ep_idx++) {
-                                endpoint_custom_t *ep = dev->endpoints_array[ep_idx];
-                                if (ep && ep->is_use_on_off_cluster) {
-                                    // биндинг только на координатор
-                                    delayed_bind_req_t *delayed_bind = calloc(1, sizeof(delayed_bind_req_t));
-                                    if (delayed_bind) {
-                                        delayed_bind->short_addr = dev->short_addr;
-                                        delayed_bind->src_endpoint = ep->ep_id;
-                                        delayed_bind->cluster_id = ESP_ZB_ZCL_CLUSTER_ID_ON_OFF; // 0x0006
+                            // 🔁 Попробовать Bind, если прошло достаточно времени
+                            /*if (now - dev->last_bind_attempt_ms > BIND_RETRY_DELAY_MS) {
+                                // Ищем первый endpoint с OnOff кластером
+                                bool sent_bind = false;
+                                for (int ep_idx = 0; ep_idx < dev->endpoints_count; ep_idx++) {
+                                    endpoint_custom_t *ep = dev->endpoints_array[ep_idx];
+                                    if (ep && ep->is_use_on_off_cluster) {
+                                        // биндинг только на координатор
+                                        delayed_bind_req_t *delayed_bind = calloc(1, sizeof(delayed_bind_req_t));
+                                        if (delayed_bind) {
+                                            delayed_bind->short_addr = dev->short_addr;
+                                            delayed_bind->src_endpoint = ep->ep_id;
+                                            delayed_bind->cluster_id = ESP_ZB_ZCL_CLUSTER_ID_ON_OFF; // 0x0006
 
-                                        ESP_LOGI(TAG, "📤 Queuing BIND request via action worker: short=0x%04x, ep=%d, cluster=0x%04x",
-                                                 delayed_bind->short_addr, delayed_bind->src_endpoint, delayed_bind->cluster_id);
+                                            ESP_LOGI(TAG, "📤 Queuing BIND request via action worker: short=0x%04x, ep=%d, cluster=0x%04x",
+                                                    delayed_bind->short_addr, delayed_bind->src_endpoint, delayed_bind->cluster_id);
 
-                                        if (zb_manager_post_to_action_worker(ZB_ACTION_DELAYED_BIND_REQ, delayed_bind, sizeof(delayed_bind_req_t))) {
-                                            ESP_LOGI(TAG, "✅ BIND request successfully posted to action worker");
-                                            dev->last_bind_attempt_ms = now; // Обновляем время попытки
-                                            sent_bind = true;
-                                        } else {
-                                            ESP_LOGE(TAG, "❌ Failed to post BIND request to action worker");
+                                            if (zb_manager_post_to_action_worker(ZB_ACTION_DELAYED_BIND_REQ, delayed_bind, sizeof(delayed_bind_req_t))) {
+                                                ESP_LOGI(TAG, "✅ BIND request successfully posted to action worker");
+                                                dev->last_bind_attempt_ms = now; // Обновляем время попытки
+                                                sent_bind = true;
+                                            } else {
+                                                ESP_LOGE(TAG, "❌ Failed to post BIND request to action worker");
+                                                free(delayed_bind); // Освобождаем — данные скопированы или ошибка
+                                            }
                                             free(delayed_bind); // Освобождаем — данные скопированы или ошибка
+                                        } else {
+                                            ESP_LOGE(TAG, "❌ Failed to allocate memory for delayed_bind");
                                         }
-                                        free(delayed_bind); // Освобождаем — данные скопированы или ошибка
-                                    } else {
-                                        ESP_LOGE(TAG, "❌ Failed to allocate memory for delayed_bind");
+                                        break; // Отправляем Bind только для первого OnOff EP
                                     }
-                                    break; // Отправляем Bind только для первого OnOff EP
                                 }
-                            }
 
-                            if (!sent_bind) {
-                                ESP_LOGW(TAG, "⚠️ No OnOff endpoint found for BIND on device %s (0x%04x)", dev->friendly_name, dev->short_addr);
-                            }
+                                if (!sent_bind) {
+                                    ESP_LOGW(TAG, "⚠️ No OnOff endpoint found for BIND on device %s (0x%04x)", dev->friendly_name, dev->short_addr);
+                                }
+                            } else {
+                                ESP_LOGD(TAG, "⏳ BIND already attempted recently for %s (0x%04x)", dev->friendly_name, dev->short_addr);
+                            }*/
                         } else {
-                            ESP_LOGD(TAG, "⏳ BIND already attempted recently for %s (0x%04x)", dev->friendly_name, dev->short_addr);
+                            now_online = false; // Ещё ждём ответа
                         }
                     } else {
-                        now_online = false; // Ещё ждём ответа
+                        now_online = true; // Готов к следующему опросу
                     }
                 } else {
-                    now_online = true; // Готов к следующему опросу
+                    // Батарейное устройство — по таймеру
+                    now_online = (now - dev->last_seen_ms) < dev->device_timeout_ms;
                 }
-            } else {
-                // Батарейное устройство — по таймеру
-                now_online = (now - dev->last_seen_ms) < dev->device_timeout_ms;
-            }
+        
 
-            dev->is_online = now_online;
-            if (was_online != now_online) {
-                ESP_LOGI(TAG, "Device %s (0x%04x) → %s",
-                         dev->friendly_name,
-                         dev->short_addr,
-                         now_online ? "ONLINE" : "OFFLINE");
-                ws_notify_device_update_unlocked(dev);
-                
-            }
+                dev->is_online = now_online;
+                if (was_online != now_online) {
+                    ESP_LOGI(TAG, "Device %s (0x%04x) → %s",
+                            dev->friendly_name,
+                            dev->short_addr,
+                            now_online ? "ONLINE" : "OFFLINE");
+                    ws_notify_device_update_unlocked(dev);
+                    
+                }
 
-            // === 2. Периодический опрос OnOff (если нет pending read) ===
-            if (zb_manager_is_device_always_powered(dev) && !dev->has_pending_read) {
-                bool sent_poll = false;
-                for (int ep_idx = 0; ep_idx < dev->endpoints_count; ep_idx++) {
-                    endpoint_custom_t *ep = dev->endpoints_array[ep_idx];
-                    if (!ep || !ep->is_use_on_off_cluster) continue;
+                // === 2. Периодический опрос OnOff (если нет pending read) ===
+                if (zb_manager_is_device_always_powered(dev) && !dev->has_pending_read) {
+                    bool sent_poll = false;
+                    for (int ep_idx = 0; ep_idx < dev->endpoints_count; ep_idx++) {
+                        endpoint_custom_t *ep = dev->endpoints_array[ep_idx];
+                        if (!ep || !ep->is_use_on_off_cluster) continue;
 
-                    uint32_t last_read_ms = ep->server_OnOffClusterObj ? ep->server_OnOffClusterObj->last_update_ms : 0;
-                    if (now - last_read_ms > POLLING_INTERVAL_MS) {
-                        uint8_t tsn = zb_manager_read_on_off_attribute(dev->short_addr, ep->ep_id);
-                        //uint8_t tsn = zb_manager_read_on_off_attribute_by_ieee(dev->short_addr, ep->ep_id);
-                        if (tsn != 0xff) {
-                            dev->has_pending_read = true;
-                            dev->has_pending_response = false;
-                            dev->last_pending_read_ms = now;
-                            ESP_LOGI(TAG, "🔁 Polling OnOff: %s (0x%04x, EP: %d)", dev->friendly_name, dev->short_addr, ep->ep_id);
-                            sent_poll = true;
-                        } else {
-                            ESP_LOGW(TAG, "❌ Failed to poll OnOff: %s (0x%04x, EP: %d)", dev->friendly_name, dev->short_addr, ep->ep_id);
+                        uint32_t last_read_ms = ep->server_OnOffClusterObj ? ep->server_OnOffClusterObj->last_update_ms : 0;
+                        if (now - last_read_ms > POLLING_INTERVAL_MS) {
+                            uint8_t tsn = zb_manager_read_on_off_attribute(dev->short_addr, ep->ep_id);
+                            
+                            if (tsn != 0xff) {
+                                dev->has_pending_read = true;
+                                dev->has_pending_response = false;
+                                dev->last_pending_read_ms = now;
+                                ESP_LOGI(TAG, "🔁 Polling OnOff: %s (0x%04x, EP: %d)", dev->friendly_name, dev->short_addr, ep->ep_id);
+                                sent_poll = true;
+                            } else {
+                                ESP_LOGW(TAG, "❌ Failed to poll OnOff: %s (0x%04x, EP: %d)", dev->friendly_name, dev->short_addr, ep->ep_id);
+                            }
+                            break;
                         }
-                        break;
+                    }
+                    if (!sent_poll) {
+                        ESP_LOGD(TAG, "No OnOff clusters to poll for %s (0x%04x)", dev->friendly_name, dev->short_addr);
                     }
                 }
-                if (!sent_poll) {
-                    ESP_LOGD(TAG, "No OnOff clusters to poll for %s (0x%04x)", dev->friendly_name, dev->short_addr);
+
+                // === 3. Лог раз в минуту ===
+                if (now - dev->last_status_print_log_time >= 60000) {
+                    ESP_LOGI(TAG, "Device %s (0x%04x) is NOW %s",
+                            dev->friendly_name,
+                            dev->short_addr,
+                            dev->is_online ? "ONLINE" : "OFFLINE");
+                    dev->last_status_print_log_time = now;
                 }
-            }
-
-            // === 3. Лог раз в минуту ===
-            if (now - dev->last_status_print_log_time >= 60000) {
-                ESP_LOGI(TAG, "Device %s (0x%04x) is NOW %s",
-                         dev->friendly_name,
-                         dev->short_addr,
-                         dev->is_online ? "ONLINE" : "OFFLINE");
-                dev->last_status_print_log_time = now;
-            }
+            
         }
-
         DEVICE_ARRAY_UNLOCK();
     }
 }

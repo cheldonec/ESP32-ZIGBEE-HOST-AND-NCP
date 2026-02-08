@@ -806,7 +806,7 @@ esp_err_t ws_handler(httpd_req_t *req)
                     ha_mqtt_publish_on_off_state(dev, target_ep);
 
                     // 🔹 Только для Lumi/Aqara: отправляем Read Attribute (известная проблема — не присылают report после toggle)
-                    if (dev->manufacturer_code == 4447) {
+                    /*if (dev->manufacturer_code == 4447) {
                         ESP_LOGI(TAG, "🔍 Device is Lumi/Aqara (manuf: %d) → forcing ReadAttr to sync state", dev->manufacturer_code);
                         uint8_t tsn = zb_manager_read_on_off_attribute(dev->short_addr, target_ep->ep_id);
                         if (tsn == 0xff) {
@@ -816,7 +816,7 @@ esp_err_t ws_handler(httpd_req_t *req)
                         }
                     } else {
                         ESP_LOGD(TAG, "💡 Device manuf: %d → skipping ReadAttr, relying on reporting", dev->manufacturer_code);
-                    }
+                    }*/
                 } else {
                     ESP_LOGW(TAG, "❌ Missing 'short' or 'endpoint' in toggle command");
                 }
@@ -1512,6 +1512,75 @@ esp_err_t handle_bind_api(httpd_req_t *req)
     return ESP_OK;
 }
 
+// === Обработчик POST /api/report_config ===
+esp_err_t handle_report_config_api(httpd_req_t *req)
+{
+    char buf[512];
+    int ret = httpd_req_recv(req, buf, req->content_len);
+    if (ret <= 0) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Read failed");
+        return ESP_FAIL;
+    }
+    buf[ret] = '\0';
+
+    cJSON *json = cJSON_Parse(buf);
+    if (!json) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid JSON");
+        return ESP_FAIL;
+    }
+
+    // Извлекаем параметры
+    cJSON *short_addr_item = cJSON_GetObjectItem(json, "short_addr");
+    cJSON *endpoint_item   = cJSON_GetObjectItem(json, "endpoint");
+    cJSON *cluster_item    = cJSON_GetObjectItem(json, "cluster_id");
+    cJSON *min_item        = cJSON_GetObjectItem(json, "min_interval");
+    cJSON *max_item        = cJSON_GetObjectItem(json, "max_interval");
+    cJSON *change_item     = cJSON_GetObjectItem(json, "reportable_change");
+
+    if (!short_addr_item || !endpoint_item || !cluster_item) {
+        cJSON_Delete(json);
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Missing required fields");
+        return ESP_FAIL;
+    }
+
+    uint16_t short_addr = short_addr_item->valueint;
+    uint8_t  endpoint   = endpoint_item->valueint;
+    uint16_t cluster    = cluster_item->valueint;
+    uint16_t min_interval = min_item ? min_item->valueint : 1;      // по умолчанию 1 сек
+    uint16_t max_interval = max_item ? max_item->valueint : 300;    // 5 минут
+    uint16_t reportable_change = change_item ? change_item->valueint : 0;
+
+    cJSON_Delete(json);
+
+    ESP_LOGI(TAG, "REPORT_CONFIG: short=0x%04x, ep=%d, cluster=0x%04x, min=%d, max=%d, change=%d",
+             short_addr, endpoint, cluster, min_interval, max_interval, reportable_change);
+
+    // Формируем запрос
+    delayed_configure_report_req_t *cfg_req = calloc(1, sizeof(delayed_configure_report_req_t));
+    if (!cfg_req) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Out of memory");
+        return ESP_FAIL;
+    }
+
+    cfg_req->short_addr = short_addr;
+    cfg_req->src_endpoint = endpoint;
+    cfg_req->cluster_id = cluster;
+    cfg_req->min_interval = min_interval;
+    cfg_req->max_interval = max_interval;
+    cfg_req->reportable_change = reportable_change;
+
+    // Отправляем в action worker
+    if (zb_manager_post_to_action_worker(ZB_ACTION_DELAYED_CONFIG_REPORT_REQ, cfg_req, sizeof(*cfg_req))) {
+        httpd_resp_sendstr(req, "{\"status\":\"ok\"}");
+    } else {
+        free(cfg_req);
+        httpd_resp_sendstr(req, "{\"status\":\"fail\",\"error\":\"queue_full\"}");
+    }
+
+    return ESP_OK;
+}
+
+
 //обработчики для разных ОС, когда они подключаются по wifi к нашей AP
 // === Обработчик для Android: /generate_204 ===
 esp_err_t generate_204_handler(httpd_req_t *req)
@@ -1963,6 +2032,14 @@ httpd_uri_t uri_bind = {
     .user_ctx  = NULL
 };
 
+// === URI для настройки reporting ===
+httpd_uri_t uri_report_config = {
+    .uri       = "/api/report_config",
+    .method    = HTTP_POST,
+    .handler   = handle_report_config_api,
+    .user_ctx  = NULL
+};
+
 // === URI для настройки сценариев (правил) ===
 // API для правил
 httpd_uri_t uri_api_get_rules = {
@@ -2021,7 +2098,7 @@ void start_webserver(void)
     config.task_priority = 5;
     config.lru_purge_enable = true;
     config.uri_match_fn = httpd_uri_match_wildcard;  // ✅ ВАЖНО! чтобы пути через * работали
-    config.max_uri_handlers = 32;
+    config.max_uri_handlers = 40;
     config.max_open_sockets = 5;
     if (httpd_start(&server_handle, &config) == ESP_OK) {
         // Регистрируем КАПТИВНЫЕ порталы ВСЕГДА
@@ -2049,6 +2126,7 @@ void start_webserver(void)
             httpd_register_uri_handler(server_handle, &uri_static_media);
             httpd_register_uri_handler(server_handle, &uri_get_binding_targets);
             httpd_register_uri_handler(server_handle, &uri_bind);
+            httpd_register_uri_handler(server_handle, &uri_report_config);
             httpd_register_uri_handler(server_handle, &get_ssdp_description_xml);
             httpd_register_uri_handler(server_handle, &get_homeassistant_json);
             httpd_register_uri_handler(server_handle, &uri_upload_cert);

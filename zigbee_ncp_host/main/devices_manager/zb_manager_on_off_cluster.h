@@ -162,4 +162,18 @@ uint8_t zb_manager_on_off_cmd_req(esp_zb_zcl_on_off_cmd_t *cmd_req);
  * @return The transaction sequence number
  */
 uint8_t zb_manager_on_off_on_with_timed_off_cmd_req(esp_zb_zcl_on_off_on_with_timed_off_cmd_t *cmd_req);
+
+/**
+ * @brief Configure reporting for On/Off cluster
+ *
+ * @param short_addr Target device short address
+ * @param endpoint Endpoint ID
+ * @param min_interval Min reporting interval (seconds)
+ * @param max_interval Max reporting interval (seconds)
+ * @param change Reportable change (for boolean, usually 1 or unused)
+ * @return ESP_OK on success
+ */
+esp_err_t zb_manager_configure_reporting_onoff_ext(uint16_t short_addr, uint8_t endpoint,
+                                                  uint16_t min_interval, uint16_t max_interval, uint16_t change);
+
 #endif // ZB_MANAGER_ON_OFF_CLUSTER_H

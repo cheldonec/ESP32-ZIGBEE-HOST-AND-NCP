@@ -610,4 +610,5 @@ typedef void (*local_esp_zb_zdo_match_desc_callback_t)(local_esp_zb_zdp_status_t
  * @brief Функция запроса NODE_DESC_REQ (HOST -> NCP) ESP_NCP_ZDO_FIND_MATCH 0x0202 
 */
 esp_err_t zb_manager_zdo_match_desc_cluster(local_esp_zb_zdo_match_desc_req_param_t *param, local_esp_zb_zdo_match_desc_callback_t user_cb, void *user_ctx);
+
 #endif

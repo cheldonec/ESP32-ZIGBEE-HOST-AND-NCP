@@ -1,12 +1,6 @@
 // src/App.js
 import React, { useState, useEffect } from 'react';
 import './App.css';
-
-
-import BindModal from './components/BindModal';
-import ReportModal from './components/ReportModal';
-import OnOffCommandModal from './components/OnOffCommandModal';
-import OnOffTimedOffModal from './components/OnOffTimedOffModal';
 import RuleList from './components/RuleList';
 import RuleEditor from './components/RuleEditor';
 import DeviceCard from './components/DeviceCard';
@@ -671,45 +665,376 @@ function App() {
         )}
 
         {/* Модальное окно: Привязка */}
-        <BindModal
-          show={showBindModal}
-          onClose={() => setShowBindModal(false)}
-          bindingTargets={bindingTargets}
-          bindForm={bindForm}
-          setBindForm={setBindForm}
-          performBind={performBind}
-        />
+        {showBindModal && (
+          <div className="modal-overlay">
+            <div className="modal-content">
+              <h3>Создать привязку</h3>
+              <p className="modal-description">
+                <strong>Источник</strong> будет отправлять отчёты <strong>получателю</strong>
+              </p>
+
+              <label>1. Источник (input):</label>
+              <select
+                value={bindForm.srcDevice}
+                onChange={e => setBindForm(prev => ({ ...prev, srcDevice: e.target.value, srcEp: '', cluster: '' }))}
+                className="form-select"
+              >
+                <option value="">Выберите устройство...</option>
+                {bindingTargets.map(dev => (
+                  <option key={dev.short} value={dev.short}>
+                    {dev.name} (0x{dev.short.toString(16).padStart(4, '0').toUpperCase()})
+                  </option>
+                ))}
+              </select>
+
+              {bindForm.srcDevice && (
+                <>
+                  <label>2. Endpoint (input):</label>
+                  <select
+                    value={bindForm.srcEp}
+                    onChange={e => setBindForm(prev => ({ ...prev, srcEp: e.target.value, cluster: '' }))}
+                    className="form-select"
+                  >
+                    <option value="">Выберите endpoint...</option>
+                    {bindingTargets
+                      .find(d => d.short === Number(bindForm.srcDevice))
+                      ?.endpoints
+                      .filter(ep => (ep.input_clusters || []).length > 0)
+                      .map(ep => (
+                        <option key={ep.id} value={ep.id}>EP {ep.id}</option>
+                      ))
+                    }
+                  </select>
+                </>
+              )}
+
+
+              {bindForm.srcEp && (
+                <>
+                  <label>3. Кластер (input):</label>
+                  <select
+                    value={bindForm.cluster}
+                    onChange={e => setBindForm(prev => ({ ...prev, cluster: e.target.value }))}
+                    className="form-select"
+                  >
+                    <option value="">Выберите кластер...</option>
+                    {getInputClusters(Number(bindForm.srcDevice), Number(bindForm.srcEp)).map(id => (
+                      <option key={id} value={id}>0x{id.toString(16).padStart(4, '0')} (input)</option>
+                    ))}
+                  </select>
+                </>
+              )}
+
+              <label>4. Получатель (output):</label>
+              <select
+                value={bindForm.tgtDevice}
+                onChange={e => setBindForm(prev => ({ ...prev, tgtDevice: e.target.value, tgtEp: '' }))}
+                className="form-select"
+              >
+                <option value="">Выберите устройство...</option>
+                {bindingTargets.map(dev => (
+                  <option key={dev.short} value={dev.short}>
+                    {dev.name} (0x{dev.short.toString(16).padStart(4, '0').toUpperCase()})
+                  </option>
+                ))}
+              </select>
+
+              {bindForm.tgtDevice && (
+                <>
+                  <label>5. Endpoint (output):</label>
+                  <select
+                    value={bindForm.tgtEp}
+                    onChange={e => setBindForm(prev => ({ ...prev, tgtEp: e.target.value }))}
+                    className="form-select"
+                  >
+                    <option value="">Выберите endpoint...</option>
+                    {bindingTargets
+                      .find(d => d.short === Number(bindForm.tgtDevice))
+                      ?.endpoints
+                      .filter(ep => (ep.output_clusters || []).length > 0)
+                      .map(ep => (
+                        <option key={ep.id} value={ep.id}>EP {ep.id}</option>
+                      ))
+                    }
+                  </select>
+                </>
+              )}
+
+              <div className="modal-buttons">
+                <button onClick={performBind} className="btn-primary">Привязать</button>
+                <button onClick={() => setShowBindModal(false)} className="btn-danger">Отмена</button>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Модальное окно: Reporting */}
-        <ReportModal
-          show={showReportModal}
-          onClose={() => setShowReportModal(false)}
-          bindingTargets={bindingTargets}
-          reportForm={reportForm}
-          setReportForm={setReportForm}
-          onSubmit={handleSetReport} // или inline, как ниже
-        />
+        {showReportModal && (
+          <div className="modal-overlay">
+            <div className="modal-content">
+              <h3>📊 Настроить Reporting</h3>
+
+              <label>Устройство:</label>
+              <select
+                value={reportForm.device}
+                onChange={(e) => setReportForm(prev => ({ ...prev, device: e.target.value, ep: '', cluster: '' }))}
+                className="form-select"
+              >
+                <option value="">Выберите устройство...</option>
+                {bindingTargets.map(dev => (
+                  <option key={dev.short} value={dev.short}>
+                    {dev.name} (0x{dev.short.toString(16).padStart(4, '0').toUpperCase()})
+                  </option>
+                ))}
+              </select>
+
+              {reportForm.device && (
+                <>
+                  <label>Endpoint:</label>
+                  <select
+                    value={reportForm.ep}
+                    onChange={(e) => setReportForm(prev => ({ ...prev, ep: e.target.value, cluster: '' }))}
+                    className="form-select"
+                  >
+                    <option value="">Выберите endpoint...</option>
+                    {bindingTargets
+                      .find(d => d.short === Number(reportForm.device))
+                      ?.endpoints
+                      .filter(ep => (ep.input_clusters || []).length > 0)
+                      .map(ep => (
+                        <option key={ep.id} value={ep.id}>EP {ep.id}</option>
+                      ))
+                    }
+                  </select>
+                </>
+              )}
+
+              {reportForm.ep && (
+                <>
+                  <label>Кластер:</label>
+                  <select
+                    value={reportForm.cluster}
+                    onChange={(e) => setReportForm(prev => ({ ...prev, cluster: e.target.value }))}
+                    className="form-select"
+                  >
+                    <option value="">Выберите кластер...</option>
+                    {getInputClusters(Number(reportForm.device), Number(reportForm.ep)).map(id => {
+                      const nameMap = {
+                        0x0006: 'On/Off',
+                        0x0402: 'Temperature',
+                        0x0405: 'Humidity',
+                        0x0001: 'Power Config',
+                      };
+                      return (
+                        <option key={id} value={id}>
+                          0x{id.toString(16).padStart(4, '0')} ({nameMap[id] || 'Unknown'})
+                        </option>
+                      );
+                    })}
+                  </select>
+                </>
+              )}
+
+              {reportForm.cluster && (
+                <>
+                  <label>Мин. интервал (сек):</label>
+                  <input
+                    type="number"
+                    value={reportForm.min}
+                    onChange={(e) => setReportForm(prev => ({ ...prev, min: Number(e.target.value) }))}
+                    min="1"
+                    className="form-input"
+                  />
+
+                  <label>Макс. интервал (сек):</label>
+                  <input
+                    type="number"
+                    value={reportForm.max}
+                    onChange={(e) => setReportForm(prev => ({ ...prev, max: Number(e.target.value) }))}
+                    min="1"
+                    className="form-input"
+                  />
+
+                  <label>Изменение для отчёта (опц.):</label>
+                  <input
+                    type="number"
+                    value={reportForm.change}
+                    onChange={(e) => setReportForm(prev => ({ ...prev, change: Number(e.target.value) }))}
+                    min="0"
+                    className="form-input"
+                  />
+                </>
+              )}
+
+              <div className="modal-buttons">
+                <button
+                  onClick={() => {
+                    const { device, ep, cluster, min, max, change } = reportForm;
+                    if (![device, ep, cluster].every(Boolean)) {
+                      alert("Заполните все обязательные поля");
+                      return;
+                    }
+                    fetch('/api/report_config', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({
+                        short_addr: Number(device),
+                        endpoint: Number(ep),
+                        cluster_id: Number(cluster),
+                        min_interval: Number(min),
+                        max_interval: Number(max),
+                        reportable_change: Number(change),
+                      })
+                    })
+                    .then(r => r.json())
+                    .then(data => {
+                      if (data.status === 'ok') {
+                        alert('✅ Reporting настроен');
+                        setShowReportModal(false);
+                      } else {
+                        alert('❌ Ошибка: ' + data.error);
+                      }
+                    })
+                    .catch(err => alert('Ошибка сети'));
+                  }}
+                  className="btn-primary"
+                >
+                  Применить
+                </button>
+                <button onClick={() => setShowReportModal(false)} className="btn-danger">Отмена</button>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* === Модальное окно: Тест команды === */}
-        <OnOffCommandModal
-          show={showCommandModal}
-          onClose={() => setShowCommandModal(false)}
-          device={selectedDevice}
-          endpoint={selectedEndpoint}
-          sendTestCommand={sendTestCommand}
-        />
+        {showCommandModal && selectedDevice && (
+          <div className="modal-overlay">
+            <div className="modal-content" style={{ maxWidth: '500px' }}>
+              <h3>🧪 Тест команды</h3>
+              <p>
+                <strong>{selectedDevice.name}</strong> → EP {selectedEndpoint}
+              </p>
+
+              <div className="command-list">
+                {[
+                  { id: 'ON', label: 'Включить', params: null },
+                  { id: 'OFF', label: 'Выключить', params: null },
+                  { id: 'TOGGLE', label: 'Переключить', params: null },
+                  { id: 'ON_WITH_TIMED_OFF', label: 'Вкл с таймером', params: ['on_time', 'off_wait_time'] }
+                ].map(cmd => (
+                  <button
+                    key={cmd.id}
+                    className="command-item-btn"
+                    onClick={() => sendTestCommand(selectedDevice, selectedEndpoint, cmd)}
+                  >
+                    {cmd.label}
+                    {cmd.params && (<span style={{ fontSize: '0.8em', opacity: 0.7 }}> → нажмите для настройки</span>)}
+                  </button>
+                ))}
+              </div>
+
+              <div className="modal-buttons">
+                <button className="btn-danger" onClick={() => setShowCommandModal(false)}>
+                  ❌ Закрыть
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* === Модальное окно: Вкл с таймером === */}
-        <OnOffTimedOffModal
-          show={showTimedOffModal}
-          onClose={() => setShowTimedOffModal(false)}
-          device={selectedDevice}
-          endpoint={selectedEndpoint}
-          timedOffForm={timedOffForm}
-          setTimedOffForm={setTimedOffForm}
-          getCommandId={getCommandId}
-          sendCommand={sendCommand}
-        />
+        {showTimedOffModal && selectedDevice && (
+          <div className="modal-overlay">
+            <div className="modal-content" style={{ maxWidth: '400px' }}>
+              <h3>⏱️ Вкл с таймером</h3>
+              <p>
+                <strong>{selectedDevice.name}</strong> → EP {selectedEndpoint}
+              </p>
+
+              <div className="form-group">
+                <label>
+                  ⏱️ Время включения (0.1 сек)
+                  <input
+                    type="number"
+                    value={timedOffForm.on_time}
+                    onChange={(e) => setTimedOffForm(prev => ({
+                      ...prev,
+                      on_time: parseInt(e.target.value) || 0
+                    }))}
+                    placeholder="Например: 600 = 60 сек"
+                    min="0"
+                    required
+                  />
+                </label>
+              </div>
+
+              <div className="form-group">
+                <label>
+                  ⏳ Задержка перед выключением (0.1 сек)
+                  <input
+                    type="number"
+                    value={timedOffForm.off_wait_time}
+                    onChange={(e) => setTimedOffForm(prev => ({
+                      ...prev,
+                      off_wait_time: parseInt(e.target.value) || 0
+                    }))}
+                    placeholder="0 — выключится сразу"
+                    min="0"
+                  />
+                </label>
+              </div>
+
+              <div className="form-group">
+                <label>
+                  🔧 On/Off Control
+                  <select
+                    value={timedOffForm.on_off_control}
+                    onChange={(e) => setTimedOffForm(prev => ({
+                      ...prev,
+                      on_off_control: parseInt(e.target.value)
+                    }))}
+                  >
+                    <option value={0}>0 — Прервать если уже включено</option>
+                    <option value={1}>1 — Не прерывать, если уже включено</option>
+                  </select>
+                </label>
+                <small style={{ opacity: 0.7 }}>
+                  Управляет поведением, если устройство уже включено.
+                </small>
+              </div>
+
+              <div className="modal-buttons">
+                <button
+                  className="btn-primary"
+                  onClick={() => {
+                    const payload = {
+                      cmd: "send_automation_command",
+                      short_addr: selectedDevice.short,
+                      endpoint: selectedEndpoint,
+                      cmd_id: getCommandId('ON_WITH_TIMED_OFF'),
+                      params: {
+                        on_time: timedOffForm.on_time,
+                        off_wait_time: timedOffForm.off_wait_time,
+                      },
+                    };
+                    sendCommand("send_automation_command", payload);
+                    setShowTimedOffModal(false);
+                    setShowCommandModal(false);
+                  }}
+                >
+                  ✅ Отправить
+                </button>
+                <button
+                  className="btn-danger"
+                  onClick={() => setShowTimedOffModal(false)}
+                >
+                  ❌ Отмена
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </header>
 
       {/* === Правила === */}

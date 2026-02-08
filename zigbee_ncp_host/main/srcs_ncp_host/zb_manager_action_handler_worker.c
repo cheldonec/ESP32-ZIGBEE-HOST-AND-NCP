@@ -308,165 +308,7 @@ static void zb_action_worker_task(void *pvParameters)
 
         int64_t start = esp_timer_get_time();
         switch (msg.event_id) {
-           // working copy
-            /*case ZB_ACTION_ATTR_READ_RESP: {
-            ESP_LOGD(TAG, "ZB_ACTION_ATTR_READ_RESP: event_data=%p, data_size=%zu", msg.event_data, msg.data_size);
-
-            if (!msg.event_data) {
-                ESP_LOGE(TAG, "❌ event_data is NULL in ZB_ACTION_ATTR_READ_RESP");
-                break;
-            }
-
-            if (msg.data_size < sizeof(zb_manager_cmd_read_attr_resp_message_t)) {
-                ESP_LOGE(TAG, "❌ Invalid data size: %zu, expected >= %zu", msg.data_size, sizeof(zb_manager_cmd_read_attr_resp_message_t));
-                break;
-            }
-
-            zb_manager_cmd_read_attr_resp_message_t* read_resp = (zb_manager_cmd_read_attr_resp_message_t *)msg.event_data;
-
-            // Проверка на валидность short_addr
-            uint16_t short_addr = read_resp->info.src_address.u.short_addr;
-            if (short_addr == 0xFFFF) {
-                ESP_LOGW(TAG, "❌ Invalid short_addr: 0xFFFF in read response");
-                zb_manager_free_read_attr_resp_attr_array(read_resp);
-                break;
-            }
-
-            // Проверка на корректный статус
-            if (read_resp->info.status != ESP_ZB_ZCL_STATUS_SUCCESS) {
-                ESP_LOGW(TAG, "ZB_ACTION_ATTR_READ_RESP: status 0x%02x from 0x%04x", read_resp->info.status, short_addr);
-                zb_manager_free_read_attr_resp_attr_array(read_resp);
-                break;
-            }
-
-            // Поиск устройства
-            device_custom_t *dev_info = zb_manager_find_device_by_short(short_addr);
-            if (!dev_info) {
-                ESP_LOGW(TAG, "ZB_ACTION_ATTR_READ_RESP: device 0x%04x not found", short_addr);
-                zb_manager_free_read_attr_resp_attr_array(read_resp);
-                break;
-            }
-
-            // Обновляем активность, выставляется online статус dev->is_online
-            zb_manager_update_device_activity(short_addr, 10);
-
-            ESP_LOGI(TAG, "ZB_ACTION_ATTR_READ_RESP: short=0x%04x, ep=%d, cluster=0x%04x, attr_count=%d",
-                    short_addr,
-                    read_resp->info.src_endpoint,
-                    read_resp->info.cluster,
-                    read_resp->attr_count);
-
-            // Если устройство в режиме сопряжения — передаём в pairing_worker
-            if (dev_info->is_in_build_status == 1) {
-                ESP_LOGI(TAG, "ZB_ACTION_ATTR_READ_RESP: device 0x%04x is in pairing mode → forwarding to pairing_worker", short_addr);
-
-                size_t total_size = sizeof(zb_manager_cmd_read_attr_resp_message_t) +
-                                    (read_resp->attr_count - 1) * sizeof(zb_manager_attr_t);
-
-                // Выделяем память для всей структуры
-                zb_manager_cmd_read_attr_resp_message_t *copy = calloc(1, total_size);
-                if (!copy) {
-                    ESP_LOGE(TAG, "❌ Failed to allocate memory for read_attr_resp copy");
-                    //zb_manager_free_read_attr_resp_attr_array(read_resp);
-                    break;
-                }
-
-                // Копируем основную часть
-                memcpy(copy, read_resp, total_size);
-
-                // Копируем каждый attr_value
-                for (int i = 0; i < read_resp->attr_count; i++) {
-                    if (read_resp->attr_arr[i].attr_value && read_resp->attr_arr[i].attr_len > 0) {
-                        uint8_t *val_copy = malloc(read_resp->attr_arr[i].attr_len);
-                        if (val_copy) {
-                            memcpy(val_copy, read_resp->attr_arr[i].attr_value, read_resp->attr_arr[i].attr_len);
-                            copy->attr_arr[i].attr_value = val_copy;
-                        } else {
-                            ESP_LOGE(TAG, "❌ Failed to allocate attr_value copy for attr_id=0x%04x", read_resp->attr_arr[i].attr_id);
-                        }
-                    }
-                }
-
-                // Отправляем копию
-                if (!zb_manager_post_to_pairing_worker(ZB_PAIRING_ATTR_READ_RESP, copy, total_size)) {
-                    ESP_LOGE(TAG, "❌ Failed to forward ATTR_READ_RESP to pairing_worker");
-                    // Освобождаем копию в случае ошибки
-                    for (int i = 0; i < copy->attr_count; i++) {
-                        if (copy->attr_arr[i].attr_value) free(copy->attr_arr[i].attr_value);
-                    }
-                    free(copy);
-                }
-                break;
-            }
-
-            // Успешный ответ на ReadAttr → устройство живое!
-            // Только для питаемых устройств
-            if (zb_manager_is_device_always_powered(dev_info)) {
-                dev_info->is_online = true;
-                dev_info->has_pending_response = true;
-                ESP_LOGI(TAG, "✅ Mains-powered device 0x%04x is ONLINE (responded to ReadAttr)", short_addr);
-            }
-            // если устройство уже сопряжено,- продолжаем обновление атрибутов
-            // 🔹 Обработка On/Off кластера
-            if (read_resp->info.cluster == ESP_ZB_ZCL_CLUSTER_ID_ON_OFF) {
-                endpoint_custom_t *ep = zb_manager_find_endpoint(short_addr, read_resp->info.src_endpoint);
-                if (ep && ep->is_use_on_off_cluster && ep->server_OnOffClusterObj) {
-                    bool updated = false;
-
-                    // Проверка на валидный attr_count
-                    if (read_resp->attr_count == 0) {
-                        ESP_LOGW(TAG, "OnOff ReadAttr: attr_count is 0");
-                    //} else if (read_resp->attr_count > ZB_MANAGER_MAX_ATTRIBUTES) {
-                        //ESP_LOGE(TAG, "OnOff ReadAttr: attr_count too large: %d", read_resp->attr_count);
-                    } else {
-                        for (int i = 0; i < read_resp->attr_count; i++) {
-                            if (read_resp->attr_arr[i].attr_id == ESP_ZB_ZCL_ATTR_ON_OFF_ON_OFF_ID) {
-                                if (read_resp->attr_arr[i].attr_value == NULL) {
-                                    ESP_LOGW(TAG, "OnOff ReadAttr: attr_value is NULL for attr_id=0x%04x", read_resp->attr_arr[i].attr_id);
-                                    continue;
-                                }
-
-                                bool new_state = *(bool*)read_resp->attr_arr[i].attr_value;
-                                bool old_state = ep->server_OnOffClusterObj->on_off;
-
-                                if (old_state != new_state) {
-                                    zb_manager_on_off_cluster_update_attribute(ep->server_OnOffClusterObj,
-                                                                            read_resp->attr_arr[i].attr_id,
-                                                                            read_resp->attr_arr[i].attr_value);
-                                    ESP_LOGI(TAG, "✅ OnOff updated via ReadAttr: 0x%04x (ep: %d) → %s (was: %s)",
-                                            dev_info->short_addr, ep->ep_id,
-                                            new_state ? "ON" : "OFF",
-                                            old_state ? "ON" : "OFF");
-                                    ws_notify_device_update(dev_info->short_addr);
-                                    updated = true;
-                                } else {
-                                    ESP_LOGD(TAG, "OnOff state unchanged: 0x%04x (ep: %d) → %s",
-                                            dev_info->short_addr, ep->ep_id, new_state ? "ON" : "OFF");
-                                }
-                                break;
-                            }
-                        }
-                    }
-
-                    if (!updated && read_resp->attr_count > 0) {
-                        ESP_LOGW(TAG, "OnOff ReadAttr: no matching attr_id in response");
-                    }
-                } else {
-                    ESP_LOGW(TAG, "OnOff ReadAttr: endpoint or cluster not found for 0x%04x (ep: %d)",
-                            dev_info->short_addr, read_resp->info.src_endpoint);
-                }
-            }
-
-            // Обновляем флаги устройства
-            dev_info->has_pending_read = false;
-            dev_info->has_pending_response = true;
-            //обновляем  web в любом случае
-            ws_notify_device_update(dev_info->short_addr);
-            // Освобождаем только внутренние данные, не саму структуру
-            zb_manager_free_read_attr_resp_attr_array(read_resp);
-
-            break;
-        }*/
+           
 
         case ZB_ACTION_ATTR_READ_RESP: {
             uint8_t *input_copy = (uint8_t *)msg.event_data;
@@ -610,15 +452,7 @@ static void zb_action_worker_task(void *pvParameters)
                         ESP_LOGW(TAG, "OnOff ReadAttr: attr_count is 0");
                     } else {
                         for (int i = 0; i < read_resp->attr_count; i++) {
-                            // отправляем в обработчик сценариев
-                            zb_rule_trigger_state_update(
-                                read_resp->info.src_address.u.short_addr,
-                                read_resp->info.cluster,
-                                read_resp->attr_arr[i].attr_id,
-                                read_resp->attr_arr[i].attr_value,
-                                read_resp->attr_arr[i].attr_len,
-                                read_resp->attr_arr[i].attr_type
-                            );
+                            
                             if (read_resp->attr_arr[i].attr_id == ESP_ZB_ZCL_ATTR_ON_OFF_ON_OFF_ID) {
                                 if (read_resp->attr_arr[i].attr_value == NULL) {
                                     ESP_LOGW(TAG, "OnOff ReadAttr: attr_value is NULL for attr_id=0x%04x", read_resp->attr_arr[i].attr_id);
@@ -640,7 +474,7 @@ static void zb_action_worker_task(void *pvParameters)
                                 
                                     ws_notify_device_update(dev_info->short_addr);
                                     // ✅ Уведомляем HA
-                                    ha_device_updated(dev_info, ep);
+                                    //ha_device_updated(dev_info, ep);
                                     updated = true;
                                 } else {
                                     ESP_LOGD(TAG, "OnOff state unchanged: 0x%04x (ep: %d) → %s",
@@ -648,6 +482,15 @@ static void zb_action_worker_task(void *pvParameters)
                                 }
                                 break;
                             }
+                            // отправляем в обработчик сценариев
+                            zb_rule_trigger_state_update(
+                                read_resp->info.src_address.u.short_addr,
+                                read_resp->info.cluster,
+                                read_resp->attr_arr[i].attr_id,
+                                read_resp->attr_arr[i].attr_value,
+                                read_resp->attr_arr[i].attr_len,
+                                read_resp->attr_arr[i].attr_type
+                            );
                         }
                     }
 
@@ -672,216 +515,6 @@ static void zb_action_worker_task(void *pvParameters)
 
             break;
         }
-
-
-// working code для восстановления
-            /*case ZB_ACTION_ATTR_REPORT: {
-            ESP_LOGI(TAG, "✅ ATTR_REPORT_EVENT: processing");
-            zb_manager_cmd_report_attr_resp_message_t *rep = (zb_manager_cmd_report_attr_resp_message_t *)msg.event_data;
-
-            if (rep->status != ESP_ZB_ZCL_STATUS_SUCCESS) {
-                ESP_LOGW(TAG, "ATTR_REPORT_EVENT: status 0x%02x", rep->status);
-                zb_manager_free_report_attr_resp(rep);
-                break;
-            }
-
-            // логируем
-            ESP_LOGI(TAG, "📊 ATTR_REPORT: short=0x%04x, ep=%d, cluster=0x%04x, attr_id=0x%04x, type=0x%02x, len=%d",
-             rep->src_address.u.short_addr,
-             rep->src_endpoint,
-             rep->cluster,
-             rep->attr.attr_id,
-             rep->attr.attr_type,
-             rep->attr.attr_len);
-
-            // Печать значений в hex
-            if (rep->attr.attr_value && rep->attr.attr_len > 0) {
-                ESP_LOG_BUFFER_HEX_LEVEL("Attr Value", rep->attr.attr_value, rep->attr.attr_len, ESP_LOG_INFO);
-            }
-
-            // Поиск устройства
-            device_custom_t *dev = zb_manager_find_device_by_short(rep->src_address.u.short_addr);
-            if (!dev) {
-                ESP_LOGW(TAG, "ATTR_REPORT_EVENT: device 0x%04x not found", rep->src_address.u.short_addr);
-                zb_manager_free_report_attr_resp(rep);
-                break;
-            }
-
-            // Обновляем активность
-            // если устройство отвечает на read_attr для контроля состояния, то обновляем, иначе устройство может просто спамить или поменяло родителя,
-            // активность надо будет обновлять только если устройство отвечает на read_attr
-            if (zb_manager_is_device_always_powered(dev))
-            {
-                if((dev->has_pending_response == true))
-                {
-                    zb_manager_update_device_activity(rep->src_address.u.short_addr, 10);
-                }
-            }else 
-            zb_manager_update_device_activity(rep->src_address.u.short_addr, 10);
-            //ws_notify_device_update(dev->short_addr);
-
-            // 🔹 Basic Cluster (0x0000)
-            if (rep->cluster == ESP_ZB_ZCL_CLUSTER_ID_BASIC) {
-                if (dev->server_BasicClusterObj == NULL) {
-                    dev->server_BasicClusterObj = calloc(1, sizeof(zigbee_manager_basic_cluster_t));
-                    if (dev->server_BasicClusterObj) {
-                        zigbee_manager_basic_cluster_t cl = ZIGBEE_BASIC_CLUSTER_DEFAULT_INIT();
-                        memcpy(dev->server_BasicClusterObj, &cl, sizeof(zigbee_manager_basic_cluster_t));
-                    } else {
-                        ESP_LOGE(TAG, "Failed to allocate Basic Cluster for 0x%04x", dev->short_addr);
-                        zb_manager_free_report_attr_resp(rep);
-                        break;
-                    }
-                }
-                if (dev->server_BasicClusterObj) {
-                    if (xSemaphoreTake(g_device_array_mutex, pdMS_TO_TICKS(ZB_DEVICE_MUTEX_TIMEOUT_LONG_MS)) == pdTRUE) {
-                    zb_manager_basic_cluster_update_attribute(dev->server_BasicClusterObj, rep->attr.attr_id, rep->attr.attr_value);
-                    DEVICE_ARRAY_UNLOCK();
-                    // ✅ Логируем обновление атрибута
-                    log_zb_attribute(rep->cluster, &rep->attr, &rep->src_address, rep->src_endpoint);
-                    // ✅ Отправляем полное обновление устройства на web-сокет
-                            ws_notify_device_update(rep->src_address.u.short_addr);
-                    } else {
-                        ESP_LOGE(TAG, "Failed to take mutex for ESP_ZB_ZCL_CLUSTER_ID_BASIC update");
-                        zb_manager_free_report_attr_resp(rep);
-                        break;
-                    }
-                }
-            }
-            // 🔹 Power Configuration Cluster (0x0001)
-            else if (rep->cluster == ESP_ZB_ZCL_CLUSTER_ID_POWER_CONFIG) {
-                if (dev->server_PowerConfigurationClusterObj == NULL) {
-                    dev->server_PowerConfigurationClusterObj = calloc(1, sizeof(zb_manager_power_config_cluster_t));
-                    if (dev->server_PowerConfigurationClusterObj) {
-                        zb_manager_power_config_cluster_t cl = ZIGBEE_POWER_CONFIG_CLUSTER_DEFAULT_INIT();
-                        memcpy(dev->server_PowerConfigurationClusterObj, &cl, sizeof(zb_manager_power_config_cluster_t));
-                    } else {
-                        ESP_LOGE(TAG, "Failed to allocate Power Config Cluster for 0x%04x", dev->short_addr);
-                        zb_manager_free_report_attr_resp(rep);
-                        break;
-                    }
-                }
-                if (dev->server_PowerConfigurationClusterObj) {
-                    if (xSemaphoreTake(g_device_array_mutex, pdMS_TO_TICKS(ZB_DEVICE_MUTEX_TIMEOUT_LONG_MS)) == pdTRUE) {
-                        zb_manager_power_config_cluster_update_attribute(dev->server_PowerConfigurationClusterObj, rep->attr.attr_id, rep->attr.attr_value);
-                        DEVICE_ARRAY_UNLOCK();
-                        // ✅ Логируем обновление атрибута
-                        log_zb_attribute(rep->cluster, &rep->attr, &rep->src_address, rep->src_endpoint);
-                        // ✅ Отправляем полное обновление устройства на web-сокет
-                            ws_notify_device_update(rep->src_address.u.short_addr);
-                    } else {
-                        ESP_LOGE(TAG, "Failed to take mutex for Power Config update");
-                        zb_manager_free_report_attr_resp(rep);
-                        break;
-                    }
-                }
-            }
-            // 🔹 Cluster на уровне endpoint'а
-            else {
-                endpoint_custom_t *ep = zb_manager_find_endpoint(rep->src_address.u.short_addr, rep->src_endpoint);
-                if (!ep) {
-                    ESP_LOGW(TAG, "ATTR_REPORT_EVENT: endpoint not found: short=0x%04x, ep=%d", rep->src_address.u.short_addr, rep->src_endpoint);
-                    zb_manager_free_report_attr_resp(rep);
-                    break;
-                }
-
-                // 🔹 Temperature Measurement (0x0402)
-                if (rep->cluster == ESP_ZB_ZCL_CLUSTER_ID_TEMP_MEASUREMENT) {
-                    if (ep->server_TemperatureMeasurementClusterObj == NULL) {
-                        ep->server_TemperatureMeasurementClusterObj = calloc(1, sizeof(zb_manager_temperature_measurement_cluster_t));
-                        if (ep->server_TemperatureMeasurementClusterObj) {
-                            zb_manager_temperature_measurement_cluster_t cl = ZIGBEE_TEMP_MEASUREMENT_CLUSTER_DEFAULT_INIT();
-                            memcpy(ep->server_TemperatureMeasurementClusterObj, &cl, sizeof(zb_manager_temperature_measurement_cluster_t));
-                        } else {
-                            ESP_LOGE(TAG, "Failed to allocate Temp Meas Cluster for 0x%04x", rep->src_address.u.short_addr);
-                            zb_manager_free_report_attr_resp(rep);
-                            break;
-                        }
-                    }
-                    if (ep->server_TemperatureMeasurementClusterObj) {
-                        if (xSemaphoreTake(g_device_array_mutex, pdMS_TO_TICKS(ZB_DEVICE_MUTEX_TIMEOUT_LONG_MS)) == pdTRUE) {
-                            zb_manager_temp_meas_cluster_update_attribute(ep->server_TemperatureMeasurementClusterObj, rep->attr.attr_id, rep->attr.attr_value);
-                            DEVICE_ARRAY_UNLOCK();
-                            // ✅ Логируем обновление атрибута
-                            log_zb_attribute(rep->cluster, &rep->attr, &rep->src_address, rep->src_endpoint);
-                            // ✅ Отправляем полное обновление устройства на web-сокет
-                            ws_notify_device_update(rep->src_address.u.short_addr);
-                        } else {
-                            ESP_LOGE(TAG, "Failed to take mutex for Temp Meas update");
-                            zb_manager_free_report_attr_resp(rep);
-                            break;
-                        }
-                    }
-                }
-                // 🔹 Humidity Measurement (0x0405)
-                else if (rep->cluster == ESP_ZB_ZCL_CLUSTER_ID_REL_HUMIDITY_MEASUREMENT) {
-                    if (ep->server_HumidityMeasurementClusterObj == NULL) {
-                        ep->server_HumidityMeasurementClusterObj = calloc(1, sizeof(zb_manager_humidity_measurement_cluster_t));
-                        if (ep->server_HumidityMeasurementClusterObj) {
-                            zb_manager_humidity_measurement_cluster_t cl = ZIGBEE_HUMIDITY_MEASUREMENT_CLUSTER_DEFAULT_INIT();
-                            memcpy(ep->server_HumidityMeasurementClusterObj, &cl, sizeof(zb_manager_humidity_measurement_cluster_t));
-                        } else {
-                            ESP_LOGE(TAG, "Failed to allocate Humidity Meas Cluster for 0x%04x", rep->src_address.u.short_addr);
-                            zb_manager_free_report_attr_resp(rep);
-                            break;
-                        }
-                    }
-                    if (ep->server_HumidityMeasurementClusterObj) {
-                        if (xSemaphoreTake(g_device_array_mutex, pdMS_TO_TICKS(ZB_DEVICE_MUTEX_TIMEOUT_LONG_MS)) == pdTRUE) {
-                            zb_manager_humidity_meas_cluster_update_attribute(ep->server_HumidityMeasurementClusterObj, rep->attr.attr_id, rep->attr.attr_value);
-                            DEVICE_ARRAY_UNLOCK();
-                            // ✅ Логируем обновление атрибута
-                            log_zb_attribute(rep->cluster, &rep->attr, &rep->src_address, rep->src_endpoint);
-                            // ✅ Отправляем полное обновление устройства на web-сокет
-                            ws_notify_device_update(rep->src_address.u.short_addr);
-                        } else {
-                            ESP_LOGE(TAG, "Failed to take mutex for Humidity Meas update");
-                            zb_manager_free_report_attr_resp(rep);
-                            break;
-                        }
-                    }
-                }
-                // 🔹 On/Off Cluster (0x0006)
-                else if (rep->cluster == ESP_ZB_ZCL_CLUSTER_ID_ON_OFF) {
-                    if (ep->server_OnOffClusterObj == NULL) {
-                        ep->server_OnOffClusterObj = calloc(1, sizeof(zb_manager_on_off_cluster_t));
-                        if (ep->server_OnOffClusterObj) {
-                            zb_manager_on_off_cluster_t cl = ZIGBEE_ON_OFF_CLUSTER_DEFAULT_INIT();
-                            memcpy(ep->server_OnOffClusterObj, &cl, sizeof(zb_manager_on_off_cluster_t));
-                        } else {
-                            ESP_LOGE(TAG, "Failed to allocate On/Off Cluster for 0x%04x", rep->src_address.u.short_addr);
-                            zb_manager_free_report_attr_resp(rep);
-                            break;
-                        }
-                    }
-                    if (ep->server_OnOffClusterObj) {
-                        if (xSemaphoreTake(g_device_array_mutex, pdMS_TO_TICKS(ZB_DEVICE_MUTEX_TIMEOUT_LONG_MS)) == pdTRUE) {
-                            zb_manager_on_off_cluster_update_attribute(ep->server_OnOffClusterObj, rep->attr.attr_id, rep->attr.attr_value);
-
-                            DEVICE_ARRAY_UNLOCK();
-                            // ✅ Логируем обновление атрибута
-                            log_zb_attribute(rep->cluster, &rep->attr, &rep->src_address, rep->src_endpoint);
-                            // ✅ Отправляем полное обновление устройства на web-сокет
-                            ws_notify_device_update(rep->src_address.u.short_addr);
-                        } else {
-                            ESP_LOGE(TAG, "Failed to take mutex for On/Off update");
-                            zb_manager_free_report_attr_resp(rep);
-                            break;
-                        }
-                    }
-                }
-                // 🔹 Неизвестный кластер
-                else {
-                    ESP_LOGW(TAG, "Unhandled cluster ID: 0x%04x", rep->cluster);
-                    // логируем, даже если кластер не поддерживается
-                }
-            }
-
-            // ✅ Единый вывод лога
-            //log_zb_attribute(rep->cluster, &rep->attr, &rep->src_address, rep->src_endpoint);
-            zb_manager_free_report_attr_resp(rep);
-            break;
-        }*/
 
         case ZB_ACTION_ATTR_REPORT: {
             uint8_t *raw = (uint8_t *)msg.event_data;
@@ -938,6 +571,23 @@ static void zb_action_worker_task(void *pvParameters)
             rep->attr.attr_type = attr_data->type;
             rep->attr.attr_len = attr_data->size;
 
+            // Поиск устройства
+            device_custom_t *dev = zb_manager_find_device_by_short(rep->src_address.u.short_addr);
+            if (!dev) {
+                ESP_LOGW(TAG, "ATTR_REPORT_EVENT: device 0x%04x not found", rep->src_address.u.short_addr);
+                //zb_manager_free_report_attr_resp(rep);
+                report_attr_pool_put(rep);
+                rep = NULL;
+                break;
+            }
+
+            if(dev->is_in_build_status !=2)
+            {
+                report_attr_pool_put(rep);
+                rep = NULL;
+                break;
+            }
+            
             // Проверка: не выходит ли значение за пределы буфера
             const uint8_t *value_src = raw + sizeof(*report_attr) + sizeof(*attr_data);
             const uint8_t *buffer_end = raw + len;
@@ -950,17 +600,6 @@ static void zb_action_worker_task(void *pvParameters)
                 break;
             }
 
-            /*if (rep->attr.attr_len > 0) {
-                rep->attr.attr_value = malloc(rep->attr.attr_len);
-                if (!rep->attr.attr_value) {
-                    ESP_LOGE(TAG, "Failed to allocate attr_value");
-                    zb_manager_free_report_attr_resp(rep);
-                    break;
-                }
-                memcpy(rep->attr.attr_value, value_src, rep->attr.attr_len);
-            } else {
-                rep->attr.attr_value = NULL;
-            }*/
            // Копируем значение атрибута в пул
            if (rep->attr.attr_len > 0) {
                 if (rep->attr.attr_len > 32) {
@@ -993,16 +632,7 @@ static void zb_action_worker_task(void *pvParameters)
                 ESP_LOG_BUFFER_HEX_LEVEL("Attr Value", rep->attr.attr_value, rep->attr.attr_len, ESP_LOG_INFO);
             }
 
-            // Поиск устройства
-            device_custom_t *dev = zb_manager_find_device_by_short(rep->src_address.u.short_addr);
-            if (!dev) {
-                ESP_LOGW(TAG, "ATTR_REPORT_EVENT: device 0x%04x not found", rep->src_address.u.short_addr);
-                //zb_manager_free_report_attr_resp(rep);
-                report_attr_pool_put(rep);
-                rep = NULL;
-                break;
-            }
-
+            
             // Обновляем активность
             if (zb_manager_is_device_always_powered(dev)) {
                 if (dev->has_pending_response == true) {
@@ -1061,14 +691,14 @@ static void zb_action_worker_task(void *pvParameters)
                     if (xSemaphoreTake(g_device_array_mutex, pdMS_TO_TICKS(ZB_DEVICE_MUTEX_TIMEOUT_LONG_MS)) == pdTRUE) {
                         zb_manager_power_config_cluster_update_attribute(dev->server_PowerConfigurationClusterObj, rep->attr.attr_id, rep->attr.attr_value);
                         DEVICE_ARRAY_UNLOCK();
-                        zb_rule_trigger_state_update(
+                        /*zb_rule_trigger_state_update(
                                 rep->src_address.u.short_addr,
                                 rep->cluster,
                                 rep->attr.attr_id,
                                 rep->attr.attr_value,
                                 rep->attr.attr_len,
                                 rep->attr.attr_type
-                            );
+                            );*/
                         log_zb_attribute(rep->cluster, &rep->attr, &rep->src_address, rep->src_endpoint);
                         ws_notify_device_update(rep->src_address.u.short_addr);
                     } else {
@@ -1109,18 +739,18 @@ static void zb_action_worker_task(void *pvParameters)
                             zb_manager_temp_meas_cluster_update_attribute(ep->server_TemperatureMeasurementClusterObj, rep->attr.attr_id, rep->attr.attr_value);
                             DEVICE_ARRAY_UNLOCK();
                             // отправляем в обработчик сценариев
-                            zb_rule_trigger_state_update(
+                            /*zb_rule_trigger_state_update(
                                 rep->src_address.u.short_addr,
                                 rep->cluster,
                                 rep->attr.attr_id,
                                 rep->attr.attr_value,
                                 rep->attr.attr_len,
                                 rep->attr.attr_type
-                            );
+                            );*/
                             log_zb_attribute(rep->cluster, &rep->attr, &rep->src_address, rep->src_endpoint);
                             ws_notify_device_update(rep->src_address.u.short_addr);
                             // ✅ Уведомляем HA
-                            ha_device_updated(dev, ep);
+                            //ha_device_updated(dev, ep);
                             //report_attr_pool_put(rep);
                         } else {
                             ESP_LOGE(TAG, "Failed to take mutex for Temp Meas update");
@@ -1150,18 +780,18 @@ static void zb_action_worker_task(void *pvParameters)
                         if (xSemaphoreTake(g_device_array_mutex, pdMS_TO_TICKS(ZB_DEVICE_MUTEX_TIMEOUT_LONG_MS)) == pdTRUE) {
                             zb_manager_humidity_meas_cluster_update_attribute(ep->server_HumidityMeasurementClusterObj, rep->attr.attr_id, rep->attr.attr_value);
                             DEVICE_ARRAY_UNLOCK();
-                            zb_rule_trigger_state_update(
+                            /*zb_rule_trigger_state_update(
                                 rep->src_address.u.short_addr,
                                 rep->cluster,
                                 rep->attr.attr_id,
                                 rep->attr.attr_value,
                                 rep->attr.attr_len,
                                 rep->attr.attr_type
-                            );
+                            );*/
                             log_zb_attribute(rep->cluster, &rep->attr, &rep->src_address, rep->src_endpoint);
                             ws_notify_device_update(rep->src_address.u.short_addr);
                             // ✅ Уведомляем HA
-                            ha_device_updated(dev, ep);
+                            //ha_device_updated(dev, ep);
                         } else {
                             ESP_LOGE(TAG, "Failed to take mutex for Humidity Meas update");
                             //zb_manager_free_report_attr_resp(rep);
@@ -1190,18 +820,18 @@ static void zb_action_worker_task(void *pvParameters)
                         if (xSemaphoreTake(g_device_array_mutex, pdMS_TO_TICKS(ZB_DEVICE_MUTEX_TIMEOUT_LONG_MS)) == pdTRUE) {
                             zb_manager_on_off_cluster_update_attribute(ep->server_OnOffClusterObj, rep->attr.attr_id, rep->attr.attr_value);
                             DEVICE_ARRAY_UNLOCK();
-                            zb_rule_trigger_state_update(
+                            /*zb_rule_trigger_state_update(
                                 rep->src_address.u.short_addr,
                                 rep->cluster,
                                 rep->attr.attr_id,
                                 rep->attr.attr_value,
                                 rep->attr.attr_len,
                                 rep->attr.attr_type
-                            );
+                            );*/
                             log_zb_attribute(rep->cluster, &rep->attr, &rep->src_address, rep->src_endpoint);
                             ws_notify_device_update(rep->src_address.u.short_addr);
                             // ✅ Уведомляем HA
-                            ha_device_updated(dev, ep);
+                            //ha_device_updated(dev, ep);
                         } else {
                             ESP_LOGE(TAG, "Failed to take mutex for On/Off update");
                             //zb_manager_free_report_attr_resp(rep);
@@ -1250,14 +880,15 @@ static void zb_action_worker_task(void *pvParameters)
                     ESP_LOGW(TAG, "DELAYED_NODE_DESC_REQ_LOCAL: device 0x%04x not found", short_addr);
                     break;
                 }
-                
                 //отправляем
                 if (zb_manager_zdo_node_desc_req(short_addr) == ESP_OK)
                 {
                     ESP_LOGI(TAG, "Node desc req sent to device 0x%04x", short_addr);
+                    
                 }else {
                     ESP_LOGW(TAG, "Node desc req failed to device 0x%04x", short_addr);
                 }
+                
 
                 break;
             }
@@ -1361,7 +992,7 @@ static void zb_action_worker_task(void *pvParameters)
                 // Отправляем bind-запрос
                 esp_err_t err = zb_manager_zdo_device_bind_req(&bind_req, NULL, user_ctx_copy);
                 if (err == ESP_OK) {
-                    ESP_LOGI(TAG, "✅ BIND request sent: cluster=0x%04x, to dev=0x%04x (src dev=0x%04x -bind-> dst dev=0x%04x  )", req->cluster_id, req->src_short_addr, req->src_short_addr, req->dst_short_addr);
+                    ESP_LOGI(TAG, "✅ BIND request sent: cluster=0x%04x, to dev=0x%04x (src dev=0x%04x (ep=0x%02x) -bind-> dst dev=0x%04x (ep=0x%02x) )", req->cluster_id, req->src_short_addr, req->src_short_addr, req->src_endpoint, req->dst_short_addr, req->dst_endpoint);
                 } else {
                     ESP_LOGE(TAG, "❌ zb_manager_zdo_device_bind_req failed: %s", esp_err_to_name(err));
                     free(user_ctx_copy);  // Освобождаем, если не отправился
@@ -1431,39 +1062,56 @@ static void zb_action_worker_task(void *pvParameters)
             case ZB_ACTION_DELAYED_CONFIG_REPORT_REQ: {
                 ESP_LOGI(TAG, "✅ DELAYED_CONFIG_REPORT_REQ_LOCAL: processing");
                 delayed_configure_report_req_t *req = (delayed_configure_report_req_t *)msg.event_data;
-                device_custom_t *dev = NULL;      
-                dev = zb_manager_find_device_by_short(req->short_addr);
+                device_custom_t *dev = zb_manager_find_device_by_short(req->short_addr);
                 if (!dev) {
-                    ESP_LOGW(TAG, "DELAYED_CONFIG_REPORT_REQ_LOCAL: device 0x%04x not found", req->short_addr);
+                    ESP_LOGW(TAG, "DELAYED_CONFIG_REPORT_REQ: device 0x%04x not found", req->short_addr);
                     break;
                 }
 
-                ESP_LOGI(TAG, "✅ CONFIGURE_REPORT: short=0x%04x, ep=%d, cluster=0x%04x", req->short_addr, req->src_endpoint, req->cluster_id);
-                // вызываем configure_reporting в зависимости от кластера
-                if (req->src_endpoint == ESP_ZB_ZCL_CLUSTER_ID_TEMP_MEASUREMENT) 
-                {
-                    ESP_LOGI(TAG, "🌡️ Queued CONFIG_REPORT request for cluster ESP_ZB_ZCL_CLUSTER_ID_TEMP_MEASUREMENT (0x0402)  (ep=%d)", req->src_endpoint);
-                    zb_manager_configure_reporting_temperature(req->short_addr, req->src_endpoint);
+                ESP_LOGI(TAG, "✅ CONFIGURE_REPORT: short=0x%04x, ep=%d, cluster=0x%04x, min=%d, max=%d, change=%d",
+                        req->short_addr, req->src_endpoint, req->cluster_id,
+                        req->min_interval, req->max_interval, req->reportable_change);
+
+                // Вызов нужной функции в зависимости от кластера
+                if (req->cluster_id == ESP_ZB_ZCL_CLUSTER_ID_TEMP_MEASUREMENT) {
+                    esp_err_t err = ESP_FAIL;
+                    err = zb_manager_configure_reporting_temperature_ext(
+                        req->short_addr, req->src_endpoint,
+                        req->min_interval, req->max_interval, req->reportable_change
+                    );
+                    if (err != ESP_OK) {
+                        ESP_LOGW(TAG, "❌ Failed to configure reporting for Temperature");
+                    }
                 }
-                else if (req->cluster_id == ESP_ZB_ZCL_CLUSTER_ID_REL_HUMIDITY_MEASUREMENT) 
-                {
-                    ESP_LOGI(TAG, "🌡️ Queued CONFIG_REPORT request for cluster ESP_ZB_ZCL_CLUSTER_ID_REL_HUMIDITY_MEASUREMENT (0x0405)  (ep=%d)", req->src_endpoint);
-                    zb_manager_configure_reporting_humidity(req->short_addr, req->src_endpoint);
+                else if (req->cluster_id == ESP_ZB_ZCL_CLUSTER_ID_REL_HUMIDITY_MEASUREMENT) {
+                    /*zb_manager_configure_reporting_humidity_ext(
+                        req->short_addr, req->src_endpoint,
+                        req->min_interval, req->max_interval, req->reportable_change
+                    );*/
                 }
-                else if (req->cluster_id  == ESP_ZB_ZCL_CLUSTER_ID_ON_OFF) 
-                {
-                    ESP_LOGI(TAG, "🌡️ Queued CONFIG_REPORT request for cluster ESP_ZB_ZCL_CLUSTER_ID_ON_OFF (0x0006)  (ep=%d)", req->src_endpoint);
-                    zb_manager_configure_reporting_onoff(req->short_addr, req->src_endpoint);
+                else if (req->cluster_id == ESP_ZB_ZCL_CLUSTER_ID_ON_OFF) {
+                    esp_err_t err = zb_manager_configure_reporting_onoff_ext(
+                        req->short_addr, req->src_endpoint,
+                        req->min_interval, req->max_interval, req->reportable_change
+                    );
+                    if (err != ESP_OK) {
+                        ESP_LOGW(TAG, "❌ Failed to configure reporting for On/Off cluster");
+                    }
                 }
-                else if (req->cluster_id == ESP_ZB_ZCL_CLUSTER_ID_POWER_CONFIG) 
-                {
-                    ESP_LOGI(TAG, "🌡️ Queued CONFIG_REPORT request for cluster ESP_ZB_ZCL_CLUSTER_ID_POWER_CONFIG (0x0001)  (ep=%d)", req->src_endpoint);
-                    zb_manager_configure_reporting_power(req->short_addr, req->src_endpoint);
+                else if (req->cluster_id == ESP_ZB_ZCL_CLUSTER_ID_POWER_CONFIG) {
+                    /*zb_manager_configure_reporting_power_ext(
+                        req->short_addr, req->src_endpoint,
+                        req->min_interval, req->max_interval, req->reportable_change
+                    );*/
                 }
-                //zb_manager_configure_reporting(req->short_addr, req->src_endpoint, req->cluster_id);
-                free(req);
+                else {
+                    ESP_LOGW(TAG, "❌ Unsupported cluster for reporting: 0x%04x", req->cluster_id);
+                }
+
+                //free(req);
                 break;
             }
+
 
             case ZB_ACTION_NETWORK_IS_OPEN: {
                 ESP_LOGI(TAG, "🌐 Zigbee network OPENED");

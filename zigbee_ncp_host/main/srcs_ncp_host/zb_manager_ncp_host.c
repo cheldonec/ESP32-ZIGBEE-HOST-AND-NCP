@@ -10,7 +10,7 @@
 #include "ncp_host.h"
 
 
-static const char *TAG = "ZB_MANAGER_NCP_HOST";
+static const char *TAG = "zb_manager_ncp_host.c";
 //extern const uint8_t REMOTE_DEVICES_COUNT;
 esp_zb_ieee_addr_t LocalIeeeAdr;
 zigbee_ncp_module_state_e zigbee_ncp_module_state = NOT_INIT;
@@ -179,45 +179,83 @@ esp_err_t zb_manager_ncp_host_fast_start(esp_host_zb_endpoint_t *endpoint1, esp_
 
 esp_err_t zb_manager_ncp_host_restart_on_ncp_foulture(void)
 {
-    ESP_LOGW(TAG, "🔄 Full Zigbee NCP restart initiated");
+    ESP_LOGW(TAG, "🔄 zb_manager_ncp_host_restart_on_ncp_foulture Full Zigbee NCP restart initiated");
+    uint32_t start_free = heap_caps_get_free_size(MALLOC_CAP_8BIT);
+    ESP_LOGI(TAG, "Heap before restart: %u bytes", start_free);
 
     zigbee_ncp_module_state = RESTARTING;
 
     // === 1. Останавливаем Zigbee стек (очереди, семафор) ===
-    esp_zb_stack_shutdown();  // ← отправит shutdown event в host_task
+    ESP_LOGW(TAG, "🔄 zb_manager_ncp_host_restart_on_ncp_foulture -> esp_zb_stack_shutdown()");
+    // Останавливаем шину
+    if (esp_host_bus_stop(s_host_dev.bus)== ESP_OK){
+            ESP_LOGI(TAG, "🛑 esp_host_bus_stop OK");
+        }
+    //vTaskDelay(pdMS_TO_TICKS(300));
 
-    // === 2. Ждём, пока host_task завершится ===
-    while (s_host_dev.run) {
-        ESP_LOGD(TAG, "Waiting for host task to stop...");
-        vTaskDelay(pdMS_TO_TICKS(50));
+    /*if (esp_host_bus_deinit(s_host_dev.bus)== ESP_OK){
+            ESP_LOGI(TAG, "🛑 esp_host_bus_deinit OK");
+        }
+    vTaskDelay(pdMS_TO_TICKS(300));*/
+
+    if (esp_host_stop() == ESP_OK){
+        ESP_LOGI(TAG, "🛑 esp_host_stop OK");
+    }
+    //vTaskDelay(pdMS_TO_TICKS(300));
+
+    if (esp_host_deinit() == ESP_OK){
+        ESP_LOGI(TAG, "🛑 esp_host_deinit OK");
     }
 
-    vTaskDelay(pdMS_TO_TICKS(100));
-
-    // === 3. Перезапуск ===
-    esp_err_t err = ESP_FAIL;
-
-    // Инициализируем шину заново
-    /*err = esp_host_init(HOST_CONNECTION_MODE_UART);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "❌ Failed to re-init host bus");
-        goto fail;
+    //vTaskDelay(pdMS_TO_TICKS(300));
+    //удаляем таск и очередь
+    if (output_queue) {
+        vQueueDelete(output_queue);
+        output_queue = NULL;
+        ESP_LOGD(TAG, "✅ Deleted output_queue");
+        ESP_LOGI(TAG, "✅ esp_zb_stack_shutdown Deleted output_queue.");
     }
 
-    err = esp_host_start();
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "❌ Failed to start host task");
-        goto fail;
-    }*/
+    if (notify_queue) {
+        vQueueDelete(notify_queue);
+        notify_queue = NULL;
+        ESP_LOGD(TAG, "✅ Deleted notify_queue");
+        ESP_LOGI(TAG, "✅ esp_zb_stack_shutdown Deleted notify_queue.");
+    }
 
-    vTaskDelay(pdMS_TO_TICKS(500));
+    if (lock_semaphore) {
+        vSemaphoreDelete(lock_semaphore);
+        lock_semaphore = NULL;
+        ESP_LOGD(TAG, "✅ Deleted lock_semaphore");
+        ESP_LOGI(TAG, "✅ esp_zb_stack_shutdown Deleted lock_semaphore.");
+    }
+    
+    // ✅ Принудительно удаляем, если осталась
+    TaskHandle_t host_task = xTaskGetHandle("host_task");
+    if (host_task != NULL) {
+        ESP_LOGW(TAG, "Found orphaned 'host_task' - deleting...");
+        vTaskDelete(host_task);
+        host_task = NULL;
+    }
+
+    //vTaskDelay(pdMS_TO_TICKS(300));
+
+    TaskHandle_t bus_task = xTaskGetHandle("host_bus_task");
+    if (bus_task != NULL) {
+        ESP_LOGW(TAG, "Found orphaned 'host_bus_task' - deleting...");
+        vTaskDelete(bus_task);
+        bus_task = NULL;
+    }
+
+    vTaskDelay(pdMS_TO_TICKS(3000));
+    
 
     // Пересоздаём платформу Zigbee
     esp_zb_platform_config_t config = {
         .radio_config = ESP_ZB_DEFAULT_RADIO_CONFIG(),
         .host_config = ESP_ZB_DEFAULT_HOST_CONFIG(),
     };
-    err = esp_zb_platform_config(&config);
+    esp_err_t err = esp_zb_platform_config(&config);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "❌ Failed to re-config Zigbee platform");
         goto fail;
@@ -255,6 +293,8 @@ esp_err_t zb_manager_ncp_host_restart_on_ncp_foulture(void)
         zigbee_ncp_module_state = FOULTED;
     }
 
+    uint32_t end_free = heap_caps_get_free_size(MALLOC_CAP_8BIT);
+    ESP_LOGI(TAG, "Heap after restart: %u bytes, delta: %d", end_free, (int)(end_free - start_free));
     return err;
 
 fail:
@@ -387,12 +427,19 @@ bool zb_manager_app_signal_handler(local_esp_zb_app_signal_t *signal_struct)
             esp_zb_scheduler_alarm((esp_zb_callback_t)bdb_start_top_level_commissioning_cb, ESP_ZB_BDB_MODE_NETWORK_FORMATION, 1000);
         }
         break;
-    case ESP_ZB_NWK_SIGNAL_DEVICE_ASSOCIATED:
-       
-        if(err_status == ESP_OK)
-            {
-                ESP_LOGI(TAG, "ESP_ZB_NWK_SIGNAL_DEVICE_ASSOCIATED:");
-                dev_assoc_params = (esp_zb_nwk_signal_device_associated_params_t*)esp_zb_app_signal_get_params(p_sg_p);
+    case ESP_ZB_NWK_SIGNAL_DEVICE_ASSOCIATED:{
+        ESP_LOGI(TAG, "ESP_ZB_NWK_SIGNAL_DEVICE_ASSOCIATED:");
+        if (err_status == ESP_OK) {
+            esp_zb_nwk_signal_device_associated_params_t* dev_assoc = 
+            (esp_zb_nwk_signal_device_associated_params_t*)esp_zb_app_signal_get_params(p_sg_p);
+
+            zb_pairing_device_associated_t data;
+            memcpy(&data.params, dev_assoc, sizeof(*dev_assoc));
+            memcpy(data.device_addr, dev_assoc->device_addr, sizeof(esp_zb_ieee_addr_t));
+            zb_manager_post_to_pairing_worker(ZB_PAIRING_DEVICE_ASSOCIATED_EVENT, &data, sizeof(data));     
+        }
+                
+                /*dev_assoc_params = (esp_zb_nwk_signal_device_associated_params_t*)esp_zb_app_signal_get_params(p_sg_p);
                 //  создаём устройство !!! Проверено
                 // 1. ищем по списку
                 if (xSemaphoreTake(g_device_array_mutex, pdMS_TO_TICKS(ZB_DEVICE_MUTEX_TIMEOUT_LONG_MS)) == pdTRUE) {
@@ -417,7 +464,7 @@ bool zb_manager_app_signal_handler(local_esp_zb_app_signal_t *signal_struct)
                                     RemoteDevicesArray[i]->endpoints_array = NULL;
                                     RemoteDevicesArray[i]->is_online = false;
                                 }
-                                ESP_LOGW(TAG, "ESP_ZB_NWK_SIGNAL_DEVICE_ASSOCIATED  device found in RemoteDevList, надо очистить связанную графику!!!");
+                                //ESP_LOGW(TAG, "ESP_ZB_NWK_SIGNAL_DEVICE_ASSOCIATED  device found in RemoteDevList, надо очистить связанную графику!!!");
                                 break;
                             }
                         }
@@ -453,17 +500,28 @@ bool zb_manager_app_signal_handler(local_esp_zb_app_signal_t *signal_struct)
                             }
                         } else ESP_LOGW(TAG, "ESP_ZB_NWK_SIGNAL_DEVICE_ASSOCIATED Список устройств занят, для добавления надо расширить список");
                     }
-                     DEVICE_ARRAY_UNLOCK();} else
-                                                {
-                                                    ESP_LOGE(TAG, "CRITICAL: Failed to take device mutex in ESP_ZB_NWK_SIGNAL_DEVICE_ASSOCIATED! Device addition may fail.");
-                                                    
-                                                    break;
-                                                }
-            }
-        break;
-    case ESP_ZB_ZDO_SIGNAL_DEVICE_UPDATE:
-       
-        if(err_status == ESP_OK)
+                     DEVICE_ARRAY_UNLOCK();
+                    } else {
+                                ESP_LOGE(TAG, "CRITICAL: Failed to take device mutex in ESP_ZB_NWK_SIGNAL_DEVICE_ASSOCIATED! Device addition may fail.");
+                                break;
+                            }
+            }*/
+        break;}
+    case ESP_ZB_ZDO_SIGNAL_DEVICE_UPDATE:{
+        ESP_LOGI(TAG, "ESP_ZB_ZDO_SIGNAL_DEVICE_UPDATE:");
+        if (err_status == ESP_OK) {
+            esp_zb_zdo_signal_device_update_params_t* dev_update =
+            (esp_zb_zdo_signal_device_update_params_t*)esp_zb_app_signal_get_params(p_sg_p);
+
+            zb_pairing_device_update_t data;    
+            memcpy(&data.params.long_addr, dev_update->long_addr, sizeof(esp_zb_ieee_addr_t));
+            data.params.short_addr = dev_update->short_addr;
+            data.params.status = dev_update->status;
+            data.params.parent_short= dev_update->parent_short;
+            data.params.tc_action = dev_update->tc_action;
+            zb_manager_post_to_pairing_worker(ZB_PAIRING_DEVICE_UPDATE_EVENT, &data, sizeof(data));   
+        }
+        /*if(err_status == ESP_OK)
             {
                 ESP_LOGI(TAG, "ESP_ZB_ZDO_SIGNAL_DEVICE_UPDATE:");
                 dev_update_params = (esp_zb_zdo_signal_device_update_params_t *)esp_zb_app_signal_get_params(p_sg_p);
@@ -471,11 +529,13 @@ bool zb_manager_app_signal_handler(local_esp_zb_app_signal_t *signal_struct)
                       // 1. ищем по списку
                 bool device_found = false;         // если будет найдено, то меняем статус is_in_build_status
                 bool need_full_update = false;
+                device_appending_sheduler_t* appending_ctx = NULL;
 
                 if (!RemoteDevicesArray) {
                     ESP_LOGE(TAG, "Remote devices array not initialized");
                     break;
                 }
+                
                 
                 // === Сначала обновляем short_addr под мьютексом ===
                 if (xSemaphoreTake(g_device_array_mutex, pdMS_TO_TICKS(ZB_DEVICE_MUTEX_TIMEOUT_LONG_MS)) == pdTRUE) {
@@ -494,7 +554,7 @@ bool zb_manager_app_signal_handler(local_esp_zb_app_signal_t *signal_struct)
                                 {
                                     need_full_update = true;
                                     // Send TuyaMagicPacket
-                                    device_appending_sheduler_t* appending_ctx = calloc(1, sizeof(device_appending_sheduler_t));
+                                    appending_ctx = calloc(1, sizeof(device_appending_sheduler_t));
 
                                     if (appending_ctx != NULL)
                                     {
@@ -518,8 +578,8 @@ bool zb_manager_app_signal_handler(local_esp_zb_app_signal_t *signal_struct)
                                             break;
                                         }
                                         //Запускаем шедулер
-                                        appending_ctx->tuya_magic_try_count = 1;
-                                        StartUpdateDevices(appending_ctx);
+                                        //appending_ctx->tuya_magic_try_count = 1;
+                                        //StartUpdateDevices(appending_ctx);
                                         
                                     }
                                 }
@@ -534,22 +594,39 @@ bool zb_manager_app_signal_handler(local_esp_zb_app_signal_t *signal_struct)
                         ESP_LOGE(TAG, "CRITICAL: Failed to take device mutex in ESP_ZB_NWK_SIGNAL_DEVICE_UPDATE! Device addition may fail.");
                         break;
                     }
-
+                if ((need_full_update == true)&&(appending_ctx != NULL))
+                {
+                    //Запускаем шедулер
+                    appending_ctx->tuya_magic_try_count = 1;
+                    StartUpdateDevices(appending_ctx);
+                    break;
+                }
                 // === Теперь ОБНОВЛЯЕМ АКТИВНОСТЬ — ПОСЛЕ мьютекса (вне его) ===
                 // Это безопасно: функция сама возьмёт мьютекс
                 uint16_t short_addr = dev_update_params->short_addr;
                 uint8_t lqi = 80; // можно улучшить позже, когда LQI придёт от NCP
                 zb_manager_update_device_activity(dev_update_params->short_addr, lqi);
                 ESP_LOGI(TAG, "DEVICE_UPDATE: 0x%04x re-joined the network, activity updated", dev_update_params->short_addr);
-            }
-        break;
+            }*/
+        break;}
     case ESP_ZB_BDB_SIGNAL_STEERING:
         if (err_status == ESP_OK) {
             ESP_LOGI(TAG, "Network steering started");
         }
         break;
-    case ESP_ZB_ZDO_SIGNAL_DEVICE_ANNCE:
-    if(err_status == ESP_OK)
+    case ESP_ZB_ZDO_SIGNAL_DEVICE_ANNCE:{
+        ESP_LOGI(TAG, "ESP_ZB_ZDO_SIGNAL_DEVICE_ANNCE:");
+        if (err_status == ESP_OK) {
+                esp_zb_zdo_signal_device_annce_params_t* dev_annce =
+                    (esp_zb_zdo_signal_device_annce_params_t*)esp_zb_app_signal_get_params(p_sg_p);
+                ESP_LOGI(TAG, "📢 DEVICE ANNOUNCE: short=0x%04x, cap=0x%02x", dev_annce->device_short_addr, dev_annce->capability);
+                zb_pairing_device_annce_t data;
+                memcpy(data.params.ieee_addr, dev_annce->ieee_addr, sizeof(esp_zb_ieee_addr_t));
+                data.params.capability = dev_annce->capability;
+                data.params.device_short_addr = dev_annce->device_short_addr;
+                zb_manager_post_to_pairing_worker(ZB_PAIRING_DEVICE_ANNCE_EVENT, &data, sizeof(zb_pairing_device_annce_t));
+            }
+    /*if(err_status == ESP_OK)
        {
        dev_annce_params = (esp_zb_zdo_signal_device_annce_params_t *)esp_zb_app_signal_get_params(p_sg_p);
         ESP_LOGI(TAG, "ESP_ZB_ZDO_SIGNAL_DEVICE_ANNCE:");
@@ -579,26 +656,36 @@ bool zb_manager_app_signal_handler(local_esp_zb_app_signal_t *signal_struct)
                         ESP_LOGE(TAG, "CRITICAL: Failed to take device mutex in ESP_ZB_ZDO_SIGNAL_DEVICE_ANNCE! Device addition may fail.");
                         break;
                     }
-       }
-        break;
-    case ESP_ZB_ZDO_SIGNAL_DEVICE_AUTHORIZED:
-        if(err_status == ESP_OK)
+       }*/
+        break;}
+    case ESP_ZB_ZDO_SIGNAL_DEVICE_AUTHORIZED:{
+        ESP_LOGI(TAG, "ESP_ZB_ZDO_SIGNAL_DEVICE_AUTHORIZED:");
+         if (err_status == ESP_OK) {
+                esp_zb_zdo_signal_device_authorized_params_t* dev_auth =
+                    (esp_zb_zdo_signal_device_authorized_params_t*)esp_zb_app_signal_get_params(p_sg_p);
+
+                zb_pairing_device_authorized_t* data = calloc(1, sizeof(zb_pairing_device_authorized_t));
+                if (data) {
+                    memcpy(&data->params, dev_auth, sizeof(*dev_auth));
+                    zb_manager_post_to_pairing_worker(ZB_PAIRING_DEVICE_AUTHORIZED_EVENT, data, sizeof(*data));
+                    free(data);
+                    data = NULL;
+                }
+            }
+        /*if(err_status == ESP_OK)
             {    
                 dev_auth_params = (esp_zb_zdo_signal_device_authorized_params_t *)esp_zb_app_signal_get_params(p_sg_p);
                 ESP_LOGI(TAG, "ESP_ZB_ZDO_SIGNAL_DEVICE_AUTHORIZED:");
-                /*sprintf(buff, "DEVICE_AUTHORIZED : %02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x (short: 0x%04x) (auth_type: 0x%02x) (auth_status: 0x%02x)", 
-                dev_auth_params->long_addr[7], dev_auth_params->long_addr[6], dev_auth_params->long_addr[5], dev_auth_params->long_addr[4],
-                     dev_auth_params->long_addr[3], dev_auth_params->long_addr[2], dev_auth_params->long_addr[1], dev_auth_params->long_addr[0], 
-                     dev_auth_params->short_addr, dev_auth_params->authorization_type, dev_auth_params->authorization_status);
+               
                 //zb_manager_obj.utility_functions_callbacks.print_log_to_screen_callback(buff, 0xA7BFC1);
 
                 ESP_LOGI(TAG, "device authorized (short: 0x%04x) (auth_type: 0x%02x) (auth_status: 0x%02x) (mac: %02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x)", 
                 dev_auth_params->short_addr, dev_auth_params->authorization_type, dev_auth_params->authorization_status, dev_auth_params->long_addr[7], dev_auth_params->long_addr[6], dev_auth_params->long_addr[5], dev_auth_params->long_addr[4],
                      dev_auth_params->long_addr[3], dev_auth_params->long_addr[2], dev_auth_params->long_addr[1], dev_auth_params->long_addr[0]);
-                */
-            }
+            
+            }*/
 
-        break;
+        break;}
     case ESP_ZB_NWK_SIGNAL_PERMIT_JOIN_STATUS:
         if (err_status == ESP_OK) {
             if (*(uint8_t *)esp_zb_app_signal_get_params(p_sg_p)) {

@@ -5,6 +5,7 @@
 #include "string.h"
 #include "ncp_host_zb_api.h"
 #include "zb_manager_devices.h"
+#include "zb_manager_ncp_host.h"
 static const char *TAG = "ON_OFF_CL";
 
 /// @brief [zb_manager_on_off_cluster.c] Обновляет значение атрибута в On/Off-кластере Zigbee
@@ -201,7 +202,10 @@ uint8_t zb_manager_on_off_cmd_req(esp_zb_zcl_on_off_cmd_t *cmd_req)
     
     uint8_t output = 0;
     uint16_t outlen = sizeof(uint8_t);
-    esp_host_zb_output(ZB_MANAGER_ON_OFF_MAIN_CMD_REQ, &data, sizeof(data), &output, &outlen);
+    if (zigbee_ncp_module_state == WORKING)
+        {
+            esp_host_zb_output(ZB_MANAGER_ON_OFF_MAIN_CMD_REQ, &data, sizeof(data), &output, &outlen);
+        }
 
     return output;
 }
@@ -233,7 +237,65 @@ uint8_t zb_manager_on_off_on_with_timed_off_cmd_req(esp_zb_zcl_on_off_on_with_ti
 
     uint8_t output = 0;
     uint16_t outlen = sizeof(uint8_t);
-    esp_host_zb_output(ZB_MANAGER_ON_OFF_ON_WITH_TIMED_OFF_CMD_REQ, &data, sizeof(data), &output, &outlen);
+    if (zigbee_ncp_module_state == WORKING)
+        {
+            esp_host_zb_output(ZB_MANAGER_ON_OFF_ON_WITH_TIMED_OFF_CMD_REQ, &data, sizeof(data), &output, &outlen);
+        }
 
     return output;
+}
+
+/**
+ * @brief Configure reporting for On/Off cluster attribute (OnOff)
+ *
+ * This function sends a "Configure Reporting" command for the OnOff attribute (0x0000)
+ * of the On/Off cluster (0x0006). The reportable change is boolean (0 or 1), so we pass it as uint8_t.
+ *
+ * @param short_addr Short address of the target device
+ * @param endpoint Endpoint ID
+ * @param min_interval Minimum reporting interval in seconds
+ * @param max_interval Maximum reporting interval in seconds
+ * @param change Reportable change: ignored for boolean, but can be used to disable reporting if 0xFF
+ * @return ESP_OK on success, error otherwise
+ */
+esp_err_t zb_manager_configure_reporting_onoff_ext(uint16_t short_addr, uint8_t endpoint,
+                                                   uint16_t min_interval, uint16_t max_interval, uint16_t change)
+{
+    // Для OnOff атрибута (bool) reportable_change — это просто байт
+    uint8_t delta = (change == 0) ? 1 : (uint8_t)change; // обычно не используется, но можно зафиксировать как 1
+
+    esp_zb_zcl_config_report_record_t record = {
+        .direction = ESP_ZB_ZCL_REPORT_DIRECTION_SEND,
+        .attributeID = ESP_ZB_ZCL_ATTR_ON_OFF_ON_OFF_ID, // OnOff attribute
+        .attrType = ESP_ZB_ZCL_ATTR_TYPE_BOOL,
+        .min_interval = min_interval,
+        .max_interval = max_interval,
+        .reportable_change = &delta, // указатель на значение
+        // .timeout not needed when sending
+    };
+
+    esp_zb_zcl_config_report_cmd_t cmd = {
+        .zcl_basic_cmd = {
+            .dst_addr_u.addr_short = short_addr,
+            .dst_endpoint = endpoint,
+            .src_endpoint = 1,
+        },
+        .address_mode = ESP_ZB_APS_ADDR_MODE_16_ENDP_PRESENT,
+        .clusterID = ESP_ZB_ZCL_CLUSTER_ID_ON_OFF,
+        .direction = ESP_ZB_ZCL_CMD_DIRECTION_TO_SRV,
+        .dis_default_resp = 1,
+        .manuf_code = 0x115F,
+        .record_number = 1,
+        .record_field = &record,
+    };
+
+    esp_err_t err = zb_manager_reporting_config_req(&cmd);
+    if (err == ESP_OK) {
+        ESP_LOGI(TAG, "🟢 On/Off reporting configured: 0x%04x (ep=%d), min=%d, max=%d",
+                 short_addr, endpoint, min_interval, max_interval);
+    } else {
+        ESP_LOGW(TAG, "🔴 Failed to configure On/Off reporting for 0x%04x", short_addr);
+    }
+
+    return err;
 }

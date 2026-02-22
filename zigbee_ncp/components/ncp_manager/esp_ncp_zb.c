@@ -1270,6 +1270,8 @@ static esp_err_t esp_ncp_zb_disc_attr_fn(const uint8_t *input, uint16_t inlen, u
     return ret;
 }
 
+
+
 static esp_err_t esp_ncp_zb_zcl_read_fn(const uint8_t *input, uint16_t inlen, uint8_t **output, uint16_t *outlen)
 {
     return ESP_OK;
@@ -2528,6 +2530,55 @@ static esp_err_t zb_manager_basic_reset_cmd_req_fn(const uint8_t *input, uint16_
 
 }
 
+static esp_err_t zb_manager_disc_attr_req_fn(const uint8_t *input, uint16_t inlen, uint8_t **output, uint16_t *outlen)
+{
+     ESP_LOGI(TAG, "zb_manager_on_of_main_cmd_req_fn");
+    typedef struct {
+        esp_zb_zcl_basic_cmd_t zcl_basic_cmd;                   /*!< Basic command info */
+        uint8_t  address_mode;                                  /*!< APS addressing mode constants refer to esp_zb_zcl_address_mode_t */
+        uint16_t cluster_id;                                    /*!< The cluster identifier for which the attribute is discovered. */
+        uint8_t manuf_specific;                                 /*!< Sent as manufacturer extension with code. */
+        uint8_t direction;                                      /*!< The command direction, refer to esp_zb_zcl_cmd_direction_t (ESP_ZB_ZCL_CMD_DIRECTION_TO_SRV)*/
+        uint8_t dis_defalut_resp;                               /*!< Disable default response for this command. */
+        uint16_t manuf_code;                    /*!< The manufacturer code sent with the command. */
+        uint16_t start_attr_id;                 /*!< The attribute identifier at which to begin the attribute discover */
+        uint8_t max_attr_number;                /*!< The maximum number of attribute identifiers that are to be returned in the resulting Discover Attributes Response command*/
+    } __attribute__((packed)) zb_manager_disc_attr_cmd_req_t;
+
+    zb_manager_disc_attr_cmd_req_t* req = (zb_manager_disc_attr_cmd_req_t*)input;
+
+    esp_zb_zcl_disc_attr_cmd_t cmd_req;
+     cmd_req.address_mode = req->address_mode;
+    if (cmd_req.address_mode == ESP_ZB_APS_ADDR_MODE_64_ENDP_PRESENT) {
+        memcpy(&cmd_req.zcl_basic_cmd.dst_addr_u.addr_long, req->zcl_basic_cmd.dst_addr_u.addr_long, 8);
+    } else {
+        cmd_req.zcl_basic_cmd.dst_addr_u.addr_short = req->zcl_basic_cmd.dst_addr_u.addr_short;
+    }
+    cmd_req.zcl_basic_cmd.dst_endpoint = req->zcl_basic_cmd.dst_endpoint;
+    cmd_req.zcl_basic_cmd.src_endpoint = req->zcl_basic_cmd.src_endpoint;
+
+    cmd_req.cluster_id = req->cluster_id;
+    cmd_req.direction = req->direction;
+    cmd_req.dis_default_resp = req->dis_defalut_resp;
+    cmd_req.manuf_specific = req->manuf_specific;
+    cmd_req.manuf_code = req->manuf_code;
+    cmd_req.start_attr_id = req->start_attr_id;
+    cmd_req.max_attr_number = req->max_attr_number;
+
+     uint8_t sec_n = 0xff;
+    if (esp_zb_lock_acquire(500/portTICK_PERIOD_MS)) {
+             sec_n = esp_zb_zcl_disc_attr_cmd_req(&cmd_req);
+            esp_zb_lock_release();
+        }
+
+         *outlen = sizeof(uint8_t);
+    *output = calloc(1, *outlen);
+
+    if (*output) {
+        memcpy(*output, &sec_n, *outlen);
+    }
+    return (*output) ? ESP_OK : ESP_ERR_NO_MEM;
+}
 
 static const esp_ncp_zb_func_t ncp_zb_func_table[] = {
     {ESP_NCP_NETWORK_INIT, esp_ncp_zb_network_init_fn},
@@ -2597,6 +2648,7 @@ static const esp_ncp_zb_func_t ncp_zb_func_table[] = {
     {ZB_MANAGER_ACTIVE_EP_REQ_CMD, zb_manager_active_ep_req_fn},
     {ZB_MANAGER_NODE_DESC_REQ, zb_manager_node_desc_req_fn},
     {ZB_MANAGER_REPORT_CONFIG_CMD, zb_manager_report_config_req_fn},
+    {ZB_MANAGER_DISCOVERY_ATTR_CMD, zb_manager_disc_attr_req_fn},
     /********************** ZB_MANAGER_CLUSTERS_CMD **********************/
     /* ON_OFF*/
     {ZB_MANAGER_ON_OFF_MAIN_CMD_REQ, zb_manager_on_of_main_cmd_req_fn},

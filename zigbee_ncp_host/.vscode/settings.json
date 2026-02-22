@@ -16,5 +16,6 @@
     "--compile-commands-dir=c:\\Users\\User\\Documents\\esp32\\ZIGBEE_HOST_AND_NCP\\zigbee_ncp_host\\build"
   ],
   "idf.portWin": "COM4",
-  "idf.flashType": "UART"
+  "idf.flashType": "UART",
+  "idf.currentSetup": "c:\\Espressif\\frameworks\\v5.5.2\\esp-idf"
 }

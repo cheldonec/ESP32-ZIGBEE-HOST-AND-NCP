@@ -842,6 +842,7 @@ typedef struct esp_zb_zcl_cmd_read_attr_resp_message_s {
 } esp_zb_zcl_cmd_read_attr_resp_message_t;
 
 typedef struct zb_manager_attr_s {
+    uint8_t                   status; 
     uint16_t                  attr_id;
     esp_zb_zcl_attr_type_t    attr_type;
     uint8_t                   attr_len;
@@ -849,10 +850,18 @@ typedef struct zb_manager_attr_s {
     uint8_t                   attr_value_buf[64];    // встроенный буфер (для пула
 }zb_manager_attr_t;
 
+typedef struct zb_manager_read_resp_attr_s {
+    uint8_t                   status; 
+    uint16_t                  attr_id;
+    esp_zb_zcl_attr_type_t    attr_type;
+    uint8_t                   attr_len;
+    void*                     attr_value;
+}zb_manager_read_resp_attr_t;
+
 typedef struct zb_manager_cmd_read_attr_resp_message_s {
     esp_zb_zcl_cmd_info_t           info;
     uint8_t                         attr_count;  // 
-    zb_manager_attr_t*     attr_arr;
+    zb_manager_read_resp_attr_t*     attr_arr;
 }zb_manager_cmd_read_attr_resp_message_t;
 //return the transaction sequence number
 uint8_t zb_manager_zcl_read_attr_cmd_req(esp_zb_zcl_read_attr_cmd_t *cmd_req);
@@ -899,6 +908,7 @@ typedef struct zb_manager_cmd_report_attr_resp_message_s {
     uint8_t dst_endpoint;             /*!< The destination endpoint id */
     uint16_t cluster;  
     zb_manager_attr_t     attr;
+    //zb_manager_cmd_report_attr_t attr;
 }zb_manager_cmd_report_attr_resp_message_t;
 
 void zb_manager_free_report_attr_resp(zb_manager_cmd_report_attr_resp_message_t* resp);
@@ -1084,6 +1094,43 @@ typedef struct {
 } zb_manager_custom_cluster_report_message_t;
 
 void zb_manager_free_custom_cluster_report_message(zb_manager_custom_cluster_report_message_t *msg);
+
+/************************* Discovery Attributes ****************/
+typedef struct esp_zb_zcl_disc_attr_cmd_s {
+    esp_zb_zcl_basic_cmd_t zcl_basic_cmd;   /*!< Basic command info */
+    esp_zb_zcl_address_mode_t address_mode; /*!< APS addressing mode constants refer to esp_zb_zcl_address_mode_t */
+    uint16_t cluster_id;                    /*!< The cluster identifier for which the attribute is discovered. */
+    struct {
+        uint8_t manuf_specific   : 2;       /*!< Sent as manufacturer extension with code. */
+        uint8_t direction        : 1;       /*!< The command direction, refer to esp_zb_zcl_cmd_direction_t */
+        uint8_t dis_defalut_resp : 1;       /*!< Disable default response for this command. */
+    };
+    uint16_t manuf_code;                    /*!< The manufacturer code sent with the command. */
+    uint16_t start_attr_id;                 /*!< The attribute identifier at which to begin the attribute discover */
+    uint8_t max_attr_number;                /*!< The maximum number of attribute identifiers that are to be returned in the resulting Discover Attributes Response command*/
+} esp_zb_zcl_disc_attr_cmd_t;
+
+uint8_t zb_manager_disc_attr_cmd_req(esp_zb_zcl_disc_attr_cmd_t *cmd_req);
+
+/**
+ * @brief Attribute information field for discovering attributes response struct
+ *
+ */
+typedef struct esp_zb_zcl_disc_attr_variable_s {
+    uint16_t attr_id;                             /*!< The field contain the identifier of a discovered attribute */
+    esp_zb_zcl_attr_type_t data_type;             /*!< The field contain the data type of the attribute in the same attribute report field */
+    struct esp_zb_zcl_disc_attr_variable_s *next; /*!< Next variable */
+} esp_zb_zcl_disc_attr_variable_t;
+
+/**
+ * @brief The Zigbee zcl discover attribute response struct
+ *
+ */
+typedef struct esp_zb_zcl_cmd_discover_attributes_resp_message_s {
+    esp_zb_zcl_cmd_info_t info;                 /*!< The basic information of configuring report response message that refers to esp_zb_zcl_cmd_info_t */
+    uint8_t is_completed;                       /*!< A value of 0 indicates that there are more attributes to be discovered, otherwise, it is completed */
+    esp_zb_zcl_disc_attr_variable_t *variables; /*!< The variable items, which can refer to esp_zb_zcl_attr_info_field_t */
+} esp_zb_zcl_cmd_discover_attributes_resp_message_t;
 
 #ifdef __cplusplus
 }

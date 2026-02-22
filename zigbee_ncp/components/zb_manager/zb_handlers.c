@@ -573,37 +573,60 @@ void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal_struct)
 static esp_err_t esp_ncp_zb_read_attr_resp_handler(const esp_zb_zcl_cmd_read_attr_resp_message_t *message, uint8_t **output, uint16_t *outlen)
 {
     ESP_RETURN_ON_FALSE(message, ESP_FAIL, TAG, "Empty message");
-    ESP_RETURN_ON_FALSE(message->info.status == ESP_ZB_ZCL_STATUS_SUCCESS, ESP_ERR_INVALID_ARG, TAG, "Received message: error status(%d)",
-                        message->info.status);
-    ESP_LOGI(TAG, "Read attribute response: status(%d), cluster(0x%x)", message->info.status, message->info.cluster);
-    
-    uint16_t data_head_len = sizeof(esp_zb_zcl_cmd_info_t);
-    uint16_t id_len = sizeof(uint16_t), TYPE_LEN = sizeof(esp_zb_zcl_attr_type_t), SIZE_LEN = sizeof(uint8_t);
-    uint8_t index = 0;
-    uint16_t length = (data_head_len + 1);
+    ESP_LOGI(TAG, "Read attribute response: cluster(0x%04x)", message->info.cluster);
+
+    const size_t INFO_LEN = sizeof(esp_zb_zcl_cmd_info_t);
+    const size_t ATTR_FIXED_LEN = 
+        sizeof(uint8_t) +                     // status
+        sizeof(uint16_t) +                    // attr_id
+        sizeof(esp_zb_zcl_attr_type_t) +      // attr_type
+        sizeof(uint8_t);                      // data_size
+
+    uint8_t attr_count = 0;
+    size_t total_attrs_data_len = 0;
+
+    // Подсчитываем количество и общий размер
+    for (esp_zb_zcl_read_attr_resp_variable_t *var = message->variables; var != NULL; var = var->next) {
+        attr_count++;
+        total_attrs_data_len += ATTR_FIXED_LEN + var->attribute.data.size;
+    }
+
+    uint16_t length = INFO_LEN + 1 + total_attrs_data_len; // info + attr_count + attrs
     uint8_t *outbuf = calloc(1, length);
-    uint8_t *variables_data = NULL;
-    uint8_t  variables_data_len = 0;
-    uint8_t  variables_len = (id_len + TYPE_LEN + SIZE_LEN);
+    if (!outbuf) {
+        ESP_LOGE(TAG, "Failed to allocate output buffer");
+        return ESP_ERR_NO_MEM;
+    }
 
-    if (outbuf) {
-        memcpy(outbuf, &message->info, data_head_len);
-        for (esp_zb_zcl_read_attr_resp_variable_t *variables = message->variables; variables != NULL; variables = variables->next) {
-            ESP_LOGI(TAG, "attribute(0x%x), type(0x%x), value(%d)", variables->attribute.id, variables->attribute.data.type, variables->attribute.data.value ? *(uint8_t *)variables->attribute.data.value : 0);
-            
-            variables_data_len = (variables_len + variables->attribute.data.size);
-            length += variables_data_len;
-            
-            outbuf = realloc(outbuf, length);
-            variables_data = &outbuf[length - variables_data_len];
+    // Копируем info
+    memcpy(outbuf, &message->info, INFO_LEN);
 
-            memcpy(variables_data, &variables->attribute.id, variables_len);
-            variables_data += variables_len;
+    // Пишем attr_count
+    outbuf[INFO_LEN] = attr_count;
 
-            memcpy(variables_data, variables->attribute.data.value, variables->attribute.data.size);
-            index ++;
+    // Указатель на начало данных атрибутов
+    uint8_t *ptr = outbuf + INFO_LEN + 1;
+
+    // Сериализуем каждый атрибут — в порядке, который ожидает host!
+    for (esp_zb_zcl_read_attr_resp_variable_t *var = message->variables; var != NULL; var = var->next) {
+        ESP_LOGI(TAG, "Serializing attr: id=0x%04x, status=0x%02x, type=0x%02x, len=%u",
+                 var->attribute.id, var->status, var->attribute.data.type, var->attribute.data.size);
+
+        // === ПОРЯДОК ДОЛЖЕН БЫТЬ ТОЧНО ТАКИМ ЖЕ, КАК В ХОСТЕ ===
+        *ptr++ = var->status;                    // status (1 байт)
+
+        memcpy(ptr, &var->attribute.id, sizeof(uint16_t));  // attr_id (2 байта)
+        ptr += sizeof(uint16_t);
+
+        *ptr++ = var->attribute.data.type;       // attr_type (1 байт)
+        *ptr++ = (uint8_t)(var->attribute.data.size); // data_size (1 байт)
+
+        // value (если есть)
+        if (var->attribute.data.size > 0 && var->attribute.data.value) {
+            memcpy(ptr, var->attribute.data.value, var->attribute.data.size);
+            ptr += var->attribute.data.size;
         }
-        outbuf[data_head_len] = index;
+        // Если size == 0 или value == NULL — ничего не копируем
     }
 
     *output = outbuf;
@@ -847,7 +870,7 @@ esp_err_t esp_ncp_zb_action_handler(esp_zb_core_action_callback_id_t callback_id
             
             break;
         case ESP_ZB_CORE_CMD_DISC_ATTR_RESP_CB_ID:
-            ncp_header.id = ESP_NCP_ZCL_ATTR_DISC_RESP;
+            ncp_header.id = ZB_MANAGER_DISCOVERY_ATTR_RESP;
             ret = esp_ncp_zb_disc_attr_resp_handler((esp_zb_zcl_cmd_discover_attributes_resp_message_t *)message, &output, &outlen);
             break;
         case ESP_ZB_CORE_REPORT_ATTR_CB_ID:

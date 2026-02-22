@@ -46,8 +46,11 @@ void start_webserver(void);
 void stop_webserver(void);
 void ws_notify_state_changed(uint16_t short_addr, bool state);  // вызывать при обновлении online статуса
 
+cJSON* create_device_json(device_custom_t *dev);
 void ws_notify_device_update(uint16_t short_addr); // вызывать при обновлении атрибутов кластера
 void ws_notify_device_update_unlocked(device_custom_t *dev); // без мьютекса
+
+
 
 void ws_notify_network_status(void); // вызывать при обновлении zigbee сети (открыта/закрыта)
 

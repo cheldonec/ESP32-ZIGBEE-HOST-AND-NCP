@@ -2,7 +2,6 @@
 import React, { useState, useEffect } from 'react';
 import './App.css';
 
-
 import BindModal from './components/BindModal';
 import ReportModal from './components/ReportModal';
 import OnOffCommandModal from './components/OnOffCommandModal';
@@ -75,6 +74,12 @@ function App() {
     change: 0,
   });
 
+  // 🔍 Фильтры и сортировка
+  const [searchTerm, setSearchTerm] = useState('');
+  const [filterStatus, setFilterStatus] = useState('all');
+  const [filterType, setFilterType] = useState('all');
+  const [sortOrder, setSortOrder] = useState('name-asc');
+
   // === Тест команды: ON_WITH_TIMED_OFF ===
   const [showTimedOffModal, setShowTimedOffModal] = useState(false);
   const [timedOffForm, setTimedOffForm] = useState({
@@ -83,12 +88,191 @@ function App() {
     on_off_control: 1,
   });
 
-  // 🔍 Фильтры и сортировка
-  const [searchTerm, setSearchTerm] = useState('');
-  const [filterStatus, setFilterStatus] = useState('all');
-  const [filterType, setFilterType] = useState('all');
-  const [sortOrder, setSortOrder] = useState('name-asc');
+  // === Конвертация полного JSON → в формат DeviceCard ===
+  const convertToDeviceCardFormat = (fullDev) => {
+    if (!fullDev) return null;
 
+    const short = fullDev.short_addr;
+    const name = fullDev.friendly_name || 'unknown';
+    const online = fullDev.is_online;
+
+    let battery = null;
+    if (online && fullDev.device_power_config_cluster) {
+      const pc = fullDev.device_power_config_cluster;
+      const voltageRaw = pc.battery_voltage;
+      if (voltageRaw !== 0xFF) {
+        const voltage = voltageRaw * 0.1;
+        const percentageRaw = pc.battery_percentage;
+        const percentage = percentageRaw !== 0xFF ? Math.round(percentageRaw / 2) : -1;
+
+        battery = {
+          voltage,
+          percent: percentage >= 0 && percentage <= 100 ? percentage : undefined,
+          display: `${voltage.toFixed(1)} В`,
+          percent_display: percentage >= 0 && percentage <= 100 ? `${percentage}%` : undefined,
+        };
+      }
+    }
+
+    const clusters = [];
+
+    if (fullDev.endpoints && Array.isArray(fullDev.endpoints)) {
+      for (const ep of fullDev.endpoints) {
+        const epId = ep.ep_id;
+        const epName = ep.friendly_name || `[0x${short.toString(16)}] [0x${epId.toString(16)}]`;
+
+        // On/Off Cluster
+        if (ep.onoff) {
+          clusters.push({
+            type: 'on_off',
+            endpoint_id: epId,
+            endpoint_name: epName,
+            value: ep.onoff.on,
+            display: ep.onoff.on ? 'ON' : 'OFF',
+            unit: '',
+          });
+        }
+
+        // Temperature Cluster
+        if (ep.temperature) {
+          const raw = ep.temperature.measured_value;
+          if (raw !== undefined && raw !== -32768) {
+            const temp = raw / 100.0;
+            clusters.push({
+              type: 'temperature',
+              endpoint_id: epId,
+              endpoint_name: epName,
+              value: temp,
+              display: `${temp.toFixed(1)} °C`,
+              unit: '°C',
+            });
+          }
+        }
+
+        // Humidity Cluster
+        if (ep.humidity) {
+          const raw = ep.humidity.measured_value;
+          if (raw !== undefined && raw !== 0xffff) {
+            const hum = raw / 100.0;
+            clusters.push({
+              type: 'humidity',
+              endpoint_id: epId,
+              endpoint_name: epName,
+              value: hum,
+              display: `${hum.toFixed(1)} %`,
+              unit: '%',
+            });
+          }
+        }
+      }
+    }
+
+    if (clusters.length === 0) {
+      clusters.push({
+        type: 'unknown',
+        display: 'No data',
+        unit: '',
+        endpoint_id: 0,
+        endpoint_name: 'Unknown',
+      });
+    }
+
+    return {
+      short,
+      name,
+      online,
+      clusters,
+      ...(battery && { battery }),
+      model_id: fullDev.device_basic_cluster?.model_id,
+      manufacturer_name: fullDev.device_basic_cluster?.manufacturer_name,
+      _full: fullDev, // для отладки/расширения
+    };
+  };
+
+  // === Формирование bindingTargets из уже загруженных devices ===
+  /*const getBindingTargets = () => {
+    return devices.map((dev) => {
+      const endpoints = dev._full.endpoints.map((ep) => {
+        // input_clusters — это кластеры, с которых можно брать reporting (SERVER)
+        const input_clusters = [];
+        if (ep.temperature) input_clusters.push(0x0402);
+        if (ep.humidity) input_clusters.push(0x0405);
+        if (ep.onoff) input_clusters.push(0x0006);
+
+        // output_clusters — клиентские (например, для управления реле)
+        const output_clusters = ep.output_clusters || [];
+
+        return {
+          id: ep.ep_id,
+          input_clusters,
+          output_clusters,
+        };
+      });
+
+      return {
+        short: dev.short,
+        ieee: dev._full.ieee_addr, // если нужно
+        name: dev.name,
+        endpoints,
+      };
+    });
+  };*/
+  // report config convert devices for form
+  const getReportConfTargets = () => {
+    const targets = devices.map((dev) => {
+      const endpoints = dev._full.endpoints.map((ep) => ({
+        id: ep.ep_id,
+        input_clusters: [
+          ...(ep.temperature ? [0x0402] : []),
+          ...(ep.humidity ? [0x0405] : []),
+          ...(ep.onoff ? [0x0006] : []),
+        ],
+        // Для reporting важны только input-кластеры (server-side)
+        // output_clusters можно не включать, но оставим для совместимости
+      }));
+
+      return {
+        short: dev.short,
+        name: dev.name,
+        endpoints,
+      };
+    });
+    return targets;
+  };
+
+  // binding convert devices for form
+  const getBindingTargets = () => {
+    const targets = devices.map((dev) => {
+      const endpoints = dev._full.endpoints.map((ep) => ({
+        id: ep.ep_id,
+        input_clusters: [
+          ...(ep.temperature ? [0x0402] : []),
+          ...(ep.humidity ? [0x0405] : []),
+          ...(ep.onoff ? [0x0006] : []),
+        ],
+        output_clusters: ep.output_clusters || [],
+      }));
+
+      return {
+        short: dev.short,
+        name: dev.name,
+        endpoints,
+      };
+    });
+
+    // Добавляем координатор
+    targets.push({
+      short: 0x0000,
+      name: 'Coordinator',
+      endpoints: [{
+        id: 1,
+        input_clusters: [],
+        output_clusters: [0x0019, 0x000A, 0x0021, 0x0402, 0x0405],
+      }],
+    });
+
+    return targets;
+  };
   // Загрузка настроек и правил
   useEffect(() => {
     fetch('/api/config')
@@ -101,7 +285,7 @@ function App() {
       })
       .catch((err) => console.warn('Не удалось загрузить настройки:', err));
 
-    fetch('/api/rules')
+    fetch('/api/rules/load')
       .then((r) => r.json())
       .then((data) => setRules(Array.isArray(data) ? data : []))
       .catch((err) => {
@@ -109,6 +293,18 @@ function App() {
         setRules([]);
       });
   }, []);
+
+  // Переключение темы
+  const toggleTheme = () => {
+    const newTheme = theme === 'dark' ? 'light' : 'dark';
+    setTheme(newTheme);
+    setSettings((prev) => ({
+      ...prev,
+      web: { ...prev.web, theme: newTheme },
+    }));
+    document.documentElement.setAttribute('class', newTheme);
+    localStorage.setItem('zigbee-ui-theme', newTheme);
+  };
 
   // Сохранение настроек
   const saveSettings = () => {
@@ -122,9 +318,8 @@ function App() {
         if (data.status === 'ok') {
           alert('✅ Настройки сохранены');
           setShowSettings(false);
-          setTheme(settings.web.theme);
-          document.documentElement.setAttribute('class', settings.web.theme);
-          localStorage.setItem('zigbee-ui-theme', settings.web.theme);
+        } else {
+          alert('❌ Ошибка: ' + data.error);
         }
       })
       .catch(() => {
@@ -132,21 +327,30 @@ function App() {
       });
   };
 
-  // Переключение темы
-  const toggleTheme = () => {
-    const newTheme = theme === 'dark' ? 'light' : 'dark';
-    setTheme(newTheme);
-    localStorage.setItem('zigbee-ui-theme', newTheme);
-    document.documentElement.setAttribute('class', newTheme);
-  };
-
   // Отправка команды через WebSocket
   const sendCommand = (cmd, payload = {}) => {
-    const ws = new WebSocket(`ws://${window.location.host}/ws`);
-    ws.onopen = () => {
-      ws.send(JSON.stringify({ cmd, ...payload }));
-      ws.close();
-    };
+    let ws;
+    try {
+      ws = new WebSocket(`ws://${window.location.host}/ws`);
+
+      ws.onopen = () => {
+        console.log('WebSocket открыто → отправка:', { cmd, ...payload });
+        ws.send(JSON.stringify({ cmd, ...payload }));
+
+        setTimeout(() => {
+          if (ws.readyState === WebSocket.OPEN) {
+            ws.close();
+          }
+        }, 100);
+      };
+
+      ws.onerror = (err) => {
+        console.warn(`WebSocket ошибка при отправке ${cmd}:`, err);
+      };
+
+    } catch (error) {
+      console.error(`Не удалось отправить команду ${cmd}:`, error);
+    }
   };
 
   // ID команд
@@ -201,97 +405,173 @@ function App() {
   const updateEndpointName = (short, endpoint, newName) => {
     if (!newName?.trim()) return;
     sendCommand('update_endpoint_name', { short, endpoint, name: newName.trim() });
+    setDevices((prev) =>
+      prev.map((d) =>
+        d.short === short
+          ? {
+              ...d,
+              clusters: d.clusters.map((c) =>
+                c.endpoint_id === endpoint ? { ...c, endpoint_name: newName.trim() } : c
+              ),
+            }
+          : d
+      )
+    );
   };
 
   // Подключение по WebSocket
   useEffect(() => {
-    let websocket = null;
-    let reconnectTimeout = null;
-    let reconnectAttempts = 0;
-    const maxReconnectAttempts = 10;
-    const maxReconnectDelay = 10000;
+  let websocket = null;
+  let reconnectTimeout = null;
+  let reconnectAttempts = 0;
+  const maxReconnectAttempts = 10;
+  const maxReconnectDelay = 10000;
 
-    const connect = () => {
-      if (reconnectAttempts > 0) {
-        console.log(`Попытка переподключения (${reconnectAttempts}/${maxReconnectAttempts})...`);
+  // === Функция: подключиться к WebSocket ===
+  const connectWebSocket = () => {
+    if (reconnectAttempts > 0) {
+      console.log(`Попытка переподключения (${reconnectAttempts}/${maxReconnectAttempts})...`);
+    }
+
+    websocket = new WebSocket(`ws://${window.location.host}/ws`);
+
+    websocket.onopen = () => {
+      console.log('✅ WebSocket подключён');
+      reconnectAttempts = 0;
+
+      // ❌ Убрали: websocket.send(JSON.stringify({ cmd: 'get_devices' }));
+      // Теперь загрузка идёт через fetch, не через WS
+
+      // Отправляем запрос состояния сети
+      websocket.send(JSON.stringify({ cmd: 'get_network_status' }));
+    };
+
+    websocket.onmessage = (event) => {
+      const data = JSON.parse(event.data);
+
+      // 1. Полная замена всех устройств (на всякий случай)
+      if (data.devices) {
+        const converted = data.devices.map(convertToDeviceCardFormat).filter(Boolean);
+        setDevices(converted);
       }
 
-      websocket = new WebSocket(`ws://${window.location.host}/ws`);
+      // 2. Частичное обновление одного устройства
+      else if (data.event === 'device_update') {
+        const converted = convertToDeviceCardFormat(data);
+        if (!converted) return;
 
-      websocket.onopen = () => {
-        console.log('WebSocket подключён');
-        reconnectAttempts = 0;
-        websocket.send(JSON.stringify({ cmd: 'get_devices' }));
-        websocket.send(JSON.stringify({ cmd: 'get_network_status' }));
-      };
+        setDevices((prev) => {
+          const exists = prev.some((d) => d.short === converted.short);
+          if (exists) {
+            return prev.map((d) => (d.short === converted.short ? { ...d, ...converted } : d));
+          } else {
+            return [...prev, converted];
+          }
+        });
+      }
 
-      websocket.onmessage = (event) => {
-        const data = JSON.parse(event.data);
+      // 3. Обновление онлайн-статуса
+      else if (data.event === 'state_update') {
+        setDevices((prev) =>
+          prev.map((d) =>
+            d.short === data.short ? { ...d, online: data.online } : d
+          )
+        );
+      }
 
-        if (data.devices) {
-          setDevices(data.devices);
-        } else if (data.event === 'device_update') {
-          setDevices((prev) => {
-            const exists = prev.some((d) => d.short === data.short);
-            if (exists) {
-              return prev.map((d) => (d.short === data.short ? { ...d, ...data } : d));
-            } else {
-              return [...prev, data];
-            }
-          });
-        } else if (data.event === 'friendly_name_updated') {
-          setDevices((prev) => prev.map((d) => (d.short === data.short ? { ...d, name: data.name } : d)));
-        } else if (data.event === 'network_status') {
-          setWifiSSID(data.wifi_ssid || '—');
-          setIsNetworkOpen(data.zigbee_open || false);
-        } else if (data.event === 'endpoint_name_updated') {
-          setDevices((prev) =>
-            prev.map((d) =>
-              d.short === data.short
-                ? {
-                    ...d,
-                    clusters: d.clusters.map((c) =>
-                      c.endpoint_id === data.endpoint_id ? { ...c, endpoint_name: data.name } : c
-                    ),
-                  }
-                : d
-            )
-          );
-        } else if (data.event === 'rules_updated') {
-          fetch('/api/rules')
-            .then((r) => r.json())
-            .then((newRules) => Array.isArray(newRules) && setRules(newRules))
-            .catch((err) => console.error('Ошибка при обновлении правил:', err));
-        }
-      };
+      // 4. Обновление имени
+      else if (data.event === 'friendly_name_updated') {
+        setDevices((prev) =>
+          prev.map((d) => (d.short === data.short ? { ...d, name: data.name } : d))
+        );
+      }
 
-      websocket.onclose = () => {
-        console.log('WebSocket закрыт.');
-        if (reconnectAttempts < maxReconnectAttempts) {
-          const delay = Math.min(1000 * 2 ** reconnectAttempts, maxReconnectDelay);
-          reconnectAttempts++;
-          reconnectTimeout = setTimeout(connect, delay);
-        }
-      };
+      // 5. Обновление имени endpoint
+      else if (data.event === 'endpoint_name_updated') {
+        setDevices((prev) =>
+          prev.map((d) =>
+            d.short === data.short
+              ? {
+                  ...d,
+                  clusters: d.clusters.map((c) =>
+                    c.endpoint_id === data.endpoint_id
+                      ? { ...c, endpoint_name: data.name }
+                      : c
+                  ),
+                }
+              : d
+          )
+        );
+      }
 
-      websocket.onerror = (err) => {
-        console.error('WebSocket ошибка:', err);
-        websocket.close();
-      };
+      // 6. Статус сети Zigbee/WiFi
+      else if (data.event === 'network_status') {
+        setWifiSSID(data.wifi_ssid || '—');
+        setIsNetworkOpen(data.zigbee_open || false);
+      }
+
+      // 7. Обновление правил
+      else if (data.event === 'rules_updated') {
+        fetch('/api/rules/load')
+          .then((r) => r.json())
+          .then((newRules) => Array.isArray(newRules) && setRules(newRules))
+          .catch((err) => console.error('Ошибка при обновлении правил:', err));
+      }
     };
 
-    connect();
+    websocket.onclose = () => {
+      console.log('WebSocket закрыт. Переподключение...');
+      if (reconnectAttempts < maxReconnectAttempts) {
+        const delay = Math.min(1000 * 2 ** reconnectAttempts, maxReconnectDelay);
+        reconnectAttempts++;
+        reconnectTimeout = setTimeout(connectWebSocket, delay);
+      }
+    };
 
-    fetch('/api/binding_targets')
+    websocket.onerror = (err) => {
+      console.error('WebSocket ошибка:', err);
+      websocket.close();
+    };
+  };
+
+  // === Загрузка устройств по одному ===
+  const loadAllDevices = () => {
+    fetch('/api/devices/list')
       .then((r) => r.json())
-      .then((data) => setBindingTargets(data))
-      .catch((err) => console.error('Ошибка загрузки устройств для привязки:', err));
+      .then(async (deviceList) => {
+        const devicesArray = [];
 
-    return () => {
-      if (reconnectTimeout) clearTimeout(reconnectTimeout);
-      if (websocket) websocket.close();
-    };
-  }, []);
+        // Загружаем каждое устройство по очереди
+        for (const dev of deviceList) {
+          try {
+            const response = await fetch(`/api/device/${dev.short}`);
+            const fullData = await response.json();
+            const converted = convertToDeviceCardFormat(fullData);
+            if (converted) devicesArray.push(converted);
+          } catch (err) {
+            console.warn(`Не удалось загрузить устройство ${dev.short}`, err);
+          }
+        }
+
+        setDevices(devicesArray); // Все загружены → рендерим
+      })
+      .catch((err) => {
+        console.error('Ошибка загрузки списка устройств:', err);
+        setDevices([]);
+      });
+  };
+
+  // === Запуск ===
+  loadAllDevices();       // Загружаем устройства
+  connectWebSocket();     // Подключаем WebSocket для обновлений
+
+  
+  // === Очистка ===
+  return () => {
+    if (reconnectTimeout) clearTimeout(reconnectTimeout);
+    if (websocket) websocket.close();
+  };
+}, []); // Пустой массив → выполнится один раз //11111111111111111111111111111111111111111111111
 
   // === Привязка ===
   const performBind = () => {
@@ -670,24 +950,24 @@ function App() {
           </div>
         )}
 
-        {/* Модальное окно: Привязка */}
+                {/* === Модальное окно: Привязка === */}
         <BindModal
           show={showBindModal}
           onClose={() => setShowBindModal(false)}
-          bindingTargets={bindingTargets}
+          bindingTargets={getBindingTargets()}
           bindForm={bindForm}
           setBindForm={setBindForm}
           performBind={performBind}
         />
 
-        {/* Модальное окно: Reporting */}
+        {/* === Модальное окно: Reporting === */}
         <ReportModal
           show={showReportModal}
           onClose={() => setShowReportModal(false)}
-          bindingTargets={bindingTargets}
+          bindingTargets={getReportConfTargets()}  // ← вызываем функцию
           reportForm={reportForm}
           setReportForm={setReportForm}
-          onSubmit={handleSetReport} // или inline, как ниже
+          onSubmit={handleSetReport}
         />
 
         {/* === Модальное окно: Тест команды === */}
@@ -728,7 +1008,7 @@ function App() {
                 .catch(() => alert('❌ Ошибка сети'));
             }}
             onDelete={(id) => {
-              fetch(`/api/rules/${id}`, { method: 'DELETE' })
+              fetch(`/api/rules/delete/${id}`, { method: 'DELETE' })
                 .then((r) => r.json())
                 .then((data) => {
                   if (data.status === 'ok') {

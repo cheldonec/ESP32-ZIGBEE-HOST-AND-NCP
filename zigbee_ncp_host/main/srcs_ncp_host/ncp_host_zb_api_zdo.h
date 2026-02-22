@@ -569,6 +569,17 @@ typedef struct zb_manager_node_desc_resp_message_s{
     zb_manager_node_desc_t node_desc;
 } zb_manager_node_desc_resp_message_t;
 
+typedef struct local_esp_zb_af_node_desc_s {
+    uint16_t          node_desc_flags;            /*!< node description */
+    uint8_t           mac_capability_flags;       /*!< mac capability */
+    uint16_t          manufacturer_code;          /*!< Manufacturer code */
+    uint8_t           max_buf_size;               /*!< Maximum buffer size */
+    uint16_t          max_incoming_transfer_size; /*!< Maximum incoming transfer size */
+    uint16_t          server_mask;                /*!< Server mask */
+    uint16_t          max_outgoing_transfer_size; /*!< Maximum outgoing transfer size */
+    uint8_t           desc_capability_field;      /*!< Descriptor capability field */
+} __attribute__ ((packed)) local_esp_zb_af_node_desc_t;
+
 /*****************************************************************************************************************************
  * @brief Очищает данные внутри zb_manager_node_desc_resp_message_t после передачи в event, сам объект не удаляется, так как 
  * после обработки в event он будет удалён автоматически

@@ -264,9 +264,35 @@ static esp_err_t zb_manager_report_attr_event_fn(const uint8_t *input, uint16_t 
         return ESP_ERR_NO_MEM;
     }
     memcpy(raw_copy, input, inlen);
-    
+    /************************************ */
+    esp_ncp_zb_report_attr_t* cmd_info = (esp_ncp_zb_report_attr_t*)raw_copy;
+    // ищем по короткому, если есть, то отправляем в worker иначе в pairing
+    device_custom_t *dev_info = NULL;
+    dev_info = zbm_dev_base_find_device_by_short_safe(cmd_info->src_address.u.short_addr);
+    //dev_info = zbm_dev_base_find_device_by_short_safe(cmd_read_attr_resp_mess->info.src_address.u.short_addr);
+    bool post_ok = false;
+    if(dev_info)
+    {
+        ESP_LOGI(TAG, "ZB_ACTION_ATTR_REPORT zb_manager_post_to_action_worker");
+        post_ok = zb_manager_post_to_action_worker(ZB_ACTION_ATTR_REPORT, raw_copy, inlen);
+    }else{
+        ESP_LOGI(TAG, "ZB_ACTION_ATTR_REPORT zb_manager_post_to_pairing_worker");
+        post_ok = zb_manager_post_to_pairing_worker(ZB_PAIRING_ATTR_REPORT_EVENT, raw_copy, inlen);
+    }
+
+    if (!post_ok) {
+            ESP_LOGE(TAG, "Failed to post ZB_ACTION_ATTR_REPORT");
+            free(raw_copy);
+            raw_copy = NULL;
+            return ESP_FAIL;
+        }else{
+            free(raw_copy);
+            raw_copy = NULL;
+        }
+
+    /************************************** */
     // 2. Отправляем в action worker
-    bool post_ok = zb_manager_post_to_action_worker(ZB_ACTION_ATTR_REPORT, raw_copy, inlen);
+    /*bool post_ok = zb_manager_post_to_action_worker(ZB_ACTION_ATTR_REPORT, raw_copy, inlen);
     if (!post_ok) {
         ESP_LOGE(TAG, "Failed to post ZB_ACTION_ATTR_REPORT");
         free(raw_copy);
@@ -275,108 +301,13 @@ static esp_err_t zb_manager_report_attr_event_fn(const uint8_t *input, uint16_t 
     }else {
         free (raw_copy);
         raw_copy = NULL;
-    }
+    }*/
 
     ESP_LOGI(TAG, "ZB_ACTION_ATTR_REPORT posted (raw, len=%u)", inlen);
     return ESP_OK;
 }
 
-static esp_err_t zb_manager_report_attr_event_fn_old(const uint8_t *input, uint16_t inlen)
-{
-    typedef struct {
-        esp_zb_zcl_status_t status;       /*!< The status of the report attribute response, which can refer to esp_zb_zcl_status_t */
-        esp_zb_zcl_addr_t src_address;    /*!< The struct of address contains short and ieee address, which can refer to esp_zb_zcl_addr_s */
-        uint8_t src_endpoint;             /*!< The endpoint id which comes from report device */
-        uint8_t dst_endpoint;             /*!< The destination endpoint id */
-        uint16_t cluster;                 /*!< The cluster id that reported */
-    } ESP_ZNSP_ZB_PACKED_STRUCT esp_ncp_zb_report_attr_t;
 
-    typedef struct {
-        uint16_t id;                                    /*!< The identify of attribute */
-        uint8_t  type;                                  /*!< The type of attribute, which can refer to esp_zb_zcl_attr_type_t */
-        uint8_t  size;                                  /*!< The value size of attribute  */
-    } ESP_ZNSP_ZB_PACKED_STRUCT esp_ncp_zb_attr_data_t;
-
-     if (inlen < sizeof(esp_ncp_zb_report_attr_t) + sizeof(esp_ncp_zb_attr_data_t)) {
-        ESP_LOGE(TAG, "Input too short: %u", inlen);
-        return ESP_ERR_INVALID_SIZE;
-    }
-
-    if (input && inlen >= (sizeof(esp_ncp_zb_report_attr_t) + sizeof(esp_ncp_zb_attr_data_t)))
-    {
-        esp_ncp_zb_report_attr_t* report_attr = (esp_ncp_zb_report_attr_t*)input;
-        esp_ncp_zb_attr_data_t* attr_data = (esp_ncp_zb_attr_data_t*)(input + sizeof(esp_ncp_zb_report_attr_t));
-        
-        // Проверка типа
-        if (attr_data->type > 0xFF) {
-            ESP_LOGE(TAG, "Invalid attr_type: 0x%04x", attr_data->type);
-            return ESP_ERR_INVALID_ARG;
-        }
-
-        zb_manager_cmd_report_attr_resp_message_t* resp_msg = calloc(1, sizeof(zb_manager_cmd_report_attr_resp_message_t));
-        if (!resp_msg) {
-            ESP_LOGE(TAG, "Failed to allocate resp_msg for ATTR_REPORT_EVENT");
-            return ESP_ERR_NO_MEM;
-        }
-        resp_msg->status = report_attr->status;
-        memcpy(&resp_msg->src_address, &report_attr->src_address, sizeof(esp_zb_zcl_addr_t));
-        resp_msg->src_endpoint = report_attr->src_endpoint;
-        resp_msg->dst_endpoint = report_attr->dst_endpoint;
-        resp_msg->cluster = report_attr->cluster;
-        resp_msg->attr.attr_id = attr_data->id;
-        resp_msg->attr.attr_type = attr_data->type;
-        resp_msg->attr.attr_len = attr_data->size;
-
-        // Проверка размера данных
-        const uint8_t *value_src = input + sizeof(*report_attr) + sizeof(*attr_data);
-        const uint8_t *buffer_end = input + inlen;
-        if (resp_msg->attr.attr_len > (uint32_t)(buffer_end - value_src)) {
-            ESP_LOGE(TAG, "attr_len (%u) exceeds buffer", resp_msg->attr.attr_len);
-            free(resp_msg);
-            return ESP_ERR_INVALID_SIZE;
-        }
-
-        if (resp_msg->attr.attr_len > 0) {
-            const uint8_t *src_value = input + sizeof(*report_attr) + sizeof(*attr_data);
-            resp_msg->attr.attr_value = calloc(1, resp_msg->attr.attr_len);
-            if (!resp_msg->attr.attr_value) {
-                ESP_LOGE(TAG, "Failed to allocate attr_value for ATTR_REPORT_EVENT");
-                free(resp_msg);
-                resp_msg = NULL;
-                return ESP_ERR_NO_MEM;
-            }
-            memcpy(resp_msg->attr.attr_value, src_value, resp_msg->attr.attr_len);
-        } else {
-            resp_msg->attr.attr_value = NULL;
-            }
-            //memcpy(resp_msg->attr.attr_value, input + sizeof(esp_ncp_zb_report_attr_t) + sizeof(esp_ncp_zb_attr_data_t), resp_msg->attr.attr_len);
-            ESP_LOGI(TAG, "zb_manager_report_attr_event_fn");
-             // ✅ Логируем ТОЛЬКО после успешной копии
-            //log_zb_attribute(resp_msg->cluster, &resp_msg->attr, &resp_msg->src_address, resp_msg->src_endpoint);
-
-            /*bool post_ok = eventLoopPost(ZB_HANDLER_EVENTS, ATTR_REPORT_EVENT, resp_msg, sizeof(*resp_msg), portMAX_DELAY);
-            if (!post_ok) {
-                ESP_LOGE(TAG, "Failed to post ATTR_REPORT_EVENT");
-                zb_manager_free_report_attr_resp(resp_msg);
-                return ESP_FAIL;
-            }*/
-
-            bool post_ok = zb_manager_post_to_action_worker(ZB_ACTION_ATTR_REPORT, resp_msg, sizeof(*resp_msg));
-            if (!post_ok) {
-                ESP_LOGE(TAG, "Failed to post ZB_ACTION_ATTR_REPORT");
-                zb_manager_free_report_attr_resp(resp_msg);
-                return ESP_FAIL;
-            }
-            //free (resp_msg->attr.attr_value);
-            //resp_msg->attr.attr_value = NULL;
-            free (resp_msg);
-            resp_msg = NULL;
-
-    }
-    //MY_EVENT_WIFI_CONNECTED
-    
-    return ESP_OK;
-}
 
 
 static esp_err_t zb_manager_dev_annce_event_fn(const uint8_t *input, uint16_t inlen)
@@ -744,16 +675,32 @@ static esp_err_t zb_manager_read_attr_resp_fn(const uint8_t *input, uint16_t inl
     }
     memcpy(input_copy, input, inlen);
 
-    bool post_ok = zb_manager_post_to_action_worker(ZB_ACTION_ATTR_READ_RESP, input_copy, inlen);
-    if (!post_ok) {
-        ESP_LOGE(TAG, "Failed to post ZB_ACTION_ATTR_READ_RESP");
-        free(input_copy);
-        return ESP_FAIL;
+    esp_zb_zcl_cmd_read_attr_resp_message_t* cmd_read_attr_resp_mess = NULL;
+    cmd_read_attr_resp_mess = (esp_zb_zcl_cmd_read_attr_resp_message_t*)input_copy;
+
+    // ищем по короткому, если есть, то отправляем в worker иначе в pairing
+    device_custom_t *dev_info = NULL;
+    dev_info = zbm_dev_base_find_device_by_short_safe(cmd_read_attr_resp_mess->info.src_address.u.short_addr);
+    //dev_info = zbm_dev_base_find_device_by_short_safe(cmd_read_attr_resp_mess->info.src_address.u.short_addr);
+    bool post_ok = false;
+    if(dev_info)
+    {
+        ESP_LOGI(TAG, "ZB_ACTION_ATTR_READ_RESP zb_manager_post_to_action_worker");
+        post_ok = zb_manager_post_to_action_worker(ZB_ACTION_ATTR_READ_RESP, input_copy, inlen);
     }else{
-        free(input_copy);
-        input_copy = NULL;
+        ESP_LOGI(TAG, "ZB_ACTION_ATTR_READ_RESP zb_manager_post_to_pairing_worker");
+        post_ok = zb_manager_post_to_pairing_worker(ZB_PAIRING_ATTR_READ_RESP, input_copy, inlen);
     }
 
+    if (!post_ok) {
+            ESP_LOGE(TAG, "Failed to post ZB_ACTION_ATTR_READ_RESP");
+            free(input_copy);
+            input_copy = NULL;
+            return ESP_FAIL;
+        }else{
+            free(input_copy);
+            input_copy = NULL;
+        }
     ESP_LOGI(TAG, "ZB_ACTION_ATTR_READ_RESP posted with raw buffer");
     return ESP_OK;
 }
@@ -795,7 +742,7 @@ static esp_err_t zb_manager_read_attr_resp_fn_old(const uint8_t *input, uint16_t
     bool alloc_failed = false;
 
     for (uint8_t i = 0; i < attr_count; i++) {
-        zb_manager_attr_t* attr = &resp_msg->attr_arr[i];
+        zb_manager_read_resp_attr_t* attr = &resp_msg->attr_arr[i];
 
         attr->attr_id  = *((uint16_t*)pointer);
         pointer += sizeof(uint16_t);
@@ -1029,7 +976,10 @@ static esp_err_t zb_manager_custom_cluster_rep_event_fn(const uint8_t *input, ui
     return ESP_OK;
 }
 
-
+static esp_err_t zb_manager_disc_attr_resp_fn(const uint8_t *input, uint16_t inlen)
+{
+    return ESP_OK;
+}
 
 static const esp_host_zb_func_t host_zb_func_table[] = {
     {ESP_NCP_NETWORK_FORMNETWORK, esp_host_zb_form_network_fn},
@@ -1050,6 +1000,7 @@ static const esp_host_zb_func_t host_zb_func_table[] = {
     {ZB_MANAGER_NODE_DESC_RSP, zb_manager_node_desc_resp_fn},
     {ZB_MANAGER_REPORT_CONFIG_RESP, zb_manager_report_config_resp_fn},
     {ZB_MANAGER_CUSTOM_CLUSTER_REPORT , zb_manager_custom_cluster_rep_event_fn }, 
+    {ZB_MANAGER_DISCOVERY_ATTR_RESP, zb_manager_disc_attr_resp_fn},
 };
 
 esp_err_t esp_host_zb_input(esp_host_header_t *host_header, const void *buffer, uint16_t len)

@@ -160,13 +160,11 @@ void zb_manager_free_read_attr_resp_attr_array(zb_manager_cmd_read_attr_resp_mes
         for (int i = 0; i < resp->attr_count; i++) {
             if (resp->attr_arr[i].attr_value) {
                 free(resp->attr_arr[i].attr_value);
-                resp->attr_arr[i].attr_value = NULL;
             }
         }
         free(resp->attr_arr);
-        resp->attr_arr = NULL;
-        resp->attr_count = 0;
     }
+    free(resp);
 }
 
 void zb_manager_free_report_attr_resp(zb_manager_cmd_report_attr_resp_message_t* resp)
@@ -762,3 +760,44 @@ void zb_manager_free_custom_cluster_report_message(zb_manager_custom_cluster_rep
     }
 }
 
+
+uint8_t zb_manager_disc_attr_cmd_req(esp_zb_zcl_disc_attr_cmd_t *cmd_req)
+{
+    typedef struct {
+        esp_zb_zcl_basic_cmd_t zcl_basic_cmd;                   /*!< Basic command info */
+        uint8_t  address_mode;                                  /*!< APS addressing mode constants refer to esp_zb_zcl_address_mode_t */
+        uint16_t cluster_id;                                    /*!< The cluster identifier for which the attribute is discovered. */
+        uint8_t manuf_specific;                                 /*!< Sent as manufacturer extension with code. */
+        uint8_t direction;                                      /*!< The command direction, refer to esp_zb_zcl_cmd_direction_t (ESP_ZB_ZCL_CMD_DIRECTION_TO_SRV)*/
+        uint8_t dis_defalut_resp;                               /*!< Disable default response for this command. */
+        uint16_t manuf_code;                    /*!< The manufacturer code sent with the command. */
+        uint16_t start_attr_id;                 /*!< The attribute identifier at which to begin the attribute discover */
+        uint8_t max_attr_number;                /*!< The maximum number of attribute identifiers that are to be returned in the resulting Discover Attributes Response command*/
+    } ESP_ZNSP_ZB_PACKED_STRUCT zb_manager_disc_attr_cmd_req_t;
+
+    zb_manager_disc_attr_cmd_req_t data = {0};
+    data.address_mode = cmd_req->address_mode;
+    if (cmd_req->address_mode == ESP_ZB_APS_ADDR_MODE_64_ENDP_PRESENT) {
+        memcpy(&data.zcl_basic_cmd.dst_addr_u.addr_long, cmd_req->zcl_basic_cmd.dst_addr_u.addr_long, 8);
+    } else {
+        data.zcl_basic_cmd.dst_addr_u.addr_short = cmd_req->zcl_basic_cmd.dst_addr_u.addr_short;
+    }
+    data.zcl_basic_cmd.dst_endpoint = cmd_req->zcl_basic_cmd.dst_endpoint;
+    data.zcl_basic_cmd.src_endpoint = 1;
+
+    data.cluster_id = cmd_req->cluster_id;
+    data.manuf_specific = cmd_req->manuf_specific;
+    if (data.manuf_specific > 0) {data.manuf_code = cmd_req->manuf_code;} else data.manuf_code = 0x0000;
+    data.dis_defalut_resp = cmd_req->dis_defalut_resp;
+    data.direction = ESP_ZB_ZCL_CMD_DIRECTION_TO_SRV;
+    data.start_attr_id = cmd_req->start_attr_id;
+    data.max_attr_number = cmd_req->max_attr_number;
+    uint8_t output = 0;
+    uint16_t outlen = sizeof(uint8_t);
+    if (zigbee_ncp_module_state == WORKING)
+        {
+            esp_host_zb_output(ZB_MANAGER_DISCOVERY_ATTR_CMD, &data, sizeof(data), &output, &outlen);
+        }
+
+    return output;
+}

@@ -39,6 +39,18 @@ const DeviceCard = ({
   };
 
   const renderClusterValue = (cluster) => {
+    const icon = cluster.type === 'on_off' ? (cluster.value ? '🟢' : '🔴') :
+               cluster.type === 'temperature' ? '🌡️' :
+               cluster.type === 'humidity' ? '💧' : '🔧';
+
+    if (!dev.online) {
+      return (
+        <div className="state-indicator offline">
+          {icon} ⚠️ Offline
+        </div>
+      );
+    }
+    
     if (cluster.type === 'on_off') {
       return (
         <div className={`state-indicator ${cluster.value ? 'on' : 'off'}`}>

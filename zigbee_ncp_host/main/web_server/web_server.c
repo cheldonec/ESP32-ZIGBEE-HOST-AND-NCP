@@ -16,10 +16,11 @@
 #include "zb_manager_automation.h"
 #include "zb_manager_rules.h"
 #include "zb_manager_rule_editor_api.h"
+#include "zbm_dev_base_utils.h"
 
 static const char *TAG = "WEB_SERVER";
 
-static char json_print_buffer[2048]; // буфер для cJSON
+static char json_print_buffer[4096]; // буфер для cJSON
 
 static const uint16_t coordinator_output_clusters[] = {
     ESP_ZB_ZCL_CLUSTER_ID_OTA_UPGRADE,   // 0x0019
@@ -334,33 +335,50 @@ esp_err_t get_req_handler_old(httpd_req_t *req)
     return ESP_OK;
 }
 
-// Функция для создания JSON-объекта устройства
 cJSON* create_device_json(device_custom_t *dev)
+{
+    if (!dev) return NULL;
+
+    // Получаем ПОЛНЫЙ JSON устройства
+    cJSON *full_dev = zbm_dev_base_device_to_json(dev);
+    //cJSON *full_dev = zb_manager_get_device_json_safe(dev);
+    if (!full_dev) return NULL;
+
+    // Добавляем event для фронтенда
+    cJSON_AddStringToObject(full_dev, "event", "device_update");
+
+    return full_dev;
+}
+// Функция для создания JSON-объекта устройства
+// === Обновлённая и улучшенная версия create_device_json ===
+cJSON* create_device_json_old(device_custom_t *dev)
 {
     if (!dev) return NULL;
 
     cJSON *d = cJSON_CreateObject();
     if (!d) return NULL;
 
+    // Основные поля
     cJSON_AddNumberToObject(d, "short", dev->short_addr);
     cJSON_AddStringToObject(d, "name", dev->friendly_name[0] ? dev->friendly_name : "unknown");
     cJSON_AddBoolToObject(d, "online", dev->is_online);
 
-    // 🔧 Добавляем model_id и manufacturer_name
-    if (dev->server_BasicClusterObj->model_identifier[0]) {
-        cJSON_AddStringToObject(d, "model_id", dev->server_BasicClusterObj->model_identifier);
-    }
-    if (dev->server_BasicClusterObj->manufacturer_name[0]) {
-        cJSON_AddStringToObject(d, "manufacturer_name", dev->server_BasicClusterObj->manufacturer_name);
+    // Производитель и модель
+    if (dev->server_BasicClusterObj) {
+        if (dev->server_BasicClusterObj->manufacturer_name[0]) {
+            cJSON_AddStringToObject(d, "manufacturer_name", dev->server_BasicClusterObj->manufacturer_name);
+        }
+        if (dev->server_BasicClusterObj->model_identifier[0]) {
+            cJSON_AddStringToObject(d, "model_id", dev->server_BasicClusterObj->model_identifier);
+        }
     }
 
-    // 🔋 Блок батареи — на уровне устройства, если есть Power Configuration Cluster
+    // Батарея (если есть)
     if (dev->is_online && dev->server_PowerConfigurationClusterObj) {
         uint8_t voltage_raw = dev->server_PowerConfigurationClusterObj->battery_voltage;
-        uint8_t percentage_raw = dev->server_PowerConfigurationClusterObj->battery_percentage;
-
-        if (voltage_raw != 0xFF) { // 0xFF = invalid
-            float voltage = voltage_raw * 0.1f; // в вольтах
+        if (voltage_raw != 0xFF) {
+            float voltage = voltage_raw * 0.1f;
+            uint8_t percentage_raw = dev->server_PowerConfigurationClusterObj->battery_percentage;
             int percentage = (percentage_raw != 0xFF) ? (percentage_raw / 2) : -1;
 
             cJSON *battery = cJSON_CreateObject();
@@ -375,11 +393,10 @@ cJSON* create_device_json(device_custom_t *dev)
             char volt_disp[32];
             snprintf(volt_disp, sizeof(volt_disp), "%.1f В", voltage);
             cJSON_AddStringToObject(battery, "display", volt_disp);
-
             cJSON_AddItemToObject(d, "battery", battery);
         }
     }
-    
+
     // Массив кластеров
     cJSON *clusters = cJSON_CreateArray();
     if (!clusters) {
@@ -387,37 +404,32 @@ cJSON* create_device_json(device_custom_t *dev)
         return NULL;
     }
 
-    // === Проходим по endpoint'ам ===
     for (int ep_idx = 0; ep_idx < dev->endpoints_count; ep_idx++) {
         endpoint_custom_t *ep = dev->endpoints_array[ep_idx];
         if (!ep) continue;
 
-        // Добавим имя endpoint'а в каждый кластер
-        char ep_name[128] = {0};
-        if (ep->friendly_name[0]) {
-            snprintf(ep_name, sizeof(ep_name), "%s", ep->friendly_name);
-        } else {
-            snprintf(ep_name, sizeof(ep_name), "EP %d", ep->ep_id);
+        const char* ep_friendly_name = ep->friendly_name[0] ? ep->friendly_name : NULL;
+        char default_ep_name[32];
+        if (!ep_friendly_name) {
+            snprintf(default_ep_name, sizeof(default_ep_name), "[0x%04x] [0x%02x]", dev->short_addr, ep->ep_id);
+            ep_friendly_name = default_ep_name;
         }
 
         // 🔌 On/Off Cluster
         if (ep->is_use_on_off_cluster && ep->server_OnOffClusterObj) {
             cJSON *cl = cJSON_CreateObject();
+            cJSON_AddStringToObject(cl, "type", "on_off");
+            cJSON_AddNumberToObject(cl, "endpoint_id", ep->ep_id);
+            cJSON_AddStringToObject(cl, "endpoint_name", ep_friendly_name);
+
             if (dev->is_online) {
-                // ✅ Реальное состояние
-                cJSON_AddStringToObject(cl, "type", "on_off");
-                cJSON_AddBoolToObject(cl, "value", ep->server_OnOffClusterObj->on_off);
-                cJSON_AddStringToObject(cl, "display", ep->server_OnOffClusterObj->on_off ? "ON" : "OFF");
+                bool on = ep->server_OnOffClusterObj->on_off;
+                cJSON_AddBoolToObject(cl, "value", on);
+                cJSON_AddStringToObject(cl, "display", on ? "ON" : "OFF");
                 cJSON_AddStringToObject(cl, "unit", "");
-                cJSON_AddNumberToObject(cl, "endpoint_id", ep->ep_id);
-                // имя эндпоинта
-                cJSON_AddStringToObject(cl, "endpoint_name", ep_name); 
             } else {
-                // 🟡 Неизвестно (устройство офлайн)
-                cJSON_AddStringToObject(cl, "type", "unknown");
                 cJSON_AddStringToObject(cl, "display", "Offline");
                 cJSON_AddStringToObject(cl, "unit", "");
-                cJSON_AddNumberToObject(cl, "endpoint_id", ep->ep_id);
             }
             cJSON_AddItemToArray(clusters, cl);
         }
@@ -425,23 +437,21 @@ cJSON* create_device_json(device_custom_t *dev)
         // 🌡️ Temperature Cluster
         if (ep->is_use_temperature_measurement_cluster && ep->server_TemperatureMeasurementClusterObj) {
             cJSON *cl = cJSON_CreateObject();
+            cJSON_AddStringToObject(cl, "type", "temperature");
+            cJSON_AddNumberToObject(cl, "endpoint_id", ep->ep_id);
+            cJSON_AddStringToObject(cl, "endpoint_name", ep_friendly_name);
+
             if (dev->is_online) {
                 int16_t raw = ep->server_TemperatureMeasurementClusterObj->measured_value;
                 float temp = raw / 100.0f;
                 char disp[32];
                 snprintf(disp, sizeof(disp), "%.1f °C", temp);
-                cJSON_AddStringToObject(cl, "type", "temperature");
                 cJSON_AddNumberToObject(cl, "value", temp);
                 cJSON_AddStringToObject(cl, "display", disp);
                 cJSON_AddStringToObject(cl, "unit", "°C");
-                cJSON_AddNumberToObject(cl, "endpoint_id", ep->ep_id);
-                // имя эндпоинта
-                cJSON_AddStringToObject(cl, "endpoint_name", ep_name); 
             } else {
-                cJSON_AddStringToObject(cl, "type", "unknown");
                 cJSON_AddStringToObject(cl, "display", "Offline");
                 cJSON_AddStringToObject(cl, "unit", "°C");
-                cJSON_AddNumberToObject(cl, "endpoint_id", ep->ep_id);
             }
             cJSON_AddItemToArray(clusters, cl);
         }
@@ -449,77 +459,42 @@ cJSON* create_device_json(device_custom_t *dev)
         // 💧 Humidity Cluster
         if (ep->is_use_humidity_measurement_cluster && ep->server_HumidityMeasurementClusterObj) {
             cJSON *cl = cJSON_CreateObject();
+            cJSON_AddStringToObject(cl, "type", "humidity");
+            cJSON_AddNumberToObject(cl, "endpoint_id", ep->ep_id);
+            cJSON_AddStringToObject(cl, "endpoint_name", ep_friendly_name);
+
             if (dev->is_online) {
                 uint16_t raw = ep->server_HumidityMeasurementClusterObj->measured_value;
                 float hum = raw / 100.0f;
                 char disp[32];
                 snprintf(disp, sizeof(disp), "%.1f %%", hum);
-                cJSON_AddStringToObject(cl, "type", "humidity");
                 cJSON_AddNumberToObject(cl, "value", hum);
                 cJSON_AddStringToObject(cl, "display", disp);
                 cJSON_AddStringToObject(cl, "unit", "%");
-                cJSON_AddNumberToObject(cl, "endpoint_id", ep->ep_id);
-                // имя эндпоинта
-                cJSON_AddStringToObject(cl, "endpoint_name", ep_name); 
             } else {
-                cJSON_AddStringToObject(cl, "type", "unknown");
                 cJSON_AddStringToObject(cl, "display", "Offline");
                 cJSON_AddStringToObject(cl, "unit", "%");
-                cJSON_AddNumberToObject(cl, "endpoint_id", ep->ep_id);
             }
             cJSON_AddItemToArray(clusters, cl);
         }
     }
 
-    // 🔋 Power Configuration Cluster (устройство-уровень)
-    /*if (dev->server_PowerConfigurationClusterObj) {
-        uint8_t voltage = dev->server_PowerConfigurationClusterObj->battery_voltage;
-        uint8_t percentage = dev->server_PowerConfigurationClusterObj->battery_percentage;
-
-        if (voltage != 0xFF) {
-            cJSON *cl = cJSON_CreateObject();
-            if (dev->is_online) {
-                float volts = voltage * 0.1f;
-                char disp[32];
-                snprintf(disp, sizeof(disp), "%.1f В", volts);
-                cJSON_AddStringToObject(cl, "type", "battery_voltage");
-                cJSON_AddNumberToObject(cl, "value", volts);
-                cJSON_AddStringToObject(cl, "display", disp);
-                cJSON_AddStringToObject(cl, "unit", "V");
-
-                if (percentage != 0xFF) {
-                    int percent = percentage / 2;  // как в оригинале
-                    if (percent > 100) percent = 100;
-                    char percent_str[16];
-                    snprintf(percent_str, sizeof(percent_str), "%d%%", percent);
-                    cJSON_AddNumberToObject(cl, "percent", percent);
-                    cJSON_AddStringToObject(cl, "percent_display", percent_str);
-                }
-                cJSON_AddNumberToObject(cl, "endpoint_id", 1); // предполагаем, что 1
-            } else {
-                cJSON_AddStringToObject(cl, "type", "unknown");
-                cJSON_AddStringToObject(cl, "display", "Offline");
-                cJSON_AddStringToObject(cl, "unit", "V");
-                cJSON_AddNumberToObject(cl, "endpoint_id", 1);
-            }
-            cJSON_AddItemToArray(clusters, cl);
-        }
-    }*/
-
-    // ❌ Если кластеров нет — добавляем "No data"
+    // Если нет кластеров — добавляем заглушку
     if (cJSON_GetArraySize(clusters) == 0) {
         cJSON *cl = cJSON_CreateObject();
-        if (cl) {
-            cJSON_AddStringToObject(cl, "type", "unknown");
-            cJSON_AddStringToObject(cl, "display", "No data");
-            cJSON_AddStringToObject(cl, "unit", "");
-            cJSON_AddItemToArray(clusters, cl);
-        }
+        cJSON_AddStringToObject(cl, "type", "unknown");
+        cJSON_AddStringToObject(cl, "display", "No data");
+        cJSON_AddStringToObject(cl, "unit", "");
+        cJSON_AddNumberToObject(cl, "endpoint_id", 0);
+        cJSON_AddStringToObject(cl, "endpoint_name", "Unknown");
+        cJSON_AddItemToArray(clusters, cl);
     }
 
     cJSON_AddItemToObject(d, "clusters", clusters);
     return d;
 }
+
+
 
 
 
@@ -671,9 +646,10 @@ esp_err_t ws_handler(httpd_req_t *req)
 
     ESP_LOGI(TAG, "WS RX: %.*s", ws_pkt.len, buf);
     cJSON *req_json = cJSON_Parse((char*)buf);
+    // !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! Загрузка устройств изменена
     if (req_json) {
         cJSON *cmd = cJSON_GetObjectItem(req_json, "cmd");
-        if (cmd && strcmp(cmd->valuestring, "get_devices") == 0) {
+        /*if (cmd && strcmp(cmd->valuestring, "get_devices") == 0) {
             ESP_LOGI(TAG, "CMD: get_devices received");
 
             cJSON *devices = cJSON_CreateArray();
@@ -714,10 +690,10 @@ esp_err_t ws_handler(httpd_req_t *req)
             };
             httpd_ws_send_frame(req, &resp);
             //free(rendered);
-        } // end get_devices
+        } */ // end get_devices
 
  ///////////
-        else if (strcmp(cmd->valuestring, "send_automation_command") == 0) {
+        if (strcmp(cmd->valuestring, "send_automation_command") == 0) {
             cJSON *short_addr = cJSON_GetObjectItem(req_json, "short_addr");
             cJSON *endpoint = cJSON_GetObjectItem(req_json, "endpoint");
             cJSON *cmd_id = cJSON_GetObjectItem(req_json, "cmd_id");
@@ -757,7 +733,7 @@ esp_err_t ws_handler(httpd_req_t *req)
 
                     ESP_LOGI(TAG, "Toggle request for device: 0x%04x, endpoint: %d", addr, ep_id);
 
-                    device_custom_t *dev = zb_manager_find_device_by_short_safe(addr);
+                    device_custom_t *dev = zbm_dev_base_find_device_by_short_safe(addr);
                     if (!dev) {
                         ESP_LOGW(TAG, "Device 0x%04x not found", addr);
                         return ESP_FAIL;
@@ -823,57 +799,34 @@ esp_err_t ws_handler(httpd_req_t *req)
             } // end toggle
 
         else if (strcmp(cmd->valuestring, "update_friendly_name") == 0) {
-            int short_addr = cJSON_GetObjectItem(req_json, "short")->valueint;
+            uint16_t short_addr = cJSON_GetObjectItem(req_json, "short")->valueint;
             const char* name = cJSON_GetObjectItem(req_json, "name")->valuestring;
-
-            // Сохрани в NVS или в массиве
-            device_custom_t* dev = zb_manager_find_device_by_short_safe(short_addr);
-            if (dev) {
-                strncpy(dev->friendly_name, name, sizeof(dev->friendly_name) - 1);
-                dev->friendly_name_len = strlen(name);
-
-                zb_manager_queue_save_request();
-                
-                // ✅ Обновляем discovery в HA
-                ha_mqtt_republish_discovery_for_device(dev);
-                // ✅ Отправляем ОБЩЕЕ обновление устройства
-                ws_notify_device_update(short_addr);
+            ESP_LOGD(TAG, "Updating device name for device 0x%04x", short_addr);
+            if (zbm_dev_base_dev_update_friendly_name(short_addr, name) == ESP_OK)
+            {
+                if (zbm_dev_base_queue_save_req_cmd() == ESP_OK)
+                {
+                    // ✅ Обновляем discovery в HA
+                    //ha_mqtt_republish_discovery_for_device(dev);
+                    // ✅ Отправляем ОБЩЕЕ обновление устройства
+                    ws_notify_device_update(short_addr);
+                }
             }
-
-            // ✅ Отправляем ОБЩЕЕ обновление устройства
-            //ws_notify_device_update(short_addr);
         } // end update_friendly_name
         
         else if (strcmp(cmd->valuestring, "update_endpoint_name") == 0) {
-            int short_addr = cJSON_GetObjectItem(req_json, "short")->valueint;
-            int endpoint_id = cJSON_GetObjectItem(req_json, "endpoint")->valueint;
+            uint16_t short_addr = cJSON_GetObjectItem(req_json, "short")->valueint;
+            uint8_t endpoint_id = cJSON_GetObjectItem(req_json, "endpoint")->valueint;
             const char* name = cJSON_GetObjectItem(req_json, "name")->valuestring;
-            ESP_LOGW(TAG, "Updating endpoint name for device 0x%04x, endpoint %d", short_addr, endpoint_id);
-            device_custom_t* dev = zb_manager_find_device_by_short_safe(short_addr);
-            if (dev) {
-                bool found = false;
-                for (int i = 0; i < dev->endpoints_count; i++) {
-                    endpoint_custom_t* ep = dev->endpoints_array[i];
-                    if (ep && ep->ep_id == endpoint_id) {
-                        strncpy(ep->friendly_name, name, sizeof(ep->friendly_name) - 1);
-                        //ep->friendly_name_len = strlen(name);
-                        ep->friendly_name[sizeof(ep->friendly_name) - 1] = '\0';
-                        found = true;
-
-                        // 🔁 Перепубликуем discovery ТОЛЬКО для этого эндпоинта
-                        ha_mqtt_republish_discovery_for_endpoint(dev, ep);
-
-                        // Сохраняем в JSON
-                        zb_manager_queue_save_request();
-
-                        // Отправляем обновление
-                        ws_notify_endpoint_name_update(dev, ep);
-
-                        break;
-                    }
-                }
-                if (!found) {
-                    ESP_LOGW(TAG, "Endpoint %d not found on device 0x%04x", endpoint_id, short_addr);
+            ESP_LOGD(TAG, "Updating endpoint name for device 0x%04x, endpoint %d", short_addr, endpoint_id);
+            if (zbm_dev_base_endpoint_update_friendly_name(short_addr, endpoint_id, name) == ESP_OK)
+            {
+                if (zbm_dev_base_queue_save_req_cmd() == ESP_OK)
+                {
+                    // ✅ Обновляем discovery в HA
+                    //ha_mqtt_republish_discovery_for_device(dev);
+                    // ✅ Отправляем ОБЩЕЕ обновление устройства
+                    ws_notify_device_update(short_addr);
                 }
             }
         }
@@ -927,9 +880,6 @@ esp_err_t ws_handler(httpd_req_t *req)
             // здесь отправлять рано ответ будет отправляться из  zb_manager_action_handler_worker.c
             //ws_notify_network_status();
         }
-
-
-
     }
     cJSON_Delete(req_json);
     free(buf);
@@ -945,7 +895,7 @@ static uint32_t last_update_time[256] = {0};  // хэш от short_addr
 // 🔹 Версия для использования ВНУТРИ мьютекса (не берёт мьютекс!)
 void ws_notify_device_update_unlocked(device_custom_t *dev)
 {
-    if(s_is_in_ap_only_mode == true) return; // режим настройки SSID постить не надо на websocket
+    //if(s_is_in_ap_only_mode == true) return; // режим настройки SSID постить не надо на websocket
     uint32_t now = esp_log_timestamp();
     uint8_t idx = dev->short_addr % 256;
 
@@ -965,8 +915,10 @@ void ws_notify_device_update_unlocked(device_custom_t *dev)
     // ✅ Если значение изменилось — отправляем, даже если дебаунс
     static bool last_on_off_state[256] = {0};
     static bool state_known[256] = {0};
-
-    if (has_on_off && state_known[idx]) {
+    
+    // всегда отправляем теперь
+    goto send_update;
+    /*if (has_on_off && state_known[idx]) {
         if (last_on_off_state[idx] != current_on_off) {
             goto send_update; // → пропускаем дебаунс
         }
@@ -976,11 +928,14 @@ void ws_notify_device_update_unlocked(device_custom_t *dev)
     if (now - last_update_time[idx] < DEBOUNCE_TIMEOUT_MS) {
         ESP_LOGD(TAG, "ws_notify_device_update: skipped 0x%04x — debounced", dev->short_addr);
         goto update_cache;
-    }
+    }*/
 
 send_update:
     {
-        cJSON *device_json = create_device_json(dev);
+        ESP_LOGI(TAG, "ws_notify_device_update_unlocked - send_update");
+        //cJSON *device_json = create_device_json(dev);
+        cJSON *device_json = NULL;
+        device_json = zbm_dev_base_device_to_json(dev);
         if (!device_json) return;
 
         cJSON_AddStringToObject(device_json, "event", "device_update");
@@ -1024,6 +979,7 @@ update_cache:
     }
     
 }
+
 
 
 // 🔹 Версия для использования ВНУТРИ мьютекса (не берёт мьютекс!)
@@ -1114,8 +1070,9 @@ update_cache:
  */
 void ws_notify_device_update(uint16_t short_addr)
 {
+    //return; // ВРЕМЕННО!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
     if(s_is_in_ap_only_mode == true) return; // режим настройки SSID постиь не надо на websocet
-    device_custom_t *dev = zb_manager_find_device_by_short_safe(short_addr);
+    device_custom_t *dev = zbm_dev_base_find_device_by_short_safe(short_addr);
     if (dev) {
         ws_notify_device_update_unlocked(dev);
     }
@@ -1337,7 +1294,7 @@ esp_err_t memory_api_handler_old(httpd_req_t *req)
 
 //=== Получение устройств для Биндинга и Анбиндинга ===
 //LocalIeeeAdr
-esp_err_t handle_get_devices_api(httpd_req_t *req)
+esp_err_t handle_get_devices_for_binding_api(httpd_req_t *req)
 {
     cJSON *devices = cJSON_CreateArray();
     if (!devices) {
@@ -1815,6 +1772,89 @@ esp_err_t post_config_handler(httpd_req_t *req) {
 
 //END обработчики для разных ОС
 
+// web_server.c
+
+esp_err_t handle_get_devices_list(httpd_req_t *req)
+{
+    /*cJSON *list = cJSON_CreateArray();
+    if (!list) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "JSON alloc failed");
+        return ESP_FAIL;
+    }
+
+    if (xSemaphoreTake(g_device_array_mutex, pdMS_TO_TICKS(ZB_DEVICE_MUTEX_TIMEOUT_LONG_MS)) == pdTRUE) {
+        for (int i = 0; i < RemoteDevicesCount; i++) {
+            device_custom_t *dev = RemoteDevicesArray[i];
+            if (!dev) continue;
+
+            cJSON *item = cJSON_CreateObject();
+            cJSON_AddNumberToObject(item, "short", dev->short_addr);
+            cJSON_AddStringToObject(item, "name", dev->friendly_name[0] ? dev->friendly_name : "unknown");
+            cJSON_AddBoolToObject(item, "online", dev->is_online);
+
+            cJSON_AddItemToArray(list, item);
+        }
+        DEVICE_ARRAY_UNLOCK();
+    }*/
+
+    cJSON *list = NULL;
+    list = zbm_base_dev_short_list_for_webserver();
+    if (!list) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "JSON alloc failed");
+        return ESP_FAIL;
+    }
+    int len = cJSON_PrintPreallocated(list, json_print_buffer, sizeof(json_print_buffer), false);
+    cJSON_Minify(json_print_buffer);
+    if (len < 0) {
+        cJSON_Delete(list);
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Print failed");
+        return ESP_FAIL;
+    }
+    
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, json_print_buffer);
+    ESP_LOGI(TAG,"handle_get_devices_list httpd_resp_sendstr");
+    cJSON_Delete(list);
+    return ESP_OK;
+}
+
+// web_server.c
+
+esp_err_t handle_get_device_detail(httpd_req_t *req)
+{
+    // Извлекаем short_addr из URI: /api/device/12345
+    ESP_LOGI(TAG,"handle_get_device_detail:processing");
+    const char *uri = req->uri;
+    const char *start = strrchr(uri, '/') + 1;
+    uint16_t short_addr = (uint16_t)atoi(start);
+
+    device_custom_t *dev = zbm_dev_base_find_device_by_short_safe(short_addr);
+    
+    if (!dev) {
+        httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "Device not found");
+        return ESP_FAIL;
+    }
+    ESP_LOGI(TAG,"handle_get_device_detail dev ok");
+    cJSON *device_json = create_device_json(dev);
+    if (!device_json) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to create JSON");
+        return ESP_FAIL;
+    }
+
+    ESP_LOGI(TAG,"handle_get_device_detail JSONok");
+    int len = cJSON_PrintPreallocated(device_json, json_print_buffer, sizeof(json_print_buffer), false);
+    cJSON_Minify(json_print_buffer);
+    cJSON_Delete(device_json);
+
+    if (len < 0) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Print failed");
+        return ESP_FAIL;
+    }
+
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, json_print_buffer);
+    return ESP_OK;
+}
 // === Регистрация обработчиков ===
 
 // режим AP
@@ -2007,14 +2047,27 @@ httpd_uri_t get_homeassistant_json = {
 //END обработчики для разных ОС, когда они подключаются по wifi к нашей AP
 
 
-
-//bind
-httpd_uri_t uri_get_binding_targets = {
-    .uri       = "/api/binding_targets",
+// загрузка устройств
+httpd_uri_t uri_get_devices_list = {
+    .uri       = "/api/devices/list",
     .method    = HTTP_GET,
-    .handler   = handle_get_devices_api,
+    .handler   = handle_get_devices_list,
     .user_ctx  = NULL
 };
+
+httpd_uri_t uri_get_device_detail = {
+    .uri       = "/api/device/*",  // wildcard
+    .method    = HTTP_GET,
+    .handler   = handle_get_device_detail,
+    .user_ctx  = NULL
+};
+//bind
+/*httpd_uri_t uri_get_binding_targets = {
+    .uri       = "/api/binding_targets",
+    .method    = HTTP_GET,
+    .handler   = handle_get_devices_for_binding_api,
+    .user_ctx  = NULL
+};*/
 
 // === HA REST API ===
 httpd_uri_t uri_ha_devices = {
@@ -2043,17 +2096,19 @@ httpd_uri_t uri_report_config = {
 // === URI для настройки сценариев (правил) ===
 // API для правил
 httpd_uri_t uri_api_get_rules = {
-    .uri       = "/api/rules",
+    .uri       = "/api/rules/load",
     .method    = HTTP_GET,
     .handler   = api_get_rules_handler,
 };
 
+//создать
 httpd_uri_t uri_api_post_rule = {
     .uri       = "/api/rules",
     .method    = HTTP_POST,
     .handler   = api_post_rule_handler,
 };
 
+// обновить
 httpd_uri_t uri_api_put_rule = {
     .uri       = "/api/rules",
     .method    = HTTP_PUT,
@@ -2061,7 +2116,7 @@ httpd_uri_t uri_api_put_rule = {
 };
 
 httpd_uri_t uri_api_delete_rule = {
-    .uri       = "/api/rules/*",  // /api/rules/my_light_rule
+    .uri       = "/api/rules/delete/*",  // /api/rules/my_light_rule
     .method    = HTTP_DELETE,
     .handler   = api_delete_rule_handler,
 };
@@ -2117,14 +2172,15 @@ void start_webserver(void)
         // Только в режиме STA — основной UI
         //if (!s_is_in_ap_only_mode) {
             httpd_register_uri_handler(server_handle, &uri_memory);
-            
+            httpd_register_uri_handler(server_handle, &uri_get_devices_list);
+            httpd_register_uri_handler(server_handle, &uri_get_device_detail);
             httpd_register_uri_handler(server_handle, &uri_ws);
             httpd_register_uri_handler(server_handle, &uri_favicon);
             httpd_register_uri_handler(server_handle, &uri_manifest);
             httpd_register_uri_handler(server_handle, &uri_static_css);
             httpd_register_uri_handler(server_handle, &uri_static_js);
             httpd_register_uri_handler(server_handle, &uri_static_media);
-            httpd_register_uri_handler(server_handle, &uri_get_binding_targets);
+            //httpd_register_uri_handler(server_handle, &uri_get_binding_targets);
             httpd_register_uri_handler(server_handle, &uri_bind);
             httpd_register_uri_handler(server_handle, &uri_report_config);
             httpd_register_uri_handler(server_handle, &get_ssdp_description_xml);

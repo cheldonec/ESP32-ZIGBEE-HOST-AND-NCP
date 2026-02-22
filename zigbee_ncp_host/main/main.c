@@ -37,6 +37,7 @@
 #include "zb_manager_main_config.h"
 #include "ha_mqtt_publisher.h"
 #include "zb_manager_rules.h"
+#include "zbm_dev_base.h"
 static const char *TAG = "main";
 void app_main(void)
 {

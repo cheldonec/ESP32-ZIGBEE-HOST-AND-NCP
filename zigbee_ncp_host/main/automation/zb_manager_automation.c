@@ -175,6 +175,7 @@ esp_err_t zb_automation_send_command(const zb_automation_request_t* req)
 
     switch (cmd->cluster_id) {
         case ESP_ZB_ZCL_CLUSTER_ID_ON_OFF:
+            ESP_LOGI(TAG,"RUN ON/OFF");
             return send_on_off_command(req);
         case ESP_ZB_ZCL_CLUSTER_ID_IDENTIFY:
             return send_identify_command(req);

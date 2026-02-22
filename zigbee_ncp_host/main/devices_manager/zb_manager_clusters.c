@@ -120,7 +120,7 @@ const char* zb_manager_get_attr_name(uint16_t clusterID, uint16_t attr_id) {
 /// @param attr Указатель на структуру атрибута
 /// @param src_addr Адрес источника (может быть NULL)
 /// @param endpoint Номер эндпоинта
-void log_zb_attribute(uint16_t cluster_id, const zb_manager_attr_t *attr, const esp_zb_zcl_addr_t *src_addr, uint8_t endpoint)
+void log_zb_attribute(uint16_t cluster_id, const zb_manager_cmd_report_attr_t *attr, const esp_zb_zcl_addr_t *src_addr, uint8_t endpoint)
 {
     if (!attr) {
         ESP_LOGW(TAG, "log_zb_attribute: attr is NULL");

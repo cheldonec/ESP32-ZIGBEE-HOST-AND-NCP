@@ -100,40 +100,50 @@ const ReportModal = ({
         )}
 
         {reportForm.cluster && (
-          <>
-            <label>Мин. интервал (сек):</label>
-            <input
-              type="number"
-              value={reportForm.min}
-              onChange={(e) =>
-                setReportForm((prev) => ({ ...prev, min: Number(e.target.value) }))
-              }
-              min="1"
-              className="form-input"
-            />
+          <div className="report-fields-grid">
+            <div>
+              <label>Мин. интервал (сек):</label>
+              <input
+                type="number"
+                value={reportForm.min}
+                onChange={(e) =>
+                  setReportForm((prev) => ({ ...prev, min: Number(e.target.value) }))
+                }
+                min="1"
+                className="form-input"
+                placeholder="1"
+              />
+            </div>
 
-            <label>Макс. интервал (сек):</label>
-            <input
-              type="number"
-              value={reportForm.max}
-              onChange={(e) =>
-                setReportForm((prev) => ({ ...prev, max: Number(e.target.value) }))
-              }
-              min="1"
-              className="form-input"
-            />
+            <div>
+              <label>Макс. интервал (сек):</label>
+              <input
+                type="number"
+                value={reportForm.max}
+                onChange={(e) =>
+                  setReportForm((prev) => ({ ...prev, max: Number(e.target.value) }))
+                }
+                min="1"
+                className="form-input"
+                placeholder="300"
+              />
+            </div>
 
-            <label>Изменение для отчёта (опц.):</label>
-            <input
-              type="number"
-              value={reportForm.change}
-              onChange={(e) =>
-                setReportForm((prev) => ({ ...prev, change: Number(e.target.value) }))
-              }
-              min="0"
-              className="form-input"
-            />
-          </>
+            <div>
+              <label>Изменение для отчёта (опц.):</label>
+              <input
+                type="number"
+                value={reportForm.change}
+                onChange={(e) =>
+                  setReportForm((prev) => ({ ...prev, change: Number(e.target.value) }))
+                }
+                min="0"
+                step="any"
+                className="form-input"
+                placeholder="0"
+              />
+            </div>
+          </div>
         )}
 
         <div className="modal-buttons">

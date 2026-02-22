@@ -2,7 +2,7 @@
 #include "zb_manager_devices.h"
 #include "zb_manager_tuya_dp.h"
 #include "zb_manager_ncp_host.h"
-#include "zb_manager_devices_manufactory_table.h"
+//#include "zb_manager_devices_manufactory_table.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -11,6 +11,10 @@
 #include "ha_mqtt_publisher.h"
 #include "esp_err.h"
 #include "esp_check.h"
+#include "zbm_dev_base.h"
+#include "zbm_dev_base_utils.h"
+#include "zbm_dev_polling.h"
+#include "zbm_dev_append_sheduler.h"
 
 static const char *TAG = "ZB_PAIRING_WORKER";
 
@@ -84,7 +88,7 @@ static void StartUpdateDevices(device_appending_sheduler_t* shedule)
                     shedule->appending_controll_timer = NULL;
                 }
                 free(shedule->tuya_magic_read_attr_cmd_param.attr_field);
-                DeviceAppendShedulerArray[shedule->index_in_sheduler_array] = NULL;
+                zbm_DeviceAppendShedulerArray[shedule->index_in_sheduler_array] = NULL;
                 free(shedule);
                 shedule = NULL;
                 return;
@@ -114,12 +118,12 @@ static void zb_pairing_worker_task(void *pvParameters)
             continue;
         }
 
-        device_appending_sheduler_t *sheduler = NULL;
+        //device_appending_sheduler_t *sheduler = NULL;
         device_custom_t *dev_info = NULL;
         zb_manager_cmd_read_attr_resp_message_t *read_resp = NULL;
         zb_manager_active_ep_resp_message_t *ep_resp = NULL;
         //zb_manager_simple_desc_resp_message_t *simple_desc_resp = NULL;
-        zb_manager_node_desc_resp_message_t* node_desc_resp = NULL;
+        //zb_manager_node_desc_resp_message_t* node_desc_resp = NULL;
         delayed_simple_desc_req_t* delayed_simple_desc_req = NULL;
         int64_t start = esp_timer_get_time();
         switch (msg.event_id) {
@@ -133,83 +137,64 @@ static void zb_pairing_worker_task(void *pvParameters)
                 ESP_LOGI(TAG, "ZB_PAIRING_DEVICE_ASSOCIATED_EVENT: %02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x",
                     data->device_addr[7], data->device_addr[6], data->device_addr[5], data->device_addr[4],
                     data->device_addr[3], data->device_addr[2], data->device_addr[1], data->device_addr[0]);
-                // Ищем устройство среди существующих, если не найдено, добавляем, если найдено, обновляем
-                bool device_found = false;
+                // Ищем устройство среди существующих, если не найдено, удаляем
+                
                 device_custom_t* device = NULL;
-                if (xSemaphoreTake(g_device_array_mutex, pdMS_TO_TICKS(ZB_DEVICE_MUTEX_TIMEOUT_LONG_MS)) == pdTRUE) {
-                    for (int i = 0; i < RemoteDevicesCount; i++)
+                device = zbm_dev_base_find_device_by_long_safe(&data->device_addr);
+                esp_err_t delete_res = ESP_OK;
+                if(device)
+                {
+                    ESP_LOGW(TAG, "ZB_PAIRING_DEVICE_ASSOCIATED_EVENT  устройство найдено по ieee удаляем старую запись");
+                    esp_err_t delete_res = zbm_dev_base_dev_delete_safe(device);
+                }
+                if (delete_res != ESP_OK)
+                {
+                    ESP_LOGW(TAG, "ZB_PAIRING_DEVICE_ASSOCIATED_EVENT  устройство найдено по ieee но удалить старую запись не удалось");
+                }
+                // создаём временное устройство внутри шедулера для процесса сопряжения
+                ESP_LOGI (TAG, "ZB_PAIRING_DEVICE_ASSOCIATED_EVENT: создаём временное устройство в шедулере");
+                // готовим Шедулер для добавления устройства
+                device_appending_sheduler_t* appending_ctx = calloc(1, sizeof(device_appending_sheduler_t));
+                if (appending_ctx == NULL)
+                {
+                    ESP_LOGE(TAG, "ZB_PAIRING_DEVICE_ASSOCIATED_EVENT Failed to create appending_ctx");
+                    break;
+                }
+                    
+                appending_ctx->index_in_sheduler_array = 0xff;
+                        
+                // устанавливаем индекс задачи (ищем свободный индекс)
+                for(int i = 0; i < zbm_DeviceAppendShedulerCount; i++)
+                {
+                    if (zbm_DeviceAppendShedulerArray[i] == NULL) 
                     {
-                        device = RemoteDevicesArray[i];
-                        if (device != NULL)
-                        {
-                            if (ieee_addr_compare(&device->ieee_addr, &data->device_addr) == 0)
-                            {
-                                device_found = true;
-                                //device->is_online = false;
-                                device->is_in_build_status = 1;
-                                ESP_LOGW(TAG, "ZB_PAIRING_DEVICE_ASSOCIATED_EVENT  device->build_status выставлен в 1 (режим добавления)");
-                                if (device->server_BasicClusterObj != NULL) {
-                                    free(device->server_BasicClusterObj);
-                                    device->server_BasicClusterObj = NULL;
-                                }
-                                if (device->server_PowerConfigurationClusterObj != NULL) {
-                                    free(device->server_PowerConfigurationClusterObj);
-                                    device->server_PowerConfigurationClusterObj = NULL;
-                                }
-                                if (device->endpoints_count > 0) {
-                                    for (int j = 0; j < device->endpoints_count; j++)
-                                    {
-                                        RemoteDeviceEndpointDelete(device->endpoints_array[j]);
-                                    }
-                                    device->endpoints_count = 0;
-                                    free (device->endpoints_array);
-                                    device->endpoints_array = NULL;
-                                }
-                                break;
-                            }
-                        }
+                        zbm_DeviceAppendShedulerArray[i] = appending_ctx;
+                        appending_ctx->index_in_sheduler_array = i;
+                        break;
                     }
-                    if (device_found == false)
-                    {
-                        ESP_LOGI (TAG, "ZB_PAIRING_DEVICE_ASSOCIATED_EVENT: device not found, adding");
-                        uint8_t free_index = REMOTE_DEVICES_COUNT + 1; // несуществующий индекс
-                        for(int i = 0; i < REMOTE_DEVICES_COUNT; i++)
-                        {  
-                            if (RemoteDevicesArray[i] == NULL)
-                            {
-                                free_index = i;
-                                break;
-                            }
-                        }
-                        if (free_index < REMOTE_DEVICES_COUNT + 1)
-                        {
-                            RemoteDevicesArray[free_index] = RemoteDeviceCreate(data->device_addr);
-
-                            device = (device_custom_t*)RemoteDevicesArray[free_index];
-                            if (device != NULL)
-                            {
-                                device->is_in_build_status = 1;
-                                device->endpoints_count = 0;
-                                device->index_in_array = free_index; 
-                                memset(device->friendly_name,0,sizeof(device->friendly_name));
-                                sprintf(device->friendly_name, "Устройство [ %d ]", free_index + 1);
-                                ESP_LOGI(TAG, "ZB_PAIRING_DEVICE_ASSOCIATED_EVENT Создано пустое устройство под индексом %d (mac: %02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x)", free_index, device->ieee_addr[7], 
-                                    device->ieee_addr[6], device->ieee_addr[5], device->ieee_addr[4],
-                                    device->ieee_addr[3], device->ieee_addr[2], device->ieee_addr[1], device->ieee_addr[0]);
-                            }else {
-                                ESP_LOGE(TAG, "ZB_PAIRING_DEVICE_ASSOCIATED_EVENT Failed to create device");
-                            }
-                        }else {
-                                ESP_LOGE(TAG, "ZB_PAIRING_DEVICE_ASSOCIATED_EVENT Failed to find free index");
-                        }
-                    }
-                    DEVICE_ARRAY_UNLOCK();
-                    } else {
-                                ESP_LOGE(TAG, "CRITICAL: Failed to take device mutex in ESP_ZB_NWK_SIGNAL_DEVICE_ASSOCIATED! Device addition may fail.");
-                                break;
-                            }
-
-            break;
+                }
+                if(appending_ctx->index_in_sheduler_array == 0xff) 
+                {
+                    ESP_LOGW(TAG, "ZB_PAIRING_DEVICE_ASSOCIATED_EVENT: DeviceAppendShedulerArray is full!!!");
+                    free(appending_ctx);
+                    appending_ctx = NULL;
+                    break;
+                }
+                //создаём временное устройство
+                device = zbm_dev_base_create_new_device_obj(data->device_addr);
+                if (device == NULL)
+                {
+                    ESP_LOGE(TAG, "ZB_PAIRING_DEVICE_ASSOCIATED_EVENT Failed to create device");
+                    break;
+                }
+                device->is_in_build_status = 1;
+                device->endpoints_count = 0;
+                ESP_LOGI(TAG, "ZB_PAIRING_DEVICE_ASSOCIATED_EVENT Создано пустое устройство в Шедулере (mac: %02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x)",device->ieee_addr[7], 
+                        device->ieee_addr[6], device->ieee_addr[5], device->ieee_addr[4],
+                        device->ieee_addr[3], device->ieee_addr[2], device->ieee_addr[1], device->ieee_addr[0]);
+                appending_ctx->appending_device = device;
+                appending_ctx->tuya_magic_try_count = 1;
+                break;   
             }
             
             case ZB_PAIRING_DEVICE_UPDATE_EVENT:{
@@ -219,96 +204,41 @@ static void zb_pairing_worker_task(void *pvParameters)
                     ESP_LOGW(TAG, "ZB_PAIRING_DEVICE_UPDATE_EVENT: data is NULL");
                     break;
                 }
-                ESP_LOGI(TAG, "ZB_PAIRING_DEVICE_UPDATE_EVENT: 0x%04x re-joined the network", data->params.short_addr);
-                // если устройство в статусе добавления is_in_build_status == 1, то продолжаем процесс добавления
-                // если is_in_build_status == 2, то обновляем онлайн статус
+                
+                // ищем в массиве Шедулера, если находим, то продолжаем добавление иначе просто сообщаем, что устройство на связи
 
-                bool device_found_by_short = false;
-                bool device_found_by_ieee = false;
-                device_custom_t* device = NULL;
-                if (xSemaphoreTake(g_device_array_mutex, pdMS_TO_TICKS(ZB_DEVICE_MUTEX_TIMEOUT_LONG_MS)) == pdTRUE) {
-                    for (int i = 0; i < RemoteDevicesCount; i++)
+                //1. ищем в шедулере
+                device_appending_sheduler_t* appending_ctx = NULL;
+                for(int i = 0; i < zbm_DeviceAppendShedulerCount; i++)
+                {
+                    if (zbm_DeviceAppendShedulerArray[i] == NULL) continue;
+                    if (zbm_DeviceAppendShedulerArray[i]->appending_device == NULL) continue;
+                    if (ieee_addr_compare(&zbm_DeviceAppendShedulerArray[i]->appending_device->ieee_addr, &data->params.long_addr) == 0)
                     {
-                        device = (device_custom_t*)RemoteDevicesArray[i];
-                        if (device != NULL)
-                        {
-                            if (device->short_addr == data->params.short_addr)
-                            {
-                                device_found_by_short = true;
-                                device->is_online = true;
-                                ESP_LOGW(TAG, "ZB_PAIRING_DEVICE_UPDATE_EVENT  device_found_by_short = true device_short_in_data 0x%04x, device_short 0x%04x", data->params.short_addr, device->short_addr);
-                                break; // выходим из for (int i = 0; i < RemoteDevicesCount; i++)
-                            }
-                        }
-                    }
-                    // если устройство не найдено по короткому адресу, ищем по ieee
-                    if (device_found_by_short == false)
-                    {
-                        for (int i = 0; i < RemoteDevicesCount; i++)
-                        {
-                            device = (device_custom_t*)RemoteDevicesArray[i];
-                            if (device != NULL)
-                            {
-                                if (ieee_addr_compare(&device->ieee_addr, &data->params.long_addr) == 0)
-                                {
-                                    device_found_by_ieee = true;
-                                    device->short_addr = data->params.short_addr;
-                                    break; // выходим из for (int i = 0; i < RemoteDevicesCount; i++) 
-                                }
-                            }
-                        }
-                    }
-
-                    DEVICE_ARRAY_UNLOCK();   
-                } else
-                    {
-                        ESP_LOGE(TAG, "CRITICAL: Failed to take device mutex in ZB_PAIRING_DEVICE_UPDATE_EVENT! Device addition may fail.");
+                        appending_ctx = zbm_DeviceAppendShedulerArray[i];
+                        appending_ctx->index_in_sheduler_array = i;
+                        appending_ctx->appending_device->short_addr = data->params.short_addr;
+                        appending_ctx->appending_device->parent_short_addr = data->params.parent_short;
                         break;
-                    }
-                // обновляем активность, значит устройство просто вернулось в сеть
-                if ((device_found_by_short == true)&&(device != NULL))
-                {
-                    zb_manager_update_device_activity(device->short_addr, 10);
-                    break; // выходим из switch (msg.event_id)
+                    }else ESP_LOGW(TAG,"(ieee_addr_compare(&zbm_DeviceAppendShedulerArray[i]->appending_device->ieee_addr, &data->params.long_addr) != 0)");
+                    
                 }
-                // если по короткому не найдено, но найдено по ieee, значит оно создалось или начало обновляться в ZB_PAIRING_DEVICE_ASSOCIATED_EVENT
-                // требуется полный опрос
-                if ((device_found_by_ieee == true)&&(device != NULL))
+                //2. Если не нашли
+                if (appending_ctx == NULL)
                 {
-                    //проверяем ещё раз build_status
-                    if (device->is_in_build_status == 1)
+                    device_custom_t* device = NULL;
+                    device = zbm_dev_base_find_device_by_short_safe (data->params.short_addr);
+                    if (device != NULL)
                     {
-                        // готовим Шедулер для добавления устройства
-                        device_appending_sheduler_t* appending_ctx = calloc(1, sizeof(device_appending_sheduler_t));
-                        if (appending_ctx != NULL)
-                        {
-                            appending_ctx->index_in_sheduler_array = 0xff;
-                            appending_ctx->appending_device = device;
-                            // устанавливаем индекс задачи
-                            for(int i = 0; i < DeviceAppendShedulerCount; i++)
-                            {
-                                if (DeviceAppendShedulerArray[i] == NULL) 
-                                {
-                                    DeviceAppendShedulerArray[i] = appending_ctx;
-                                    appending_ctx->index_in_sheduler_array = i;
-                                    break;
-                                }
-                            }
-                            if(appending_ctx->index_in_sheduler_array == 0xff) 
-                            {
-                                ESP_LOGW(TAG, "ZB_PAIRING_DEVICE_UPDATE_EVENT DeviceAppendShedulerArray is full!!!");
-                                free(appending_ctx);
-                                appending_ctx = NULL;
-                                break;
-                            }
-                            appending_ctx->tuya_magic_try_count = 1;
-                            StartUpdateDevices(appending_ctx);
-                            break;
-                        }
+                        ESP_LOGI(TAG, "ZB_PAIRING_DEVICE_UPDATE_EVENT: 0x%04x re-joined the network and parent is 0x%04x ", data->params.short_addr, data->params.parent_short);
+                        device->parent_short_addr = data->params.parent_short;
+                        zb_manager_update_device_activity(device->short_addr, 10);
                     }
+                    break;
                 }
-            
-            break;
+                //3. Если нашли, значит продолжаем добавление
+                StartUpdateDevices(appending_ctx);
+                break;
             }
 
             case ZB_PAIRING_DEVICE_ANNCE_EVENT:{
@@ -321,112 +251,133 @@ static void zb_pairing_worker_task(void *pvParameters)
             break;
             }
 
-           case ZB_PAIRING_ATTR_READ_RESP: {
+        case ZB_PAIRING_ATTR_READ_RESP: {
             uint8_t *input_copy = (uint8_t *)msg.event_data;
             size_t total_len = msg.data_size;
 
-            if (total_len < sizeof(esp_zb_zcl_cmd_info_t) + 1) {
-                ESP_LOGE(TAG, "Invalid data size in ZB_PAIRING_ATTR_READ_RESP: %zu", total_len);
-                //free(input_copy);
+            if (!input_copy || total_len < sizeof(esp_zb_zcl_cmd_info_t) + 1) {
+                ESP_LOGE(TAG, "❌ Invalid input data in ZB_ACTION_ATTR_READ_RESP");
                 break;
             }
 
-            ESP_LOGW(TAG, "zb_manager_read_attr_response_fn from EVENT ATTR_READ_RESP from short 0x%04x and tsn %d",
-                    ((esp_zb_zcl_cmd_info_t*)input_copy)->src_address.u.short_addr,
-                    ((esp_zb_zcl_cmd_info_t*)input_copy)->header.tsn);
+            ESP_LOGI(TAG, "ZB_ACTION_ATTR_READ_RESP: processing raw buffer of size %zu", total_len);
+            ESP_LOG_BUFFER_HEX_LEVEL("NCP RAW", input_copy, total_len, ESP_LOG_INFO);
 
-            // === 🔧 Парсим как в zb_manager_read_attr_resp_fn_old ===
             zb_manager_cmd_read_attr_resp_message_t* read_resp = NULL;
             read_resp = calloc(1, sizeof(zb_manager_cmd_read_attr_resp_message_t));
             if (!read_resp) {
-                ESP_LOGE(TAG, "Failed to allocate read_resp in pairing");
-                //free(input_copy);
+                ESP_LOGE(TAG, "❌ Failed to allocate read_resp");
                 break;
             }
 
+            // Копируем info
             esp_zb_zcl_cmd_info_t* cmd_info = (esp_zb_zcl_cmd_info_t*)input_copy;
             memcpy(&read_resp->info, cmd_info, sizeof(esp_zb_zcl_cmd_info_t));
 
-            uint8_t attr_count = *(uint8_t*)(input_copy + sizeof(esp_zb_zcl_cmd_info_t));
+            // Читаем attr_count
+            uint8_t attr_count = input_copy[sizeof(esp_zb_zcl_cmd_info_t)];
             read_resp->attr_count = attr_count;
-            ESP_LOGW(TAG, "Attribute count: %d", attr_count);
+            ESP_LOGW(TAG, "Attribute count: %u", attr_count);
 
-            read_resp->attr_arr = calloc(attr_count, sizeof(zb_manager_attr_t));
-            if (!read_resp->attr_arr) {
-                ESP_LOGE(TAG, "Failed to allocate attr_arr in pairing");
-                free(read_resp);
-                //free(input_copy);
-                break;
+            if (attr_count == 0) {
+                read_resp->attr_arr = NULL;
+            } else {
+                read_resp->attr_arr = calloc(attr_count, sizeof(zb_manager_attr_t));
+                if (!read_resp->attr_arr) {
+                    ESP_LOGE(TAG, "❌ Failed to allocate attr_arr for %u attributes", attr_count);
+                    free(read_resp);
+                    break;
+                }
             }
 
-            uint8_t* pointer = (uint8_t*)(input_copy + sizeof(esp_zb_zcl_cmd_info_t) + sizeof(uint8_t));
-            bool alloc_failed = false;
+            // Указатель на начало данных атрибутов
+            uint8_t *pointer = input_copy + sizeof(esp_zb_zcl_cmd_info_t) + 1; // пропускаем info + attr_count
+
+            bool parse_failed = false;
 
             for (uint8_t i = 0; i < attr_count; i++) {
-                zb_manager_attr_t* attr = &read_resp->attr_arr[i];
+                zb_manager_read_resp_attr_t* attr = &read_resp->attr_arr[i];
 
-                attr->attr_id  = *((uint16_t*)pointer);
-                pointer += sizeof(uint16_t);
-                attr->attr_type = *((esp_zb_zcl_attr_type_t*)pointer);
-                pointer += sizeof(esp_zb_zcl_attr_type_t);
-                attr->attr_len = *(uint8_t*)pointer;
-                pointer += sizeof(uint8_t);
+                // Минимум: status(1) + id(2) + type(1) + len(1) = 5 байт
+                if (pointer + 5 > input_copy + total_len) {
+                    ESP_LOGE(TAG, "❌ Buffer too short for attribute header (index=%u)", i);
+                    parse_failed = true;
+                    break;
+                }
 
+                // === ЧИТАЕМ ПОРЯДОК ПО ЗАПИСИ В NCP ===
+                attr->status    = *pointer++;                    // status
+                attr->attr_id   = *(uint16_t*)pointer; pointer += 2;
+                attr->attr_type = *pointer++;                    // attr_type
+                attr->attr_len  = *pointer++;                    // data_size
+
+                ESP_LOGI(TAG, "Parsing attr[%u]: id=0x%04x, status=0x%02x, type=0x%02x, len=%u",
+                        i, attr->attr_id, attr->status, attr->attr_type, attr->attr_len);
+
+                if (attr->status != ESP_ZB_ZCL_STATUS_SUCCESS) {
+                    ESP_LOGW(TAG, "Attr 0x%04x read failed with status: 0x%02x", attr->attr_id, attr->status);
+                    attr->attr_value = NULL;
+                    continue; // не читаем значение
+                }
+
+                // Проверяем, хватает ли места для значения
                 if (attr->attr_len > 0) {
-                    attr->attr_value = calloc(1, attr->attr_len);
-                    if (!attr->attr_value) {
-                        ESP_LOGE(TAG, "Failed to allocate attr_value for attr_id=0x%04x", attr->attr_id);
-                        alloc_failed = true;
+                    if (pointer + attr->attr_len > input_copy + total_len) {
+                        ESP_LOGE(TAG, "❌ Attr value overflows buffer: id=0x%04x, len=%u", attr->attr_id, attr->attr_len);
+                        parse_failed = true;
                         break;
                     }
+
+                    attr->attr_value = malloc(attr->attr_len);
+                    if (!attr->attr_value) {
+                        ESP_LOGE(TAG, "❌ Failed to allocate %u bytes for attr_value (id=0x%04x)", attr->attr_len, attr->attr_id);
+                        parse_failed = true;
+                        break;
+                    }
+
                     memcpy(attr->attr_value, pointer, attr->attr_len);
                     pointer += attr->attr_len;
+
+                    ESP_LOG_BUFFER_HEX_LEVEL("Attr Value", attr->attr_value, attr->attr_len, ESP_LOG_INFO);
                 } else {
                     attr->attr_value = NULL;
                 }
             }
 
-            if (alloc_failed) {
+            if (parse_failed) {
+                ESP_LOGE(TAG, "Failed to parse attribute values → cleaning up");
                 zb_manager_free_read_attr_resp_attr_array(read_resp);
-                free(read_resp);
-                //free(input_copy);
+                read_resp = NULL;
                 break;
             }
 
+            // Проверка адреса
             uint16_t short_addr = read_resp->info.src_address.u.short_addr;
-            device_custom_t *dev_info = zb_manager_find_device_by_short(short_addr);
-            if (!dev_info) {
-                ESP_LOGW(TAG, "ATTR_READ_RESP: device 0x%04x not found", short_addr);
+            if (short_addr == 0xFFFF) {
+                ESP_LOGW(TAG, "❌ Invalid short_addr: 0xFFFF in read response");
                 zb_manager_free_read_attr_resp_attr_array(read_resp);
-                free(read_resp);
-                //free(input_copy);
-                break;
-            }
-
-            //zb_manager_update_device_activity(short_addr, 10);
-
-            // Логируем атрибуты
-            if (read_resp->attr_count > 0) {
-                for (int i = 0; i < read_resp->attr_count; i++) {
-                    zb_manager_attr_t attr = read_resp->attr_arr[i];
-                    ESP_LOGW(TAG, "zb_manager_read_attr_response_fn attr_id 0x%04x attr_type 0x%02x attr_len %d", 
-                            attr.attr_id, attr.attr_type, attr.attr_len);
-                }
-            }
-
-            if (dev_info->is_in_build_status != 1) {
-                ESP_LOGW(TAG, "Device 0x%04x: is_in_build_status != 1", short_addr);
-                zb_manager_free_read_attr_resp_attr_array(read_resp);
-                free(read_resp);
-                //free(input_copy);
+                read_resp = NULL;
                 break;
             }
 
             // Поиск sheduler
             device_appending_sheduler_t *sheduler = NULL;
-            for (int i = 0; i < DeviceAppendShedulerCount; i++) {
-                if (DeviceAppendShedulerArray[i] && DeviceAppendShedulerArray[i]->appending_device == dev_info) {
-                    sheduler = DeviceAppendShedulerArray[i];
+            if (zbm_DeviceAppendShedulerArray == NULL)
+            {
+                ESP_LOGW(TAG,"DeviceAppendShedulerArray == NULL");
+            }
+            for (int i = 0; i < zbm_DeviceAppendShedulerCount; i++) {
+                if (zbm_DeviceAppendShedulerArray[i] == NULL)
+                {
+                    ESP_LOGW(TAG,"DeviceAppendShedulerArray[i] == NULL");
+                }
+                if (zbm_DeviceAppendShedulerArray[i]->appending_device == NULL)
+                {
+                    ESP_LOGW(TAG,"DeviceAppendShedulerArray[i]->appending_device == NULL");
+                }
+                if (zbm_DeviceAppendShedulerArray[i]->appending_device->short_addr == cmd_info->src_address.u.short_addr)
+                {
+                    sheduler = zbm_DeviceAppendShedulerArray[i];
                     break;
                 }
             }
@@ -434,516 +385,536 @@ static void zb_pairing_worker_task(void *pvParameters)
             if (!sheduler) {
                 ESP_LOGE(TAG, "Sheduler not found");
                 zb_manager_free_read_attr_resp_attr_array(read_resp);
-                free(read_resp);
+                read_resp = NULL;
+                //free(input_copy);
+                break;
+            }
+
+            device_custom_t* device = NULL;
+            device = sheduler->appending_device;
+            if (device == NULL)
+            {
+                ESP_LOGE(TAG, "sheduler->appending_device not found");
+                zb_manager_free_read_attr_resp_attr_array(read_resp);
+                read_resp = NULL;
                 //free(input_copy);
                 break;
             }
 
             if (sheduler && sheduler->tuya_magic_status == 1) {
                 ESP_LOGW(TAG, "TUYA_MAGIC response with TSN %d", read_resp->info.header.tsn);
-                ESP_LOGW(TAG, "Device found in RemoteDevList with status is_in_build_status!!! (short: 0x%04x)", dev_info->short_addr);
+                ESP_LOGW(TAG, "Device found in DeviceAppendShedulerArray !!! (short: 0x%04x)", device->short_addr);
                 ESP_LOGW(TAG, "Продолжаем добавление устройства — переходим к active_ep_req");
 
-                //ESP_ERROR_CHECK(esp_timer_restart(sheduler->appending_controll_timer, 10000 * 1000));
-
-                if (xSemaphoreTake(g_device_array_mutex, pdMS_TO_TICKS(ZB_DEVICE_MUTEX_TIMEOUT_LONG_MS)) == pdTRUE) {
-                    if (dev_info->server_BasicClusterObj == NULL) {
-                        dev_info->server_BasicClusterObj = calloc(1, sizeof(zigbee_manager_basic_cluster_t));
-                        if (dev_info->server_BasicClusterObj) {
+                // PAIRING_READ_RESP может прислать ответ только от Basic кластера, это запрорс TuyaMagic
+                if (device->server_BasicClusterObj == NULL) {
+                        device->server_BasicClusterObj = calloc(1, sizeof(zigbee_manager_basic_cluster_t));
+                        if (device->server_BasicClusterObj) {
                             zigbee_manager_basic_cluster_t cl = ZIGBEE_BASIC_CLUSTER_DEFAULT_INIT();
-                            memcpy(dev_info->server_BasicClusterObj, &cl, sizeof(zigbee_manager_basic_cluster_t));
+                            memcpy(device->server_BasicClusterObj, &cl, sizeof(zigbee_manager_basic_cluster_t));
                             ESP_LOGI(TAG, "Basic Cluster added to device");
-                        }
-                    }
 
-                    for (int i = 0; i < read_resp->attr_count; i++) {
-                        zb_manager_basic_cluster_update_attribute(dev_info->server_BasicClusterObj,
+                            for (int i = 0; i < read_resp->attr_count; i++) {
+                                zb_manager_basic_cluster_update_attribute(device->server_BasicClusterObj,
                                                                 read_resp->attr_arr[i].attr_id,
                                                                 read_resp->attr_arr[i].attr_value);
-                        ESP_LOGI(TAG, "Basic Cluster attribute 0x%04x updated", read_resp->attr_arr[i].attr_id);
-                    }
+                                ESP_LOGI(TAG, "Basic Cluster attribute 0x%04x updated", read_resp->attr_arr[i].attr_id);
+                            }
 
-                    const char *text = get_power_source_string(dev_info->server_BasicClusterObj->power_source);
-                    ESP_LOGI(TAG, "Power Source: %u (%s)", dev_info->server_BasicClusterObj->power_source, text);                  
+                            const char *text = get_power_source_string(device->server_BasicClusterObj->power_source);
+                            ESP_LOGI(TAG, "Power Source: %u (%s)", device->server_BasicClusterObj->power_source, text);
+                        }
                 }
-                DEVICE_ARRAY_UNLOCK();
                 sheduler->tuya_magic_status = 2;
-                    sheduler->active_ep_req_status = 1;
-                    sheduler->active_ep_req.addr_of_interest = dev_info->short_addr;
-                    //ESP_ERROR_CHECK(esp_timer_restart(sheduler->appending_controll_timer, 10000 * 1000));
-                    if(zb_manager_zdo_active_ep_req(&sheduler->active_ep_req, NULL, sheduler)==ESP_OK){
+                sheduler->active_ep_req_status = 1;
+                sheduler->active_ep_req.addr_of_interest = device->short_addr;
+                // Отправляем ActiveEp
+                if(zb_manager_zdo_active_ep_req(&sheduler->active_ep_req, NULL, sheduler)==ESP_OK){
                         ESP_LOGI(TAG, "ZDO_ACTIVE_EP_REQ sent");
-                    }
-            }else {
-                ESP_LOGW(TAG, "MUTEX UNHAVAILIBLE line 293");
+                }
+
+                zb_manager_free_read_attr_resp_attr_array(read_resp);
+                read_resp = NULL;
+                break;
             }
-
-            // Освобождаем
-            zb_manager_free_read_attr_resp_attr_array(read_resp);
-            free(read_resp);
-            //free(input_copy);  // ← парный free
-
             break;
         }
+        case ZB_PAIRING_ATTR_REPORT_EVENT: {
+            ESP_LOGI(TAG, "✅ ZB_PAIRING_ATTR_REPORT_EVENT: processing pairing");
+            uint8_t *raw = (uint8_t *)msg.event_data;
+            size_t len = msg.data_size;
+            typedef struct {
+                esp_zb_zcl_status_t status;
+                esp_zb_zcl_addr_t src_address;
+                uint8_t src_endpoint;
+                uint8_t dst_endpoint;
+                uint16_t cluster;
+            } ESP_ZNSP_ZB_PACKED_STRUCT esp_ncp_zb_report_attr_t;
 
-            case ZB_PAIRING_ACTIVE_EP_RESP: {
-                ESP_LOGI(TAG, "✅ ZB_PAIRING_ACTIVE_EP_RESP: processing pairing");
-                ep_resp = (zb_manager_active_ep_resp_message_t *)msg.event_data;
+            typedef struct {
+                uint16_t id;
+                uint8_t  type;
+                uint8_t  size;
+            } ESP_ZNSP_ZB_PACKED_STRUCT esp_ncp_zb_attr_data_t;
 
-                if (ep_resp->status == ESP_ZB_ZDP_STATUS_SUCCESS && ep_resp->user_ctx) {
-                    sheduler = (device_appending_sheduler_t *)ep_resp->user_ctx;
-                    ESP_LOGI(TAG, "ACTIVE_EP_RESP: sheduler=%p, appending_device=%p", sheduler, sheduler->appending_device);
-                    if (sheduler->appending_device->is_in_build_status == 1) {
-                        sheduler->active_ep_req_status = 2;
-                        //ESP_ERROR_CHECK(esp_timer_restart(sheduler->appending_controll_timer, 10000 * 1000));
+            ESP_LOGI(TAG, "✅ ATTR_REPORT_EVENT: processing, len=%u", len);
 
-                        // Запрос node descriptor отправляем сразу
-                        uint16_t node_desc_par = sheduler->appending_device->short_addr;
-                        ESP_LOGI(TAG, "📤 Queuing NODE_DESC event with ID=%d for device_short 0x%04x", ZB_ACTION_DELAYED_NODE_DESC_REQ, sheduler->appending_device->short_addr);
-                        //eventLoopPost(ZB_HANDLER_EVENTS, DELAYED_NODE_DESC_REQ_LOCAL, short_addr_for_node_req, sizeof(uint16_t), portMAX_DELAY);
-                        //eventLoopPost(ZB_HANDLER_EVENTS, DELAYED_NODE_DESC_REQ_LOCAL, &sheduler->appending_device->short_addr, sizeof(uint16_t), portMAX_DELAY);
+            if (len < sizeof(esp_ncp_zb_report_attr_t) + sizeof(esp_ncp_zb_attr_data_t)) {
+                ESP_LOGE(TAG, "ATTR_REPORT: invalid length %u", len);
+                break;
+            }
+            
+            esp_ncp_zb_report_attr_t *report_attr = (esp_ncp_zb_report_attr_t *)raw;
+            esp_ncp_zb_attr_data_t *attr_data = (esp_ncp_zb_attr_data_t *)(raw + sizeof(*report_attr));
 
-                        if (zb_manager_post_to_pairing_worker(ZB_PAIRING_DELAYED_NODE_DESC_REQ, &node_desc_par, sizeof(uint16_t)) == true)
+            // Проверка типа атрибута
+            if (attr_data->type > 0xFF) {
+                ESP_LOGE(TAG, "Invalid attr_type: 0x%04x", attr_data->type);
+                break;
+            }
+            zb_manager_cmd_report_attr_resp_message_t *rep = calloc(1,sizeof(zb_manager_cmd_report_attr_resp_message_t));
+            if (!rep) {
+                ESP_LOGE(TAG, "Failed to calloc rep");
+                break;
+            }
+            memset(rep, 0, sizeof(zb_manager_cmd_report_attr_resp_message_t));
+
+            rep->status = report_attr->status;
+            if (rep->status != ESP_ZB_ZCL_STATUS_SUCCESS) {
+                ESP_LOGW(TAG, "ATTR_REPORT_EVENT: status 0x%02x", rep->status);
+                free(rep);
+                rep = NULL;
+            }
+            memcpy(&rep->src_address, &report_attr->src_address, sizeof(esp_zb_zcl_addr_t));
+            rep->src_endpoint = report_attr->src_endpoint;
+            rep->dst_endpoint = report_attr->dst_endpoint;
+            rep->cluster = report_attr->cluster;
+            rep->attr.attr_id = attr_data->id;
+            rep->attr.attr_type = attr_data->type;
+            rep->attr.attr_len = attr_data->size;
+
+            const uint8_t *value_src = raw + sizeof(*report_attr) + sizeof(*attr_data);
+            const uint8_t *buffer_end = raw + len;
+            if(rep->attr.attr_len > 0)
+            {
+                rep->attr.attr_value = calloc(1,rep->attr.attr_len);
+                memcpy(rep->attr.attr_value, value_src, rep->attr.attr_len);
+            }
+            // Логируем
+            ESP_LOGI(TAG, "📊 ATTR_REPORT: short=0x%04x, ep=%d, cluster=0x%04x, attr_id=0x%04x, type=0x%02x, len=%d",
+                    rep->src_address.u.short_addr,
+                    rep->src_endpoint,
+                    rep->cluster,
+                    rep->attr.attr_id,
+                    rep->attr.attr_type,
+                    rep->attr.attr_len);
+
+            if (rep->attr.attr_value && rep->attr.attr_len > 0) {
+                ESP_LOG_BUFFER_HEX_LEVEL("Attr Value", rep->attr.attr_value, rep->attr.attr_len, ESP_LOG_INFO);
+            }
+
+            //rep заполнен, можно отправлять в update модуль
+            zb_manager_free_report_attr_resp(rep);
+            rep = NULL;
+            break;
+        }
+        case ZB_PAIRING_ACTIVE_EP_RESP: {
+            ESP_LOGI(TAG, "✅ ZB_PAIRING_ACTIVE_EP_RESP: processing pairing");
+            ep_resp = (zb_manager_active_ep_resp_message_t *)msg.event_data;
+            if (ep_resp->status == ESP_ZB_ZDP_STATUS_SUCCESS && ep_resp->user_ctx) {
+                device_appending_sheduler_t *sheduler = NULL;
+                sheduler = (device_appending_sheduler_t *)ep_resp->user_ctx;
+                ESP_LOGI(TAG, "ACTIVE_EP_RESP: sheduler=%p, appending_device=%p", sheduler, sheduler->appending_device);
+                if(!sheduler)
+                {
+                    break;
+                }
+
+                device_custom_t* device = NULL;
+                device = sheduler->appending_device;
+                if (!device)
+                {
+                    break;
+                }
+
+                sheduler->active_ep_req_status = 2;
+                // Запрос node descriptor отправляем сразу
+                uint16_t node_desc_par = device->short_addr;
+                ESP_LOGI(TAG, "📤 Queuing NODE_DESC event with ID=%d for device_short 0x%04x", ZB_ACTION_DELAYED_NODE_DESC_REQ, device->short_addr);
+                if (zb_manager_post_to_pairing_worker(ZB_PAIRING_DELAYED_NODE_DESC_REQ, &node_desc_par, sizeof(uint16_t)) == true)
+                {
+                    ESP_LOGI(TAG, "✅ ZB_ACTION_DELAYED_NODE_DESC_REQ Posted to pairing worker");
+                    //ESP_ERROR_CHECK(esp_timer_restart(sheduler->appending_controll_timer, 10000 * 1000));
+                } else {
+                        ESP_LOGE(TAG, "❌ Failed to post ZB_ACTION_DELAYED_NODE_DESC_REQ to pairing worker");
+                }
+
+                // готовим simple_desc_req
+                sheduler->simple_desc_req_count = ep_resp->ep_count;
+                sheduler->simple_desc_req_list = calloc(sheduler->simple_desc_req_count, sizeof(local_esp_zb_zdo_simple_desc_req_param_t));
+                sheduler->simple_desc_req_simple_desc_req_list_status = calloc(sheduler->simple_desc_req_count, sizeof(uint8_t));
+
+                device->endpoints_count = ep_resp->ep_count; // ep добавляем все!!!
+                device->endpoints_array = calloc(device->endpoints_count, sizeof(endpoint_custom_t*));
+
+                for (int i = 0; i < ep_resp->ep_count; i++) {
+                    device->endpoints_array[i] = RemoteDeviceEndpointCreate(ep_resp->ep_list[i]);   
+                    // заполняем шедулер кроме epid = 242 (0xf2), для неё сразу статус выстявляем 2
+                    if (ep_resp->ep_list[i] != 0xf2) {
+                        sheduler->simple_desc_req_list[i].addr_of_interest = device->short_addr;
+                        sheduler->simple_desc_req_list[i].endpoint = ep_resp->ep_list[i];
+                        sheduler->simple_desc_req_simple_desc_req_list_status[i] = 1;
+                        delayed_simple_desc_req_t delayed_simple_desc_req;
+                        delayed_simple_desc_req.short_addr = sheduler->simple_desc_req_list[i].addr_of_interest;
+                        delayed_simple_desc_req.src_endpoint = sheduler->simple_desc_req_list[i].endpoint;
+                        device_appending_sheduler_t * sheduler_p_copy;
+                        sheduler_p_copy = sheduler;
+                        delayed_simple_desc_req.ctx = sheduler_p_copy;
+                        delayed_simple_desc_req.user_cb = NULL;
+                        if (zb_manager_post_to_pairing_worker(ZB_PAIRING_DELAYED_SIMPLE_DESC_REQ, &delayed_simple_desc_req, sizeof(delayed_simple_desc_req_t)) == true)
                         {
-                            ESP_LOGI(TAG, "✅ ZB_ACTION_DELAYED_NODE_DESC_REQ Posted to pairing worker");
+                            ESP_LOGI(TAG, "✅ ZB_PAIRING_DELAYED_SIMPLE_DESC_REQ Posted to pairing worker for short 0x%04x ep 0x%2x ", delayed_simple_desc_req.short_addr, delayed_simple_desc_req.src_endpoint);
                             //ESP_ERROR_CHECK(esp_timer_restart(sheduler->appending_controll_timer, 10000 * 1000));
                         } else {
-                            ESP_LOGE(TAG, "❌ Failed to post ZB_ACTION_DELAYED_NODE_DESC_REQ to pairing worker");
+                            ESP_LOGE(TAG, "❌ Failed to post ZB_PAIRING_DELAYED_SIMPLE_DESC_REQ to pairing worker");
                         }
-
-                        // готовим simple_desc_req
-                        
-                        if (xSemaphoreTake(g_device_array_mutex, pdMS_TO_TICKS(ZB_DEVICE_MUTEX_TIMEOUT_LONG_MS)) == pdTRUE) {
-                        
-                        
-                        sheduler->simple_desc_req_count = ep_resp->ep_count;
-                        sheduler->simple_desc_req_list = calloc(sheduler->simple_desc_req_count, sizeof(local_esp_zb_zdo_simple_desc_req_param_t));
-                        sheduler->simple_desc_req_simple_desc_req_list_status = calloc(sheduler->simple_desc_req_count, sizeof(uint8_t));
-                         DEVICE_ARRAY_UNLOCK();
-                            } else {
-                                //zb_manager_free_active_ep_resp_ep_array(ep_resp);
-                                ESP_LOGE(TAG, "CRITICAL: Failed to take device mutex in ACTIVE_EP_RESP! .");
-                                break;
-                            }
-                        
-                        // так как if (sheduler->appending_device->is_in_build_status == 1) то проверяем эндпоинты, вдруг они не удалились
-                        if (sheduler->appending_device->endpoints_array != NULL)
-                        {
-                                //zb_manager_free_active_ep_resp_ep_array(ep_resp);
-                                ESP_LOGE(TAG, "CRITICAL: sheduler->appending_device->endpoints_array != NULL in ACTIVE_EP_RESP! УДАЛЯЕМ .");
-                                
-                        }
-                        // создаём пустые эндпоинты сразу
-                        if (sheduler->appending_device->endpoints_array == NULL)
-                        {
-                            if (xSemaphoreTake(g_device_array_mutex, pdMS_TO_TICKS(ZB_DEVICE_MUTEX_TIMEOUT_LONG_MS)) == pdTRUE) {
-                            sheduler->appending_device->endpoints_count = ep_resp->ep_count; // ep добавляем все!!!
-                            sheduler->appending_device->endpoints_array = calloc(sheduler->appending_device->endpoints_count, sizeof(endpoint_custom_t*));
-                            
-                            DEVICE_ARRAY_UNLOCK();
-                            } else {
-                                //zb_manager_free_active_ep_resp_ep_array(ep_resp);
-                                ESP_LOGE(TAG, "CRITICAL: Failed to take device mutex in ACTIVE_EP_RESP! .");
-                                break;
-                            }
-                        }
-
-                        if (sheduler->appending_device->endpoints_array == NULL)
-                        {
-                            ESP_LOGE(TAG, "Error allocating memory for endpoints_array");
-                            //zb_manager_free_active_ep_resp_ep_array(ep_resp);
-                            break;
-                        }
-                        // берём мьютекс, так как RemoteDeviceEndpointCreate создаёт эндпоинт calloc
-                        if (xSemaphoreTake(g_device_array_mutex, pdMS_TO_TICKS(ZB_DEVICE_MUTEX_TIMEOUT_LONG_MS)) == pdTRUE) {
-                        for (int i = 0; i < ep_resp->ep_count; i++) {
-                            sheduler->appending_device->endpoints_array[i] = RemoteDeviceEndpointCreate(ep_resp->ep_list[i]);
-                            
-                            // заполняем шедулер кроме epid = 242 (0xf2), для неё сразу статус выстявляем 2
-                            if (ep_resp->ep_list[i] != 0xf2) {
-                                
-                            
-                                sheduler->simple_desc_req_list[i].addr_of_interest = sheduler->appending_device->short_addr;
-                                sheduler->simple_desc_req_list[i].endpoint = ep_resp->ep_list[i];
-                                sheduler->simple_desc_req_simple_desc_req_list_status[i] = 1;
-                                delayed_simple_desc_req_t delayed_simple_desc_req;
-                                delayed_simple_desc_req.short_addr = sheduler->simple_desc_req_list[i].addr_of_interest;
-                                delayed_simple_desc_req.src_endpoint = sheduler->simple_desc_req_list[i].endpoint;
-                                device_appending_sheduler_t * sheduler_p_copy;
-                                sheduler_p_copy = sheduler;
-                                delayed_simple_desc_req.ctx = sheduler_p_copy;
-                                delayed_simple_desc_req.user_cb = NULL;
-
-                                if (zb_manager_post_to_pairing_worker(ZB_PAIRING_DELAYED_SIMPLE_DESC_REQ, &delayed_simple_desc_req, sizeof(delayed_simple_desc_req_t)) == true)
-                                {
-                                    ESP_LOGI(TAG, "✅ ZB_PAIRING_DELAYED_SIMPLE_DESC_REQ Posted to pairing worker for short 0x%04x ep 0x%2x ", delayed_simple_desc_req.short_addr, delayed_simple_desc_req.src_endpoint);
-                                    //ESP_ERROR_CHECK(esp_timer_restart(sheduler->appending_controll_timer, 10000 * 1000));
-                                } else {
-                                    ESP_LOGE(TAG, "❌ Failed to post ZB_PAIRING_DELAYED_SIMPLE_DESC_REQ to pairing worker");
-                                }
-                            } // if (ep_resp->ep_list[i] != 0xf2) {}
-                            else {
-                                // сразу ставим статус выполнено, вдруг 242 будет не в конце Active_ep респонза
-                                sheduler->simple_desc_req_simple_desc_req_list_status[i] = 2;
-                            }
-                            //zb_manager_zdo_simple_desc_req(&sheduler->simple_desc_req_list[i], NULL, sheduler);
-                        }
-                        DEVICE_ARRAY_UNLOCK();
-                            } else {
-                                //zb_manager_free_active_ep_resp_ep_array(ep_resp);
-                                ESP_LOGE(TAG, "CRITICAL: Failed to take device mutex in ACTIVE_EP_RESP! .");
-                                break;
-                            }
+                    } else {
+                        // сразу ставим статус выполнено, вдруг 242 будет не в конце Active_ep респонза
+                        sheduler->simple_desc_req_simple_desc_req_list_status[i] = 2;
                     }
                 }
-                //zb_manager_free_active_ep_resp_ep_array(ep_resp);
-                break;
             }
-            case ZB_PAIRING_DELAYED_SIMPLE_DESC_REQ:{
-                ESP_LOGI(TAG, "✅ ZB_PAIRING_DELAYED_SIMPLE_DESC_REQ: processing pairing");
-                delayed_simple_desc_req = NULL;
-                delayed_simple_desc_req = (delayed_simple_desc_req_t *)msg.event_data;
-                sheduler = (device_appending_sheduler_t *)delayed_simple_desc_req->ctx;
-                device_appending_sheduler_t * sheduler_p_copy = sheduler;
-                ESP_LOGW(TAG, "❌ ZB_PAIRING_DELAYED_SIMPLE_DESC_REQ: sheduler %p", sheduler);
-                ESP_LOGW(TAG, "❌ ZB_PAIRING_DELAYED_SIMPLE_DESC_REQ: sheduler_p_copy %p", sheduler_p_copy);
-                ESP_LOGI(TAG, "DELAYED_SIMPLE_DESC_REQ: sheduler=%p, appending_device=%p", sheduler, sheduler->appending_device);
-                local_esp_zb_zdo_simple_desc_req_param_t simple_desc_req;
-                simple_desc_req.addr_of_interest = delayed_simple_desc_req->short_addr;
-                simple_desc_req.endpoint = delayed_simple_desc_req->src_endpoint;
+            break;
+        }      
+        
+        case ZB_PAIRING_DELAYED_SIMPLE_DESC_REQ:{
+            ESP_LOGI(TAG, "✅ ZB_PAIRING_DELAYED_SIMPLE_DESC_REQ: processing pairing");
+            delayed_simple_desc_req = NULL;
+            delayed_simple_desc_req = (delayed_simple_desc_req_t *)msg.event_data;
+            device_appending_sheduler_t *sheduler = NULL;
+            sheduler = (device_appending_sheduler_t *)delayed_simple_desc_req->ctx;
+            device_appending_sheduler_t * sheduler_p_copy = sheduler;
+
+            ESP_LOGW(TAG, "✅ ZB_PAIRING_DELAYED_SIMPLE_DESC_REQ: sheduler %p", sheduler);
+            ESP_LOGW(TAG, "✅ ZB_PAIRING_DELAYED_SIMPLE_DESC_REQ: sheduler_p_copy %p", sheduler_p_copy);
+            ESP_LOGI(TAG, "DELAYED_SIMPLE_DESC_REQ: sheduler=%p, appending_device=%p", sheduler, sheduler->appending_device);
+            local_esp_zb_zdo_simple_desc_req_param_t simple_desc_req;
+            simple_desc_req.addr_of_interest = delayed_simple_desc_req->short_addr;
+            simple_desc_req.endpoint = delayed_simple_desc_req->src_endpoint;
                 
-                if (zb_manager_zdo_simple_desc_req(&simple_desc_req, NULL, sheduler_p_copy) == ESP_OK){
-                    ESP_LOGI(TAG, "✅ Simple desc req sent to device 0x%04x ep 0x%2x", simple_desc_req.addr_of_interest, simple_desc_req.endpoint);
-                    //ESP_ERROR_CHECK(esp_timer_restart(sheduler->appending_controll_timer, 10000 * 1000));
-                }else {
-                    ESP_LOGW(TAG, "❌ Simple desc req failed to device 0x%04x ep 0x%2x", simple_desc_req.addr_of_interest, simple_desc_req.endpoint);
-                }
-                break;
+            if (zb_manager_zdo_simple_desc_req(&simple_desc_req, NULL, sheduler_p_copy) == ESP_OK){
+                ESP_LOGI(TAG, "✅ Simple desc req sent to device 0x%04x ep 0x%2x", simple_desc_req.addr_of_interest, simple_desc_req.endpoint);
+                //ESP_ERROR_CHECK(esp_timer_restart(sheduler->appending_controll_timer, 10000 * 1000));
+            }else {
+                ESP_LOGW(TAG, "❌ Simple desc req failed to device 0x%04x ep 0x%2x", simple_desc_req.addr_of_interest, simple_desc_req.endpoint);
             }
-            case ZB_PAIRING_DELAYED_NODE_DESC_REQ:{
-                ESP_LOGI(TAG, "✅ ZB_PAIRING_DELAYED_NODE_DESC_REQ: processing pairing");
-                uint16_t short_addr; // = *(uint16_t *)msg.event_data;
-                memcpy(&short_addr, msg.event_data, sizeof(uint16_t));
-                device_custom_t *dev = NULL;      
-                dev = zb_manager_find_device_by_short(short_addr);
-                if (!dev) {
-                    ESP_LOGW(TAG, "DELAYED_NODE_DESC_REQ_LOCAL: device 0x%04x not found", short_addr);
+            break;
+        }
+        case ZB_PAIRING_DELAYED_NODE_DESC_REQ:{
+            ESP_LOGI(TAG, "✅ ZB_PAIRING_DELAYED_NODE_DESC_REQ: processing pairing");
+            uint16_t short_addr; // = *(uint16_t *)msg.event_data;
+            memcpy(&short_addr, msg.event_data, sizeof(uint16_t));
+            if (zb_manager_zdo_node_desc_req(short_addr) == ESP_OK)
+            {
+                ESP_LOGI(TAG, "Node desc req sent to device 0x%04x", short_addr);
+                //if (sheduler != NULL) ESP_ERROR_CHECK(esp_timer_restart(sheduler->appending_controll_timer, 10000 * 1000));
+            }else {
+                 ESP_LOGW(TAG, "Node desc req failed to device 0x%04x", short_addr);
+            }
+            break;
+        }
+        case ZB_PAIRING_NODE_DESC_RESP:{
+            ESP_LOGI(TAG, "✅ ZB_PAIRING_DELAYED_NODE_DESC_REQ: processing pairing");
+            zb_manager_node_desc_resp_message_t* node_desc_resp = NULL;
+            node_desc_resp = (zb_manager_node_desc_resp_message_t *)msg.event_data;
+            
+            device_appending_sheduler_t *sheduler = NULL;
+            device_custom_t *dev = NULL; 
+
+            for (int i = 0; i < zbm_DeviceAppendShedulerCount; i++) {
+                if (zbm_DeviceAppendShedulerArray[i] == NULL) continue;
+                if (zbm_DeviceAppendShedulerArray[i]->appending_device == NULL) continue;
+                if (zbm_DeviceAppendShedulerArray[i]->appending_device->short_addr == node_desc_resp->short_addr)
+                {
+                    sheduler = zbm_DeviceAppendShedulerArray[i];
+                    dev = sheduler->appending_device;
                     break;
                 }
-                
-                if (dev != NULL) {
-                    device_appending_sheduler_t *sheduler = NULL;
-                    for (int i = 0; i < DeviceAppendShedulerCount; i++) {
-                        if (DeviceAppendShedulerArray[i] && DeviceAppendShedulerArray[i]->appending_device == dev_info) {
-                            sheduler = DeviceAppendShedulerArray[i];
-                            break;
-                        }
-                    }
-                    //отправляем
-                    if (zb_manager_zdo_node_desc_req(short_addr) == ESP_OK)
-                    {
-                        ESP_LOGI(TAG, "Node desc req sent to device 0x%04x", short_addr);
-                        //if (sheduler != NULL) ESP_ERROR_CHECK(esp_timer_restart(sheduler->appending_controll_timer, 10000 * 1000));
-                    }else {
-                        ESP_LOGW(TAG, "Node desc req failed to device 0x%04x", short_addr);
-                    }
-                }
-                
+            }
 
+            if (!dev) {
+                ESP_LOGW(TAG, "ZB_PAIRING_NODE_DESC_RESP: Device not found for short_addr 0x%04x", node_desc_resp->short_addr);
                 break;
             }
-            case ZB_PAIRING_NODE_DESC_RESP:{
-               ESP_LOGI(TAG, "✅ ZB_PAIRING_DELAYED_NODE_DESC_REQ: processing pairing");
-               node_desc_resp = (zb_manager_node_desc_resp_message_t *)msg.event_data;
-               dev_info = NULL;
-               dev_info = zb_manager_find_device_by_short(node_desc_resp->short_addr);
-                if (!dev_info) {
-                    ESP_LOGW(TAG, "ZB_PAIRING_NODE_DESC_RESP: Device not found for short_addr 0x%04x", node_desc_resp->short_addr);
+
+            // выставляем manufactory_code
+            uint16_t manuf_code = 0;
+
+            if (node_desc_resp->status != ESP_ZB_ZDP_STATUS_SUCCESS) 
+            {
+                local_esp_zb_af_node_desc_t node_desc = {
+                    .node_desc_flags = node_desc_resp->node_desc.node_desc_flags,
+                    .mac_capability_flags = node_desc_resp->node_desc.mac_capability_flags,
+                    .manufacturer_code = node_desc_resp->node_desc.manufacturer_code,
+                    .max_buf_size = node_desc_resp->node_desc.max_buf_size,
+                    .max_incoming_transfer_size = node_desc_resp->node_desc.max_incoming_transfer_size,
+                    .server_mask = node_desc_resp->node_desc.server_mask,
+                    .max_outgoing_transfer_size = node_desc_resp->node_desc.max_outgoing_transfer_size,
+                    .desc_capability_field = node_desc_resp->node_desc.desc_capability_field,
+                };
+                manuf_code = zbm_base_get_manuf_code_by_priority(dev->ieee_addr, &node_desc, dev->server_BasicClusterObj ? dev->server_BasicClusterObj->manufacturer_name : NULL);
+                ESP_LOGI(TAG, "Resolved manufacturer_code via node_desc: 0x%04x", manuf_code);
+            }else{ // статус неудачный, не все устройства отвечают на NodeDesc, ставим manuf_code другим способом
+                ESP_LOGW(TAG, "ZB_PAIRING_NODE_DESC_RESP failed for 0x%04x, status=0x%02x", node_desc_resp->short_addr, node_desc_resp->status);
+                // Попробуем по Basic Cluster и OUI
+                manuf_code = zbm_base_get_manuf_code_by_priority(dev->ieee_addr,NULL, dev->server_BasicClusterObj ? dev->server_BasicClusterObj->manufacturer_name : NULL);
+                if (manuf_code == 0) {
+                    ESP_LOGW(TAG, "Failed to resolve manufacturer_code for 0x%04x", node_desc_resp->short_addr);
+                }
+            }
+            // Сохраняем результат
+            if (manuf_code != 0) {
+                dev->manufacturer_code = manuf_code;
+            }
+            break;
+        }
+        case ZB_PAIRING_SIMPLE_DESC_RESP:{
+            ESP_LOGI(TAG, "✅ SIMPLE_DESC_RESP: processing pairing");
+            zb_manager_simple_desc_resp_message_t * local_simple_desc_resp = (zb_manager_simple_desc_resp_message_t *)msg.event_data;
+            if (local_simple_desc_resp->status == ESP_ZB_ZDP_STATUS_SUCCESS){   
+                device_appending_sheduler_t *sheduler = NULL;
+                local_esp_zb_af_simple_desc_1_1_t *desc = (local_esp_zb_af_simple_desc_1_1_t *)local_simple_desc_resp->simple_desc;
+                // 🔐 Проверка: user_ctx — это валидный указатель?
+                void *raw_ctx = local_simple_desc_resp->user_ctx;
+                ESP_LOGI(TAG, "SIMPLE_DESC_RESP: raw_ctx=%p", raw_ctx);
+                if (!raw_ctx) {
+                    ESP_LOGE(TAG, "❌ user_ctx is NULL");
                     break;
                 }
-                if (dev_info != NULL) {
-                    device_appending_sheduler_t *sheduler = NULL;
-                    for (int i = 0; i < DeviceAppendShedulerCount; i++) {
-                        if (DeviceAppendShedulerArray[i] && DeviceAppendShedulerArray[i]->appending_device == dev_info) {
-                            sheduler = DeviceAppendShedulerArray[i];
-                            break;
-                        }
-                    }
-                    //if (sheduler != NULL) ESP_ERROR_CHECK(esp_timer_restart(sheduler->appending_controll_timer, 10000 * 1000));
-                }
-                
-                uint16_t manuf_code = 0;
-                if (xSemaphoreTake(g_device_array_mutex, pdMS_TO_TICKS(ZB_DEVICE_MUTEX_TIMEOUT_LONG_MS)) == pdTRUE) {
-                if (node_desc_resp->status == ESP_ZB_ZDP_STATUS_SUCCESS) {
-                    // Формируем структуру node_desc для передачи в резолвер
-                    local_esp_zb_af_node_desc_t node_desc = {
-                        .node_desc_flags = node_desc_resp->node_desc.node_desc_flags,
-                        .mac_capability_flags = node_desc_resp->node_desc.mac_capability_flags,
-                        .manufacturer_code = node_desc_resp->node_desc.manufacturer_code,
-                        .max_buf_size = node_desc_resp->node_desc.max_buf_size,
-                        .max_incoming_transfer_size = node_desc_resp->node_desc.max_incoming_transfer_size,
-                        .server_mask = node_desc_resp->node_desc.server_mask,
-                        .max_outgoing_transfer_size = node_desc_resp->node_desc.max_outgoing_transfer_size,
-                        .desc_capability_field = node_desc_resp->node_desc.desc_capability_field,
-                    };
-                    // Используем полный резолвер
-                    
-                    manuf_code = zb_manager_resolve_manufacturer_code(
-                        dev_info->ieee_addr,
-                        &node_desc,
-                        dev_info->server_BasicClusterObj ? dev_info->server_BasicClusterObj->manufacturer_name : NULL
-                    );
-
-                    ESP_LOGI(TAG, "Resolved manufacturer_code via node_desc: 0x%04x", manuf_code);
-                } // end status success
-                else {
-                    ESP_LOGW(TAG, "ZB_PAIRING_NODE_DESC_RESP failed for 0x%04x, status=0x%02x", node_desc_resp->short_addr, node_desc_resp->status);
-                    // Попробуем по Basic Cluster и OUI
-                    manuf_code = zb_manager_resolve_manufacturer_code(
-                        dev_info->ieee_addr,
-                        NULL, // node_desc недоступен
-                        dev_info->server_BasicClusterObj ? dev_info->server_BasicClusterObj->manufacturer_name : NULL
-                    );
-
-                    if (manuf_code == 0) {
-                        ESP_LOGW(TAG, "Failed to resolve manufacturer_code for 0x%04x", node_desc_resp->short_addr);
-                    }
-                }
-                // Сохраняем результат
-                if (manuf_code != 0) {
-                    dev_info->manufacturer_code = manuf_code;
-                }
-                DEVICE_ARRAY_UNLOCK();
-                } // end mutex
-                else
-                    {
-                        ESP_LOGE(TAG, "CRITICAL: Failed to take device mutex in ZB_PAIRING_NODE_DESC_RESP! Device addition may fail.");
-                        break;
-                    }
-                break;
-            }
-            case ZB_PAIRING_SIMPLE_DESC_RESP:{
-                ESP_LOGI(TAG, "✅ SIMPLE_DESC_RESP: processing pairing");
-                //simple_desc_resp = NULL;
-                //simple_desc_resp = (zb_manager_simple_desc_resp_message_t *)msg.event_data;
-                zb_manager_simple_desc_resp_message_t * local_simple_desc_resp = (zb_manager_simple_desc_resp_message_t *)msg.event_data;
-                //if (simple_desc_resp->status == ESP_ZB_ZDP_STATUS_SUCCESS && simple_desc_resp->simple_desc && simple_desc_resp->user_ctx) {
-                if (local_simple_desc_resp->status == ESP_ZB_ZDP_STATUS_SUCCESS){
-                    
-                    //ESP_LOGW(TAG, "❌ ZB_PAIRING_DELAYED_SIMPLE_DESC_RESP: sheduler %p", sheduler);
-                    local_esp_zb_af_simple_desc_1_1_t *desc = (local_esp_zb_af_simple_desc_1_1_t *)local_simple_desc_resp->simple_desc;
-                    // 🔐 Проверка: user_ctx — это валидный указатель?
-                    void *raw_ctx = local_simple_desc_resp->user_ctx;
-                    ESP_LOGI(TAG, "SIMPLE_DESC_RESP: raw_ctx=%p", raw_ctx);
-                    if (!raw_ctx) {
-                        ESP_LOGE(TAG, "❌ user_ctx is NULL");
-                        break;
-                    }
-
-                ESP_LOGW(TAG, "❌ SIMPLE_DESC_RESP: raw_ctx %p", raw_ctx);
-                //ESP_LOGW(TAG, "❌ ZB_PAIRING_DELAYED_SIMPLE_DESC_REQ: sheduler_p_copy %p", sheduler_p_copy);
-                    /*uint32_t addr = (uint32_t)raw_ctx;
-                    if (addr < 0x20000000 || addr > 0x40000000) {
-                        ESP_LOGE(TAG, "❌ Invalid user_ctx: %p — not a valid RAM pointer!", addr);
-                        
-                        break;
-                    }*/
-
-                    //device_appending_sheduler_t *sheduler = (device_appending_sheduler_t *)raw_ctx;
-                    sheduler = (device_appending_sheduler_t *)raw_ctx;
-                    ESP_LOGI(TAG, "SIMPLE_DESC_RESP: sheduler=%p, appending_device=%p", sheduler, sheduler ? sheduler->appending_device : NULL);
-                    ESP_LOGW(TAG, "❌ SIMPLE_DESC_RESP: sheduler %p", sheduler);
-
-                    if (!sheduler->appending_device) {
+                //ESP_LOGW(TAG, "✅ SIMPLE_DESC_RESP: raw_ctx %p", raw_ctx);
+ 
+                sheduler = (device_appending_sheduler_t *)raw_ctx;
+                if (!sheduler->appending_device) {
                         ESP_LOGE(TAG, "❌ SIMPLE_DESC_RESP: sheduler is NULL");
                         break;
                     }
-
-                    //ESP_LOGW(TAG, "✅ sheduler validated: %p, device=0x%04x, ep=%d", sheduler, sheduler->appending_device->short_addr, desc->endpoint);
-
-                    ESP_LOGW(TAG, "SIMPLE_DESC_RESP: sheduler->simple_desc_req_count=%d", sheduler->simple_desc_req_count);
-                    ESP_LOGW(TAG, "SIMPLE_DESC_RESP: simple_desc_resp->simple_desc->endpoint %d", desc->endpoint);
+                ESP_LOGI(TAG, "SIMPLE_DESC_RESP: sheduler=%p, appending_device=%p", sheduler, sheduler ? sheduler->appending_device : NULL);
+                ESP_LOGW(TAG, "SIMPLE_DESC_RESP: sheduler->simple_desc_req_count=%d", sheduler->simple_desc_req_count);
+                ESP_LOGW(TAG, "SIMPLE_DESC_RESP: simple_desc_resp->simple_desc->endpoint %d", desc->endpoint);
                     // Найти и отметить выполнение
                     //ESP_ERROR_CHECK(esp_timer_restart(sheduler->appending_controll_timer, 10000 * 1000));
-                    for (int i = 0; i < sheduler->simple_desc_req_count; i++) {
-                        // надо проверить sheduler->simple_desc_req_list, похоже они не создались((()))
-                        ESP_LOGW(TAG, "SIMPLE_DESC_RESP: endpoint %d", sheduler->simple_desc_req_list[i].endpoint);
-                        //ESP_LOGW(TAG, "SIMPLE_DESC_RESP: simple_desc_resp->simple_desc->endpoint %d", desc->endpoint);
-                        if (sheduler->simple_desc_req_list[i].endpoint == desc->endpoint) {
-                            sheduler->simple_desc_req_simple_desc_req_list_status[i] = 2;
-                            ESP_LOGW(TAG, "SIMPLE_DESC_RESP: endpoint %d marked as processed and build status set 2", desc->endpoint);
-                            break;
-                        }
-                    }
-
+                for (int i = 0; i < sheduler->simple_desc_req_count; i++) {
                     
-
-                    if (sheduler->appending_device->is_in_build_status != 1)
+                    ESP_LOGW(TAG, "SIMPLE_DESC_RESP: endpoint %d", sheduler->simple_desc_req_list[i].endpoint);
+                    //ESP_LOGW(TAG, "SIMPLE_DESC_RESP: simple_desc_resp->simple_desc->endpoint %d", desc->endpoint);
+                    if (sheduler->simple_desc_req_list[i].endpoint == desc->endpoint) {
+                        sheduler->simple_desc_req_simple_desc_req_list_status[i] = 2;
+                        ESP_LOGW(TAG, "SIMPLE_DESC_RESP: endpoint %d marked as processed and build status set 2", desc->endpoint);
+                        break;
+                    }
+                }
+  
+                // Добавить endpoint (эндпоинты надо создавать в active_ep_resp, чтобы избежать realloc)
+                endpoint_custom_t* endpoint = NULL;
+                if ((sheduler->appending_device->endpoints_count > 0)&&(sheduler->appending_device->endpoints_array != NULL))
+                {
+                    for (int i = 0; i < sheduler->appending_device->endpoints_count; i++)
                     {
-                        ESP_LOGW (TAG, "Device 0x%04x: is_in_build_status != 1", sheduler->appending_device->short_addr);
-                        //zb_manager_free_simple_desc_resp(simple_desc_resp);
-                        break;
-                    }
-                  
-                    // Добавить endpoint (эндпоинты надо создавать в active_ep_resp, чтобы избежать realloc)
-                    endpoint_custom_t* temp_endpoint = NULL;
-                    temp_endpoint = zb_manager_find_endpoint(sheduler->appending_device->short_addr, desc->endpoint);
-                    ESP_LOGI(TAG, "🔍 zb_manager_find_endpoint(%04x, %02x) -> %p", sheduler->appending_device->short_addr, desc->endpoint, temp_endpoint);
-                    if (temp_endpoint == NULL) {
-                        ESP_LOGW (TAG, "Device 0x%04x: endpoint not found", sheduler->appending_device->short_addr);
-                        //zb_manager_free_simple_desc_resp(simple_desc_resp);
-                        break;
-                    }
-                    
-                    // === УСТАНОВКА ТАЙМАУТА ПРИ ПЕРВОМ ЭНДПОИНТЕ ===
-                    if (temp_endpoint == sheduler->appending_device->endpoints_array[0]) {
-                        uint32_t timeout_ms = get_timeout_for_device_id(desc->app_device_id);
-                        sheduler->appending_device->device_timeout_ms = timeout_ms;
-                        ESP_LOGI(TAG, "Device 0x%04x: device_type=0x%04x timeout=%" PRIu32 " ms",sheduler->appending_device->short_addr, desc->app_device_id, timeout_ms);}
-
-                    // добавляем кластеры
-                    if (xSemaphoreTake(g_device_array_mutex, pdMS_TO_TICKS(ZB_DEVICE_MUTEX_TIMEOUT_LONG_MS)) == pdTRUE) {
-                        
-
-                        temp_endpoint->is_use_on_device = 1;
-                        memset(temp_endpoint->friendly_name,0,sizeof(temp_endpoint->friendly_name));
-                        sprintf(temp_endpoint->friendly_name, "[0x%4x] [0x%02x]",sheduler->appending_device->short_addr, desc->endpoint);
-                        temp_endpoint->deviceId = desc->app_device_id;
-
-                        uint16_t *clusters = desc->app_cluster_list;
-                        for (int i = 0; i < desc->app_input_cluster_count; i++) 
-                                {
-                                    ESP_LOGI(TAG, "  Input Cluster: 0x%04x", clusters[i]);
-                                    if (clusters[i] == 0x0003) 
-                                    {
-                                    if(temp_endpoint->server_IdentifyClusterObj  == NULL)
-                                        {
-                                            temp_endpoint->is_use_identify_cluster = 1;
-                                            temp_endpoint->server_IdentifyClusterObj = calloc(1,sizeof(zb_manager_identify_cluster_t));
-                                            zb_manager_identify_cluster_t cl = ZIGBEE_IDENTIFY_CLUSTER_DEFAULT_INIT();
-                                            memcpy(temp_endpoint->server_IdentifyClusterObj, &cl, sizeof(zb_manager_identify_cluster_t));
-                                            ESP_LOGI(TAG, "  Identify Cluster added");
-                                        }
-                                    } // end if 0x0003
-                                    else
-                                    if (clusters[i] == 0x0402) 
-                                    {
-                                    if (temp_endpoint->server_TemperatureMeasurementClusterObj == NULL)
-                                    {
-                                        temp_endpoint->is_use_temperature_measurement_cluster = 1;
-                                        temp_endpoint->server_TemperatureMeasurementClusterObj = calloc(1,sizeof(zb_manager_temperature_measurement_cluster_t));
-                                        zb_manager_temperature_measurement_cluster_t cl = ZIGBEE_TEMP_MEASUREMENT_CLUSTER_DEFAULT_INIT();
-                                        memcpy(temp_endpoint->server_TemperatureMeasurementClusterObj, &cl, sizeof(zb_manager_temperature_measurement_cluster_t));
-                                        ESP_LOGI(TAG, "  Temperature Measurement Cluster added 0x0402");
-                                    }
-                                    } // end if 0x0402
-                                    else // if (clusters[i] == 0x0402) 
-                                    if (clusters[i] == 0x0405)
-                                    {
-                                    if (temp_endpoint->server_HumidityMeasurementClusterObj == NULL)
-                                    {
-                                        temp_endpoint->is_use_humidity_measurement_cluster = true;
-                                        temp_endpoint->server_HumidityMeasurementClusterObj = calloc(1, sizeof(zb_manager_humidity_measurement_cluster_t));
-                                        zb_manager_humidity_measurement_cluster_t cl = ZIGBEE_HUMIDITY_MEASUREMENT_CLUSTER_DEFAULT_INIT();
-                                        memcpy(temp_endpoint->server_HumidityMeasurementClusterObj, &cl, sizeof(zb_manager_humidity_measurement_cluster_t));
-                                        ESP_LOGI(TAG, "  Humidity Measurement Cluster added 0x0405");
-                                    }
-                                    } // end if 0x0405
-                                    else
-                                    if (clusters[i] == 0x0006)
-                                    {
-                                    if (temp_endpoint->server_OnOffClusterObj == NULL)
-                                    {
-                                        temp_endpoint->is_use_on_off_cluster = true;
-                                        temp_endpoint->server_OnOffClusterObj = calloc(1, sizeof(zb_manager_on_off_cluster_t));
-                                        zb_manager_on_off_cluster_t cl = ZIGBEE_ON_OFF_CLUSTER_DEFAULT_INIT();
-                                        memcpy(temp_endpoint->server_OnOffClusterObj, &cl, sizeof(zb_manager_on_off_cluster_t));
-                                        ESP_LOGI(TAG, "  On/Off Cluster added 0x0006");
-                                        temp_endpoint->on_off_apply_cb = NULL;
-                                        temp_endpoint->on_off_user_data = NULL;
-                                        // Установика callback для примера, не используется
-                                        //temp_endpoint->on_off_apply_cb = [](bool on, void* ctx) {
-                                        //gpio_set_level((int)ctx, on ? 1 : 0);
-                                        //};
-                                        //temp_endpoint->on_off_user_data = (void*)GPIO_NUM_12;
-                                    }
-                                    }// end if 0x0006
-                                    else
-                                    if (clusters[i] == 0x0001)
-                                    {
-                                    if (sheduler->appending_device->server_PowerConfigurationClusterObj == NULL) 
-                                    {
-                                        sheduler->appending_device->server_PowerConfigurationClusterObj = calloc(1, sizeof(zb_manager_power_config_cluster_t));
-                                        zb_manager_power_config_cluster_t cl = ZIGBEE_POWER_CONFIG_CLUSTER_DEFAULT_INIT();
-                                        memcpy(sheduler->appending_device->server_PowerConfigurationClusterObj, &cl, sizeof(zb_manager_power_config_cluster_t));
-                                        ESP_LOGI(TAG, "Power Configuration Cluster created at device level");
-                                    }
-                                    }// end if 0x0001
-
-
-                                } // end for input clusters
-
-                        // output clusters
-                        if (desc->app_output_cluster_count > 0) 
+                        endpoint_custom_t* temp_ep = NULL;
+                        temp_ep = sheduler->appending_device->endpoints_array[i];
+                        if (temp_ep->ep_id == desc->endpoint)
                         {
-                            temp_endpoint->output_clusters_count = desc->app_output_cluster_count;
-                            temp_endpoint->output_clusters_array = calloc(desc->app_output_cluster_count, sizeof(uint16_t));
-                        } else ESP_LOGI(TAG, "No output clusters for endpoint 0x%02x", desc->endpoint);
-                        for (int i = 0; i < desc->app_output_cluster_count; i++) 
-                        {
-                            ESP_LOGI(TAG, "  Output Cluster: 0x%04x", clusters[desc->app_input_cluster_count + i]);
-                            temp_endpoint->output_clusters_array[i] = clusters[desc->app_input_cluster_count + i];
-                            ESP_LOGI(TAG, "  Output Cluster output_clusters_array[i]: 0x%04x", temp_endpoint->output_clusters_array[i]);
-                        }
-                        ESP_LOGI(TAG, "Endpoint 0x%02x on short_addr 0x%04x clusters added", desc->endpoint, sheduler->appending_device->short_addr);
-                        // находим запрос simple_desc и помечаем его выполненным
-                        for (int i = 0; i < sheduler->simple_desc_req_count; i++) 
-                        {
-                                if (sheduler->simple_desc_req_list[i].endpoint == desc->endpoint) 
-                                {
-                                    sheduler->simple_desc_req_simple_desc_req_list_status[i] = 2;
-                                    break;
-                                }
-                        }
-
-                        DEVICE_ARRAY_UNLOCK();
-                            } else
-                                {
-                                    ESP_LOGE(TAG, "CRITICAL: Failed to take device mutex in SIMPLE_DESC_RESP! Device addition may fail.");
-                                    zb_manager_free_simple_desc_resp(local_simple_desc_resp);
-                                    break;
-                                }
-                    // Проверить завершение
-                    bool all_done = true;
-                    for (int i = 0; i < sheduler->simple_desc_req_count; i++) {
-                        if (sheduler->simple_desc_req_simple_desc_req_list_status[i] != 2) {
-                            all_done = false;
+                            endpoint = temp_ep;
+                            // === УСТАНОВКА ТАЙМАУТА ПРИ ПЕРВОМ ЭНДПОИНТЕ ===
+                            if (i == 0)
+                            {
+                                uint32_t timeout_ms = zbm_dev_get_timeout_for_device_id(desc->app_device_id);
+                                sheduler->appending_device->device_timeout_ms = timeout_ms;
+                                ESP_LOGI(TAG, "Device 0x%04x: device_type=0x%04x timeout=%" PRIu32 " ms",sheduler->appending_device->short_addr, desc->app_device_id, timeout_ms);
+                            }
                             break;
                         }
                     }
+                }
 
-                    if (all_done) {
-                        ESP_LOGW(TAG, "All simple desc req done for device 0x%04x", sheduler->appending_device->short_addr);
-                        ESP_LOGI(TAG, "✅ Device build complete: 0x%04x", sheduler->appending_device->short_addr);
-                        sheduler->appending_device->is_in_build_status = 2;
-                        zb_manager_configure_device_timeout(sheduler->appending_device);
-                        
-                        // 🔧 Исправляем power_source
-                        zb_manager_apply_device_fixups(sheduler->appending_device);
-                        zb_manager_queue_save_request();
+                if (!endpoint)
+                {
+                    ESP_LOGW (TAG, "Device 0x%04x: endpoint object with ep_id 0x%02x not found", sheduler->appending_device->short_addr, desc->endpoint);
+                    break;
+                }
 
-                        // ✅ Уведомляем веб-интерфейс: устройство готово!
-                        ws_notify_device_update(sheduler->appending_device->short_addr);
+                // заполняем endpoint
+                endpoint->is_use_on_device = 1;
+                memset(endpoint->friendly_name,0,sizeof(endpoint->friendly_name));
+                sprintf(endpoint->friendly_name, "[0x%4x] [0x%02x]",sheduler->appending_device->short_addr, desc->endpoint);
+                endpoint->deviceId = desc->app_device_id;
 
-                        // ✅ ПУБЛИКУЕМ ПОЛНОЕ ПЕРЕОПРЕДЕЛЕНИЕ В HA
-                        ha_mqtt_republish_discovery_for_device(sheduler->appending_device);
+                uint16_t *clusters = desc->app_cluster_list;
+                if (desc->app_input_cluster_count > 0)
+                {
+                    for (int i = 0; i < desc->app_input_cluster_count; i++) 
+                    {
+                        ESP_LOGI(TAG, "  Input Cluster: 0x%04x", clusters[i]);
+                        if (clusters[i] == 0x0003) 
+                            {
+                                if(endpoint->server_IdentifyClusterObj  == NULL)
+                                {
+                                    endpoint->is_use_identify_cluster = 1;
+                                    endpoint->server_IdentifyClusterObj = calloc(1,sizeof(zb_manager_identify_cluster_t));
+                                    zb_manager_identify_cluster_t cl = ZIGBEE_IDENTIFY_CLUSTER_DEFAULT_INIT();
+                                    memcpy(endpoint->server_IdentifyClusterObj, &cl, sizeof(zb_manager_identify_cluster_t));
+                                    ESP_LOGI(TAG, "  Identify Cluster added");
+                                    continue;
+                                }
+                            } else if (clusters[i] == 0x0402) 
+                            {
+                                if (endpoint->server_TemperatureMeasurementClusterObj == NULL)
+                                {
+                                    endpoint->is_use_temperature_measurement_cluster = 1;
+                                    endpoint->server_TemperatureMeasurementClusterObj = calloc(1,sizeof(zb_manager_temperature_measurement_cluster_t));
+                                    zb_manager_temperature_measurement_cluster_t cl = ZIGBEE_TEMP_MEASUREMENT_CLUSTER_DEFAULT_INIT();
+                                    memcpy(endpoint->server_TemperatureMeasurementClusterObj, &cl, sizeof(zb_manager_temperature_measurement_cluster_t));
+                                    ESP_LOGI(TAG, "  Temperature Measurement Cluster added 0x0402");
+                                    continue;
+                                }
+                            } else if (clusters[i] == 0x0405)
+                            {
+                                if (endpoint->server_HumidityMeasurementClusterObj == NULL)
+                                {
+                                    endpoint->is_use_humidity_measurement_cluster = true;
+                                    endpoint->server_HumidityMeasurementClusterObj = calloc(1, sizeof(zb_manager_humidity_measurement_cluster_t));
+                                    zb_manager_humidity_measurement_cluster_t cl = ZIGBEE_HUMIDITY_MEASUREMENT_CLUSTER_DEFAULT_INIT();
+                                    memcpy(endpoint->server_HumidityMeasurementClusterObj, &cl, sizeof(zb_manager_humidity_measurement_cluster_t));
+                                    ESP_LOGI(TAG, "  Humidity Measurement Cluster added 0x0405");
+                                    continue;
+                                }
+                            } else if (clusters[i] == 0x0006)
+                            {
+                                if (endpoint->server_OnOffClusterObj == NULL)
+                                    {
+                                        endpoint->is_use_on_off_cluster = true;
+                                        endpoint->server_OnOffClusterObj = calloc(1, sizeof(zb_manager_on_off_cluster_t));
+                                        zb_manager_on_off_cluster_t cl = ZIGBEE_ON_OFF_CLUSTER_DEFAULT_INIT();
+                                        memcpy(endpoint->server_OnOffClusterObj, &cl, sizeof(zb_manager_on_off_cluster_t));
+                                        ESP_LOGI(TAG, "  On/Off Cluster added 0x0006");
+                                        endpoint->on_off_apply_cb = NULL;
+                                        endpoint->on_off_user_data = NULL;
+                                            // Установика callback для примера, не используется
+                                            //temp_endpoint->on_off_apply_cb = [](bool on, void* ctx) {
+                                            //gpio_set_level((int)ctx, on ? 1 : 0);
+                                            //};
+                                            //temp_endpoint->on_off_user_data = (void*)GPIO_NUM_12;
+                                        continue;
+                                    }
+                            } else if (clusters[i] == 0x0001)
+                            {
+                                if (sheduler->appending_device->server_PowerConfigurationClusterObj == NULL) 
+                                {
+                                    sheduler->appending_device->server_PowerConfigurationClusterObj = calloc(1, sizeof(zb_manager_power_config_cluster_t));
+                                    zb_manager_power_config_cluster_t cl = ZIGBEE_POWER_CONFIG_CLUSTER_DEFAULT_INIT();
+                                    memcpy(sheduler->appending_device->server_PowerConfigurationClusterObj, &cl, sizeof(zb_manager_power_config_cluster_t));
+                                    ESP_LOGI(TAG, "Power Configuration Cluster created at device level");
+                                    continue;
+                                }
+                            } else {
+                                if (clusters[i] == 0x0000)
+                                {
+                                    continue;
+                                }
+                                else
+                                {
+                                    // Создаём новый cluster_custom_t
+                                    cluster_custom_t *custom_cluster = calloc(1, sizeof(cluster_custom_t));
+                                    if (!custom_cluster) continue;
+                                    custom_cluster->id = clusters[i];
+                                    snprintf(custom_cluster->cluster_id_text, sizeof(custom_cluster->cluster_id_text),
+                                                    "%s", zb_manager_get_cluster_name(clusters[i]) ?: "Unknown");
+                                    custom_cluster->role_mask = ESP_ZB_ZCL_CLUSTER_SERVER_ROLE; // или CLIENT?
+                                    custom_cluster->manuf_code = 0; // может быть из других источников
+                                    custom_cluster->attr_count = 0;
+                                    custom_cluster->attr_array = NULL;
+                                    custom_cluster->is_use_on_device = 1;
+                                    if (endpoint->UnKnowninputClusters_array == NULL)
+                                    {
+                                        endpoint->UnKnowninputClusters_array = calloc(1, sizeof(cluster_custom_t*));
+                                        endpoint->UnKnowninputClusters_array[0] = custom_cluster;
+                                        endpoint->UnKnowninputClusterCount = 1;
+                                    }else
+                                    {
+                                        endpoint->UnKnowninputClusters_array = realloc(endpoint->UnKnowninputClusters_array,
+                                                    (endpoint->UnKnowninputClusterCount + 1) * sizeof(cluster_custom_t*));
+                                        endpoint->UnKnowninputClusters_array[endpoint->UnKnowninputClusterCount] = custom_cluster;
+                                        endpoint->UnKnowninputClusterCount++;
+                                    }
+                                }
 
-                        ESP_ERROR_CHECK(esp_timer_stop(sheduler->appending_controll_timer));
-                        ESP_ERROR_CHECK(esp_timer_delete(sheduler->appending_controll_timer));
-                        zb_manager_delete_appending_sheduler(sheduler);
-                        sheduler = NULL;
+                            }
+                    } 
+                }
+                if (desc->app_output_cluster_count > 0) 
+                {
+                    endpoint->output_clusters_count = desc->app_output_cluster_count;
+                    endpoint->output_clusters_array = calloc(desc->app_output_cluster_count, sizeof(uint16_t));
+                
+                    for (int i = 0; i < desc->app_output_cluster_count; i++) 
+                    {
+                        ESP_LOGI(TAG, "  Output Cluster: 0x%04x", clusters[desc->app_input_cluster_count + i]);
+                        endpoint->output_clusters_array[i] = clusters[desc->app_input_cluster_count + i];
+                        ESP_LOGI(TAG, "  Output Cluster output_clusters_array[i]: 0x%04x", endpoint->output_clusters_array[i]);
                     }
-                } // end if ESP_ZB_ZDP_STATUS_SUCCESS
+                    ESP_LOGI(TAG, "Endpoint 0x%02x on short_addr 0x%04x clusters added", desc->endpoint, sheduler->appending_device->short_addr);
+                } else ESP_LOGI(TAG, "No output clusters for endpoint 0x%02x", desc->endpoint);
+                        
+                // находим запрос simple_desc и помечаем его выполненным
+                for (int i = 0; i < sheduler->simple_desc_req_count; i++) 
+                    {
+                        if (sheduler->simple_desc_req_list[i].endpoint == desc->endpoint) 
+                        {
+                            sheduler->simple_desc_req_simple_desc_req_list_status[i] = 2;
+                            break;
+                        }
+                    }
+                // Проверить завершение
+                bool all_done = true;
+                for (int i = 0; i < sheduler->simple_desc_req_count; i++) {
+                    if (sheduler->simple_desc_req_simple_desc_req_list_status[i] != 2) 
+                    {
+                        all_done = false;
+                        break;
+                    }
+                }
+
+                if (all_done) 
+                {
+                    ESP_LOGW(TAG, "All simple desc req done for device 0x%04x", sheduler->appending_device->short_addr);
+                    ESP_LOGI(TAG, "✅ Device build complete: 0x%04x", sheduler->appending_device->short_addr);
+
+                    sheduler->appending_device->is_in_build_status = 2;
+                    zbm_dev_configure_device_timeout(sheduler->appending_device);
+                        
+                    // 🔧 Исправляем power_source
+                    zb_manager_apply_device_fixups(sheduler->appending_device);
+                    uint16_t short_addr = sheduler->appending_device->short_addr;
+                    if (zbm_dev_base_dev_obj_append_safe(sheduler->appending_device) == ESP_OK)
+                    {
+                        //zb_manager_queue_save_request();
+                        
+                        zbm_dev_base_queue_save_req_cmd();
+                        // ✅ Уведомляем веб-интерфейс с задержкой, пусть сохраниться успеет: устройство готово!
+                        //vTaskDelay(pdMS_TO_TICKS(300));
+                        ws_notify_device_update(short_addr);
+                        // ✅ ПУБЛИКУЕМ ПОЛНОЕ ПЕРЕОПРЕДЕЛЕНИЕ В HA
+                        //ha_mqtt_republish_discovery_for_device(sheduler->appending_device);
+                    }else {
+                        ESP_LOGE(TAG,"ERROR APPEND SHEDULER_DEVICE TO BASE");
+                    }
+                   
+                    ESP_ERROR_CHECK(esp_timer_stop(sheduler->appending_controll_timer));
+                        ESP_ERROR_CHECK(esp_timer_delete(sheduler->appending_controll_timer));
+                    zbm_dev_delete_appending_sheduler(sheduler);
+                    //sheduler = NULL;
+                }
+            } // end if ESP_ZB_ZDP_STATUS_SUCCESS
                 else {
                     ESP_LOGW(TAG, "SIMPLE_DESC_RESP Status FAIL or INVALID input DATA");
                 }

@@ -130,6 +130,7 @@ typedef enum {
     //ZB_PAIRING_DELAYED_START_APPEND_DEVICE,
     ZB_PAIRING_DEVICE_ANNCE_EVENT,
     ZB_PAIRING_DEVICE_AUTHORIZED_EVENT,
+    ZB_PAIRING_ATTR_REPORT_EVENT,
 } zb_manager_internal_event_t;
 
 // Определение конкретных событий

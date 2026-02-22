@@ -1,10 +1,14 @@
 #include "zb_manager_devices.h"
 #include "string.h"
-#include "zb_manager_devices_manufactory_table.h"
+//#include "zb_manager_devices_manufactory_table.h"
 #include "web_server.h"
 #include "zb_manager_action_handler_worker.h"
 #include "esp_log.h"
 #include "ha_integration.h"
+#include "zbm_dev_base.h"
+#include "zbm_dev_base_utils.h"
+#include "zbm_dev_polling.h"
+
 
 
 static const char *TAG = "zb_manager_devices_module";
@@ -20,11 +24,11 @@ QueueHandle_t zb_manager_save_JSon_cmd_queue = NULL;
  * @param b Указатель на второй IEEE-адрес (const void*)
  * @return int 0 если адреса равны, не ноль если различаются
  */
-int ieee_addr_compare(esp_zb_ieee_addr_t *a, esp_zb_ieee_addr_t *b)
+/*int ieee_addr_compare(esp_zb_ieee_addr_t *a, esp_zb_ieee_addr_t *b)
 {
     if (!a || !b) return -1;
     return memcmp((const uint8_t *)a, (const uint8_t *)b, sizeof(esp_zb_ieee_addr_t));
-}
+}*/
 
 uint8_t RemoteDevicesCount = 0;
 device_custom_t** RemoteDevicesArray = NULL;
@@ -225,6 +229,7 @@ static void zb_save_task(void *pvParameters)
                 esp_err_t err = zb_manager_save_dev_to_json(file_path);
                 if (err == ESP_OK) {
                     ESP_LOGI(TAG, "Devices successfully saved to %s", file_path);
+                    json_load_and_print(ZB_MANAGER_JSON_DEVICES_FILE);
                 } else {
                     ESP_LOGE(TAG, "Failed to save devices to %s", file_path);
                 }
@@ -264,7 +269,8 @@ esp_err_t zb_manager_devices_init(void)
         // Создаём задачу сохранения
         xTaskCreate(zb_save_task, "zb_save_task", 8192, (void*)ZB_MANAGER_JSON_DEVICES_FILE, 5, NULL);
     }
-    
+    //временная очистка
+    //zb_manager_save_dev_to_json(ZB_MANAGER_JSON_DEVICES_FILE);
 
     if (zb_manager_load_devices_from_json(ZB_MANAGER_JSON_DEVICES_FILE) != ESP_OK) 
     {
@@ -362,6 +368,23 @@ esp_err_t RemoteDeviceEndpointDelete(endpoint_custom_t* ep_object)
     ep_object->output_clusters_array = NULL;
     ep_object->output_clusters_count = 0;
     //free(ep_object->server_LevelControlClusterObj);
+    if(ep_object->UnKnowninputClusterCount != NULL)
+    {
+       for (int i = 0; i < ep_object->UnKnowninputClusterCount; i++) {
+        cluster_custom_t *cl = ep_object->UnKnowninputClusters_array[i];
+            if (cl) {
+                // Освободи атрибуты, если они есть
+                for (int j = 0; j < cl->attr_count; j++) {
+                    free(cl->attr_array[j]->p_value);
+                    free(cl->attr_array[j]);
+                }
+                free(cl->attr_array);
+                free(cl);
+            }
+        }
+        free(ep_object->UnKnowninputClusters_array); 
+    }
+
     free(ep_object);
     ep_object = NULL;
     return ESP_OK;
@@ -392,6 +415,32 @@ device_custom_t*   RemoteDeviceCreate(esp_zb_ieee_addr_t ieee_addr)
     new_dev->last_status_print_log_time = 0;
     return new_dev;
 }
+
+esp_err_t RemoteDeviceDelete(device_custom_t* dev_object)
+{
+    if (dev_object == NULL) return ESP_ERR_INVALID_ARG;
+    if (dev_object->server_BasicClusterObj != NULL) {
+        free(dev_object->server_BasicClusterObj);
+        dev_object->server_BasicClusterObj = NULL;
+    }
+    if (dev_object->server_PowerConfigurationClusterObj != NULL) {
+        free(dev_object->server_PowerConfigurationClusterObj);
+        dev_object->server_PowerConfigurationClusterObj = NULL;
+    }
+    if (dev_object->endpoints_count > 0) {
+        for (int j = 0; j < dev_object->endpoints_count; j++)
+        {
+            RemoteDeviceEndpointDelete(dev_object->endpoints_array[j]);
+        }
+        dev_object->endpoints_count = 0;
+        free (dev_object->endpoints_array);
+        dev_object->endpoints_array = NULL;
+    }
+    free(dev_object);
+    dev_object = NULL;
+    return ESP_OK;
+}
+
 /**************************************************** Temperature Sensor *************************************************************/
 zb_manager_temperature_sensor_ep_t* temp_sensor_ep_create(void)
 {
@@ -429,23 +478,7 @@ esp_err_t temp_sensor_ep_delete(zb_manager_temperature_sensor_ep_t* ep)
     return err;
 }
 
-/****** Save Load Functions **************/
-void ieee_to_str(char* out, const esp_zb_ieee_addr_t addr) {
-    sprintf(out, "%02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x",
-            addr[7], addr[6], addr[5], addr[4],
-            addr[3], addr[2], addr[1], addr[0]);
-}
 
-bool str_to_ieee(const char* str, esp_zb_ieee_addr_t addr) {
-    uint8_t tmp[8];
-    if (sscanf(str, "%hhx:%hhx:%hhx:%hhx:%hhx:%hhx:%hhx:%hhx",
-               &tmp[7], &tmp[6], &tmp[5], &tmp[4],
-               &tmp[3], &tmp[2], &tmp[1], &tmp[0]) != 8) {
-        return false;
-    }
-    memcpy(addr, tmp, 8);
-    return true;
-}
 
 void zb_manager_update_device_lqi(uint16_t short_addr, uint8_t lqi)
 {
@@ -565,9 +598,9 @@ void zb_manager_update_device_activity(uint16_t short_addr, uint8_t lqi)
 
     dev->lqi = lqi;
     dev->last_seen_ms = esp_log_timestamp();
-
+    dev->is_online = true;
     // Для БАТАРЕЙНЫХ устройств — активность = online
-    if (!zb_manager_is_device_always_powered(dev)) {
+    /*if (!zb_manager_is_device_always_powered(dev)) {
         dev->is_online = true;
         ESP_LOGD(TAG, "✅ Battery-powered: 0x%04x → ONLINE via activity", short_addr);
     }
@@ -575,7 +608,7 @@ void zb_manager_update_device_activity(uint16_t short_addr, uint8_t lqi)
     // Пусть check_all_devices_status решает по ответу на ReadAttr
     else {
         ESP_LOGD(TAG, "💡 Mains-powered: 0x%04x → activity updated, but is_online unchanged", short_addr);
-    }
+    }*/
 
     // Всё равно уведомляем веб-сервер (если нужно)
     // ws_notify_device_update(dev->short_addr); // ← не всегда нужно здесь
@@ -732,7 +765,7 @@ endpoint_custom_t* zb_manager_find_endpoint(uint16_t short_addr, uint8_t endpoin
     return ep;
 }
 
-const char* zb_manager_get_ha_device_type_name(uint16_t device_id)
+/*const char* zb_manager_get_ha_device_type_name(uint16_t device_id)
 {
     switch (device_id) {
         case ESP_ZB_HA_ON_OFF_SWITCH_DEVICE_ID:                 return "on_off_switch";
@@ -775,19 +808,12 @@ const char* zb_manager_get_ha_device_type_name(uint16_t device_id)
         case ESP_ZB_HA_CUSTOM_ATTR_DEVICE_ID:                  return "custom_attr";
         default: return "unknown_device_type";
     }
-}
+}*/
 
-static esp_err_t zb_manager_save_dev_to_json(const char *filepath) {
-    if (xSemaphoreTake(g_device_array_mutex, pdMS_TO_TICKS(ZB_DEVICE_MUTEX_TIMEOUT_LONG_MS)) != pdTRUE) {
-        ESP_LOGE(TAG, "Failed to take device mutex in zb_manager_save_devices_to_json");
-        return ESP_ERR_TIMEOUT;
-    }
-
+cJSON* zb_manager_get_full_json_from_remote_devices_array_old(void) {
     cJSON *root = cJSON_CreateArray();
-    if (!root) 
-    {
-       DEVICE_ARRAY_UNLOCK();
-        return ESP_ERR_NO_MEM;
+    if (!root) {
+        return NULL;
     }
 
     for (int i = 0; i < RemoteDevicesCount; i++) {
@@ -797,7 +823,7 @@ static esp_err_t zb_manager_save_dev_to_json(const char *filepath) {
         cJSON *dev_obj = cJSON_CreateObject();
         if (!dev_obj) continue;
 
-        // === device_custom_t поля ===
+        // === Основные поля устройства ===
         char ieee_str[24];
         ieee_to_str(ieee_str, dev->ieee_addr);
         cJSON_AddStringToObject(dev_obj, "ieee_addr", ieee_str);
@@ -810,18 +836,18 @@ static esp_err_t zb_manager_save_dev_to_json(const char *filepath) {
         cJSON_AddNumberToObject(dev_obj, "lqi", dev->lqi);
         cJSON_AddNumberToObject(dev_obj, "last_seen_ms", dev->last_seen_ms);
         cJSON_AddNumberToObject(dev_obj, "device_timeout_ms", dev->device_timeout_ms);
-        // После last_seen_ms и device_timeout_ms
         cJSON_AddBoolToObject(dev_obj, "is_online", dev->is_online);
+
         if (dev->manufacturer_code != 0) {
             cJSON_AddNumberToObject(dev_obj, "manufacturer_code", dev->manufacturer_code);
             cJSON_AddStringToObject(dev_obj, "manufacturer_name_str",
-            zb_manager_get_manufacturer_name_by_code(dev->manufacturer_code));
+                zbm_extract_manufacturer_name_by_code(dev->manufacturer_code));
         }
 
-        // BasicCluster на уровне устройства
+        // Basic Cluster (уровень устройства)
         if (dev->server_BasicClusterObj) {
             cJSON *basic = cJSON_CreateObject();
-            cJSON_AddNumberToObject(basic, "cluster_id", 0x0000); // ESP_ZB_ZCL_CLUSTER_ID_BASIC
+            cJSON_AddNumberToObject(basic, "cluster_id", 0x0000);
             cJSON_AddNumberToObject(basic, "zcl_version", dev->server_BasicClusterObj->zcl_version);
             cJSON_AddNumberToObject(basic, "app_version", dev->server_BasicClusterObj->application_version);
             cJSON_AddNumberToObject(basic, "stack_version", dev->server_BasicClusterObj->stack_version);
@@ -829,7 +855,7 @@ static esp_err_t zb_manager_save_dev_to_json(const char *filepath) {
             cJSON_AddStringToObject(basic, "manufacturer_name", dev->server_BasicClusterObj->manufacturer_name);
             cJSON_AddStringToObject(basic, "model_id", dev->server_BasicClusterObj->model_identifier);
             cJSON_AddStringToObject(basic, "date_code", dev->server_BasicClusterObj->date_code);
-             cJSON_AddNumberToObject(basic, "power_source", dev->server_BasicClusterObj->power_source);
+            cJSON_AddNumberToObject(basic, "power_source", dev->server_BasicClusterObj->power_source);
             const char* power_text = get_power_source_string(dev->server_BasicClusterObj->power_source);
             cJSON_AddStringToObject(basic, "power_source_text", power_text);
             cJSON_AddStringToObject(basic, "location", dev->server_BasicClusterObj->location_description);
@@ -839,7 +865,7 @@ static esp_err_t zb_manager_save_dev_to_json(const char *filepath) {
             cJSON_AddItemToObject(dev_obj, "device_basic_cluster", basic);
         }
 
-        // === Уровень устройства: Power Configuration Cluster (если есть) ===
+        // Power Configuration Cluster (устройство)
         if (dev->server_PowerConfigurationClusterObj) {
             cJSON *power_config = cJSON_CreateObject();
             cJSON_AddNumberToObject(power_config, "cluster_id", 0x0001);
@@ -870,9 +896,9 @@ static esp_err_t zb_manager_save_dev_to_json(const char *filepath) {
             cJSON_AddNumberToObject(power_config, "mains_voltage_max_th", dev->server_PowerConfigurationClusterObj->mains_voltage_max_th);
             cJSON_AddNumberToObject(power_config, "mains_dwell_trip_point", dev->server_PowerConfigurationClusterObj->mains_dwell_trip_point);
             cJSON_AddNumberToObject(power_config, "last_update_ms", dev->server_PowerConfigurationClusterObj->last_update_ms);
-
             cJSON_AddItemToObject(dev_obj, "device_power_config_cluster", power_config);
         }
+
         // === Endpoints ===
         cJSON *eps = cJSON_CreateArray();
         for (int j = 0; j < dev->endpoints_count; j++) {
@@ -884,30 +910,8 @@ static esp_err_t zb_manager_save_dev_to_json(const char *filepath) {
             cJSON_AddNumberToObject(ep_obj, "is_use_on_device", ep->is_use_on_device);
             cJSON_AddStringToObject(ep_obj, "friendly_name", ep->friendly_name);
             cJSON_AddNumberToObject(ep_obj, "deviceId", ep->deviceId);
-            const char* dev_type_name = zb_manager_get_ha_device_type_name(ep->deviceId);
+            const char* dev_type_name = zbm_dev_base_extract_device_type_name_from_device_id(ep->deviceId);
             cJSON_AddStringToObject(ep_obj, "device_type", dev_type_name);
-
-            // Basic Cluster (на уровне endpoint)
-            /*if (ep->is_use_basic_cluster && ep->server_BasicClusterObj) {
-                cJSON *basic = cJSON_CreateObject();
-                cJSON_AddNumberToObject(basic, "cluster_id", 0x0000); // ESP_ZB_ZCL_CLUSTER_ID_BASIC
-                cJSON_AddNumberToObject(basic, "zcl_version", ep->server_BasicClusterObj->zcl_version);
-                cJSON_AddNumberToObject(basic, "app_version", ep->server_BasicClusterObj->application_version);
-                cJSON_AddNumberToObject(basic, "stack_version", ep->server_BasicClusterObj->stack_version);
-                cJSON_AddNumberToObject(basic, "hw_version", ep->server_BasicClusterObj->hw_version);
-                cJSON_AddStringToObject(basic, "manufacturer_name", ep->server_BasicClusterObj->manufacturer_name);
-                cJSON_AddStringToObject(basic, "model_id", ep->server_BasicClusterObj->model_identifier);
-                cJSON_AddStringToObject(basic, "date_code", ep->server_BasicClusterObj->date_code);
-                cJSON_AddNumberToObject(basic, "power_source", ep->server_BasicClusterObj->power_source);
-                const char* power_text = get_power_source_string(ep->server_BasicClusterObj->power_source);
-                cJSON_AddStringToObject(basic, "power_source_text", power_text);
-                cJSON_AddStringToObject(basic, "location", ep->server_BasicClusterObj->location_description);
-                cJSON_AddNumberToObject(basic, "env", ep->server_BasicClusterObj->physical_environment);
-                cJSON_AddBoolToObject(basic, "enabled", ep->server_BasicClusterObj->device_enabled);
-                 cJSON_AddNumberToObject(basic, "last_update_ms", ep->server_BasicClusterObj->last_update_ms);
-                cJSON_AddItemToObject(ep_obj, "basic", basic);
-            }*/
-
 
             // Identify Cluster
             if (ep->is_use_identify_cluster && ep->server_IdentifyClusterObj) {
@@ -955,90 +959,777 @@ static esp_err_t zb_manager_save_dev_to_json(const char *filepath) {
                 cJSON_AddItemToObject(ep_obj, "onoff", onoff);
            }
 
-           if (ep->output_clusters_count > 0 && ep->output_clusters_array) {
+            // Output Clusters (из output_clusters_array)
+            if (ep->output_clusters_count > 0 && ep->output_clusters_array) {
                 cJSON *out_clusters = cJSON_CreateArray();
-                for (int i = 0; i < ep->output_clusters_count; i++) {
-                    cJSON_AddItemToArray(out_clusters, cJSON_CreateNumber(ep->output_clusters_array[i]));
+                for (int k = 0; k < ep->output_clusters_count; k++) {
+                    cJSON_AddItemToArray(out_clusters, cJSON_CreateNumber(ep->output_clusters_array[k]));
                 }
                 cJSON_AddItemToObject(ep_obj, "output_clusters", out_clusters);
             }
 
-           // Power Configuration Cluster
-            /*if (ep->is_use_power_configuration_cluster && ep->server_PowerConfigurationClusterObj) {
-                cJSON *power_config = cJSON_CreateObject();
-                cJSON_AddNumberToObject(power_config, "cluster_id", 0x0001);
+            // UnKnowninputClusters_array
+            if (ep->UnKnowninputClusterCount > 0 && ep->UnKnowninputClusters_array) {
+                cJSON *unk_input = cJSON_CreateArray();
+                for (int k = 0; k < ep->UnKnowninputClusterCount; k++) {
+                    cluster_custom_t *cl = ep->UnKnowninputClusters_array[k];
+                    if (!cl) continue;
+                    cJSON *cl_obj = cJSON_CreateObject();
+                    cJSON_AddNumberToObject(cl_obj, "id", cl->id);
+                    cJSON_AddStringToObject(cl_obj, "cluster_id_text", cl->cluster_id_text);
+                    cJSON_AddNumberToObject(cl_obj, "role_mask", cl->role_mask);
+                    cJSON_AddNumberToObject(cl_obj, "manuf_code", cl->manuf_code);
+                    cJSON_AddNumberToObject(cl_obj, "is_use_on_device", cl->is_use_on_device);
 
-                // Battery 1
-                cJSON_AddNumberToObject(power_config, "battery_voltage", ep->server_PowerConfigurationClusterObj->battery_voltage);
-                cJSON_AddNumberToObject(power_config, "battery_percentage", ep->server_PowerConfigurationClusterObj->battery_percentage);
-                cJSON_AddStringToObject(power_config, "battery_voltage_str", get_battery_voltage_string(ep->server_PowerConfigurationClusterObj->battery_voltage));
-                cJSON_AddStringToObject(power_config, "battery_percentage_str", get_battery_percentage_string(ep->server_PowerConfigurationClusterObj->battery_percentage));
+                    // Атрибуты
+                    cJSON *attrs = cJSON_CreateArray();
+                    for (int a = 0; a < cl->attr_count; a++) {
+                        attribute_custom_t *attr = cl->attr_array[a];
+                        if (!attr) continue;
+                        cJSON *attr_obj = cJSON_CreateObject();
+                        cJSON_AddNumberToObject(attr_obj, "id", attr->id);
+                        cJSON_AddStringToObject(attr_obj, "attr_id_text", attr->attr_id_text);
+                        cJSON_AddNumberToObject(attr_obj, "type", attr->type);
+                        cJSON_AddNumberToObject(attr_obj, "acces", attr->acces);
+                        cJSON_AddNumberToObject(attr_obj, "size", attr->size);
+                        cJSON_AddNumberToObject(attr_obj, "is_void_pointer", attr->is_void_pointer);
+                        cJSON_AddNumberToObject(attr_obj, "manuf_code", attr->manuf_code);
+                        cJSON_AddNumberToObject(attr_obj, "parent_cluster_id", attr->parent_cluster_id);
+                        // p_value — не сохраняем (не сериализуется напрямую)
+                        cJSON_AddItemToArray(attrs, attr_obj);
+                    }
+                    cJSON_AddItemToObject(cl_obj, "attributes", attrs);
+                    cJSON_AddItemToArray(unk_input, cl_obj);
+                }
+                cJSON_AddItemToObject(ep_obj, "unknown_input_clusters", unk_input);
+            }
 
-                // Battery Info
-                cJSON_AddStringToObject(power_config, "battery_manufacturer", ep->server_PowerConfigurationClusterObj->battery_manufacturer);
-                cJSON_AddNumberToObject(power_config, "battery_size", ep->server_PowerConfigurationClusterObj->battery_size);
-                cJSON_AddStringToObject(power_config, "battery_size_str", get_battery_size_string(ep->server_PowerConfigurationClusterObj->battery_size));
-                cJSON_AddNumberToObject(power_config, "battery_a_hr_rating", ep->server_PowerConfigurationClusterObj->battery_a_hr_rating);
-                cJSON_AddNumberToObject(power_config, "battery_quantity", ep->server_PowerConfigurationClusterObj->battery_quantity);
-                cJSON_AddNumberToObject(power_config, "battery_rated_voltage", ep->server_PowerConfigurationClusterObj->battery_rated_voltage);
-                cJSON_AddNumberToObject(power_config, "battery_alarm_mask", ep->server_PowerConfigurationClusterObj->battery_alarm_mask);
-                cJSON_AddNumberToObject(power_config, "battery_voltage_min_th", ep->server_PowerConfigurationClusterObj->battery_voltage_min_th);
-                cJSON_AddNumberToObject(power_config, "battery_voltage_th1", ep->server_PowerConfigurationClusterObj->battery_voltage_th1);
-                cJSON_AddNumberToObject(power_config, "battery_voltage_th2", ep->server_PowerConfigurationClusterObj->battery_voltage_th2);
-                cJSON_AddNumberToObject(power_config, "battery_voltage_th3", ep->server_PowerConfigurationClusterObj->battery_voltage_th3);
-                cJSON_AddNumberToObject(power_config, "battery_percentage_min_th", ep->server_PowerConfigurationClusterObj->battery_percentage_min_th);
-                cJSON_AddNumberToObject(power_config, "battery_percentage_th1", ep->server_PowerConfigurationClusterObj->battery_percentage_th1);
-                cJSON_AddNumberToObject(power_config, "battery_percentage_th2", ep->server_PowerConfigurationClusterObj->battery_percentage_th2);
-                cJSON_AddNumberToObject(power_config, "battery_percentage_th3", ep->server_PowerConfigurationClusterObj->battery_percentage_th3);
-                cJSON_AddNumberToObject(power_config, "battery_alarm_state", ep->server_PowerConfigurationClusterObj->battery_alarm_state);
+            // UnKnownoutputClusters_array
+            if (ep->UnKnownoutputClusterCount > 0 && ep->UnKnownoutputClusters_array) {
+                cJSON *unk_output = cJSON_CreateArray();
+                for (int k = 0; k < ep->UnKnownoutputClusterCount; k++) {
+                    cluster_custom_t *cl = ep->UnKnownoutputClusters_array[k];
+                    if (!cl) continue;
+                    cJSON *cl_obj = cJSON_CreateObject();
+                    cJSON_AddNumberToObject(cl_obj, "id", cl->id);
+                    cJSON_AddStringToObject(cl_obj, "cluster_id_text", cl->cluster_id_text);
+                    cJSON_AddNumberToObject(cl_obj, "role_mask", cl->role_mask);
+                    cJSON_AddNumberToObject(cl_obj, "manuf_code", cl->manuf_code);
+                    cJSON_AddNumberToObject(cl_obj, "is_use_on_device", cl->is_use_on_device);
 
-                // Mains Power (опционально)
-                cJSON_AddNumberToObject(power_config, "mains_voltage", ep->server_PowerConfigurationClusterObj->mains_voltage);
-                cJSON_AddNumberToObject(power_config, "mains_frequency", ep->server_PowerConfigurationClusterObj->mains_frequency);
-                cJSON_AddNumberToObject(power_config, "mains_alarm_mask", ep->server_PowerConfigurationClusterObj->mains_alarm_mask);
-                cJSON_AddNumberToObject(power_config, "mains_voltage_min_th", ep->server_PowerConfigurationClusterObj->mains_voltage_min_th);
-                cJSON_AddNumberToObject(power_config, "mains_voltage_max_th", ep->server_PowerConfigurationClusterObj->mains_voltage_max_th);
-                cJSON_AddNumberToObject(power_config, "mains_dwell_trip_point", ep->server_PowerConfigurationClusterObj->mains_dwell_trip_point);
-
-                cJSON_AddNumberToObject(power_config, "last_update_ms", ep->server_PowerConfigurationClusterObj->last_update_ms);
-
-                cJSON_AddItemToObject(ep_obj, "power_config", power_config);
-            }*/
+                    // Атрибуты
+                    cJSON *attrs = cJSON_CreateArray();
+                    for (int a = 0; a < cl->attr_count; a++) {
+                        attribute_custom_t *attr = cl->attr_array[a];
+                        if (!attr) continue;
+                        cJSON *attr_obj = cJSON_CreateObject();
+                        cJSON_AddNumberToObject(attr_obj, "id", attr->id);
+                        cJSON_AddStringToObject(attr_obj, "attr_id_text", attr->attr_id_text);
+                        cJSON_AddNumberToObject(attr_obj, "type", attr->type);
+                        cJSON_AddNumberToObject(attr_obj, "acces", attr->acces);
+                        cJSON_AddNumberToObject(attr_obj, "size", attr->size);
+                        cJSON_AddNumberToObject(attr_obj, "is_void_pointer", attr->is_void_pointer);
+                        cJSON_AddNumberToObject(attr_obj, "manuf_code", attr->manuf_code);
+                        cJSON_AddNumberToObject(attr_obj, "parent_cluster_id", attr->parent_cluster_id);
+                        cJSON_AddItemToArray(attrs, attr_obj);
+                    }
+                    cJSON_AddItemToObject(cl_obj, "attributes", attrs);
+                    cJSON_AddItemToArray(unk_output, cl_obj);
+                }
+                cJSON_AddItemToObject(ep_obj, "unknown_output_clusters", unk_output);
+            }
 
             cJSON_AddItemToArray(eps, ep_obj);
         }
-
         cJSON_AddItemToObject(dev_obj, "endpoints", eps);
         cJSON_AddItemToArray(root, dev_obj);
     }
 
-    // Сериализация
-    const char *json_str = cJSON_PrintUnformatted(root);
-    if (json_str) {
-        FILE *file = fopen(filepath, "w");
-        if (file) {
-            fwrite(json_str, 1, strlen(json_str), file);
-            fclose(file);
-            ESP_LOGI(TAG, "Devices saved to %s", filepath);
-        } else {
-            ESP_LOGE(TAG, "Failed to open %s for writing", filepath);
-           xSemaphoreGive(g_device_array_mutex);
-            cJSON_Delete(root);
-            free((void*)json_str);
-            return ESP_FAIL;
+    return root;
+}
+
+
+cJSON *zb_manager_get_device_json(device_custom_t *dev) {
+    if (!dev) {
+        ESP_LOGW(TAG, "zb_manager_get_device_json: dev is NULL");
+        return NULL;
+    }
+
+    ESP_LOGI(TAG, "zb_manager_get_device_json: Building JSON for device IEEE=%02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x, short=0x%04x",
+             dev->ieee_addr[7], dev->ieee_addr[6], dev->ieee_addr[5], dev->ieee_addr[4],
+             dev->ieee_addr[3], dev->ieee_addr[2], dev->ieee_addr[1], dev->ieee_addr[0],
+             dev->short_addr);
+
+    cJSON *dev_obj = NULL;
+    dev_obj = cJSON_CreateObject();
+    if (!dev_obj) {
+        ESP_LOGE(TAG, "zb_manager_get_device_json: Failed to create dev_obj");
+        return NULL;
+    }
+
+    // === Основные поля устройства ===
+    char ieee_str[24] = {0};
+    ieee_to_str(ieee_str, dev->ieee_addr);
+    cJSON_AddStringToObject(dev_obj, "ieee_addr", ieee_str);
+    cJSON_AddNumberToObject(dev_obj, "short_addr", dev->short_addr);
+    cJSON_AddNumberToObject(dev_obj, "is_in_build_status", dev->is_in_build_status);
+    cJSON_AddNumberToObject(dev_obj, "index_in_array", dev->index_in_array);
+    cJSON_AddStringToObject(dev_obj, "friendly_name", dev->friendly_name);
+    cJSON_AddNumberToObject(dev_obj, "friendly_name_len", dev->friendly_name_len);
+    cJSON_AddNumberToObject(dev_obj, "capability", dev->capability);
+    cJSON_AddNumberToObject(dev_obj, "lqi", dev->lqi);
+    cJSON_AddNumberToObject(dev_obj, "last_seen_ms", dev->last_seen_ms);
+    cJSON_AddNumberToObject(dev_obj, "device_timeout_ms", dev->device_timeout_ms);
+    cJSON_AddBoolToObject(dev_obj, "is_online", dev->is_online);
+
+    if (dev->manufacturer_code != 0) {
+        cJSON_AddNumberToObject(dev_obj, "manufacturer_code", dev->manufacturer_code);
+        cJSON_AddStringToObject(dev_obj, "manufacturer_name_str", zbm_extract_manufacturer_name_by_code(dev->manufacturer_code));
+    }
+
+    // Basic Cluster
+    if (dev->server_BasicClusterObj) {
+        cJSON *basic = NULL;
+        basic = cJSON_CreateObject();
+
+        if (basic) {
+            cJSON_AddNumberToObject(basic, "cluster_id", 0x0000);
+            cJSON_AddNumberToObject(basic, "zcl_version", dev->server_BasicClusterObj->zcl_version);
+            cJSON_AddNumberToObject(basic, "app_version", dev->server_BasicClusterObj->application_version);
+            cJSON_AddNumberToObject(basic, "stack_version", dev->server_BasicClusterObj->stack_version);
+            cJSON_AddNumberToObject(basic, "hw_version", dev->server_BasicClusterObj->hw_version);
+            cJSON_AddStringToObject(basic, "manufacturer_name", dev->server_BasicClusterObj->manufacturer_name);
+            cJSON_AddStringToObject(basic, "model_id", dev->server_BasicClusterObj->model_identifier);
+            cJSON_AddStringToObject(basic, "date_code", dev->server_BasicClusterObj->date_code);
+            cJSON_AddNumberToObject(basic, "power_source", dev->server_BasicClusterObj->power_source);
+            const char* power_text = get_power_source_string(dev->server_BasicClusterObj->power_source);
+            cJSON_AddStringToObject(basic, "power_source_text", power_text);
+            cJSON_AddStringToObject(basic, "location", dev->server_BasicClusterObj->location_description);
+            cJSON_AddNumberToObject(basic, "env", dev->server_BasicClusterObj->physical_environment);
+            cJSON_AddBoolToObject(basic, "enabled", dev->server_BasicClusterObj->device_enabled);
+            cJSON_AddNumberToObject(basic, "last_update_ms", dev->server_BasicClusterObj->last_update_ms);
+            cJSON_AddItemToObject(dev_obj, "device_basic_cluster", basic);
         }
-        free((void*)json_str);
-    } else {
+    }
+
+    // Power Configuration Cluster
+    if (dev->server_PowerConfigurationClusterObj) {
+        cJSON *power_config = NULL;
+        power_config = cJSON_CreateObject();
+        if (power_config) {
+            cJSON_AddNumberToObject(power_config, "cluster_id", 0x0001);
+            cJSON_AddNumberToObject(power_config, "battery_voltage", dev->server_PowerConfigurationClusterObj->battery_voltage);
+            cJSON_AddNumberToObject(power_config, "battery_percentage", dev->server_PowerConfigurationClusterObj->battery_percentage);
+            cJSON_AddStringToObject(power_config, "battery_voltage_str", get_battery_voltage_string(dev->server_PowerConfigurationClusterObj->battery_voltage));
+            cJSON_AddStringToObject(power_config, "battery_percentage_str", get_battery_percentage_string(dev->server_PowerConfigurationClusterObj->battery_percentage));
+            cJSON_AddStringToObject(power_config, "battery_manufacturer", dev->server_PowerConfigurationClusterObj->battery_manufacturer);
+            cJSON_AddNumberToObject(power_config, "battery_size", dev->server_PowerConfigurationClusterObj->battery_size);
+            cJSON_AddStringToObject(power_config, "battery_size_str", get_battery_size_string(dev->server_PowerConfigurationClusterObj->battery_size));
+            cJSON_AddNumberToObject(power_config, "battery_a_hr_rating", dev->server_PowerConfigurationClusterObj->battery_a_hr_rating);
+            cJSON_AddNumberToObject(power_config, "battery_quantity", dev->server_PowerConfigurationClusterObj->battery_quantity);
+            cJSON_AddNumberToObject(power_config, "battery_rated_voltage", dev->server_PowerConfigurationClusterObj->battery_rated_voltage);
+            cJSON_AddNumberToObject(power_config, "battery_alarm_mask", dev->server_PowerConfigurationClusterObj->battery_alarm_mask);
+            cJSON_AddNumberToObject(power_config, "battery_voltage_min_th", dev->server_PowerConfigurationClusterObj->battery_voltage_min_th);
+            cJSON_AddNumberToObject(power_config, "battery_voltage_th1", dev->server_PowerConfigurationClusterObj->battery_voltage_th1);
+            cJSON_AddNumberToObject(power_config, "battery_voltage_th2", dev->server_PowerConfigurationClusterObj->battery_voltage_th2);
+            cJSON_AddNumberToObject(power_config, "battery_voltage_th3", dev->server_PowerConfigurationClusterObj->battery_voltage_th3);
+            cJSON_AddNumberToObject(power_config, "battery_percentage_min_th", dev->server_PowerConfigurationClusterObj->battery_percentage_min_th);
+            cJSON_AddNumberToObject(power_config, "battery_percentage_th1", dev->server_PowerConfigurationClusterObj->battery_percentage_th1);
+            cJSON_AddNumberToObject(power_config, "battery_percentage_th2", dev->server_PowerConfigurationClusterObj->battery_percentage_th2);
+            cJSON_AddNumberToObject(power_config, "battery_percentage_th3", dev->server_PowerConfigurationClusterObj->battery_percentage_th3);
+            cJSON_AddNumberToObject(power_config, "battery_alarm_state", dev->server_PowerConfigurationClusterObj->battery_alarm_state);
+            cJSON_AddNumberToObject(power_config, "mains_voltage", dev->server_PowerConfigurationClusterObj->mains_voltage);
+            cJSON_AddNumberToObject(power_config, "mains_frequency", dev->server_PowerConfigurationClusterObj->mains_frequency);
+            cJSON_AddNumberToObject(power_config, "mains_alarm_mask", dev->server_PowerConfigurationClusterObj->mains_alarm_mask);
+            cJSON_AddNumberToObject(power_config, "mains_voltage_min_th", dev->server_PowerConfigurationClusterObj->mains_voltage_min_th);
+            cJSON_AddNumberToObject(power_config, "mains_voltage_max_th", dev->server_PowerConfigurationClusterObj->mains_voltage_max_th);
+            cJSON_AddNumberToObject(power_config, "mains_dwell_trip_point", dev->server_PowerConfigurationClusterObj->mains_dwell_trip_point);
+            cJSON_AddNumberToObject(power_config, "last_update_ms", dev->server_PowerConfigurationClusterObj->last_update_ms);
+            cJSON_AddItemToObject(dev_obj, "device_power_config_cluster", power_config);
+        }
+    }
+
+    // === Endpoints ===
+    cJSON *eps = NULL;
+    eps = cJSON_CreateArray();
+    if (!eps) {
+        ESP_LOGE(TAG, "zb_manager_get_device_json: Failed to create eps array");
+        cJSON_Delete(dev_obj);
+        return NULL;
+    }
+
+    ESP_LOGI(TAG, "zb_manager_get_device_json: Found %d endpoints", dev->endpoints_count);
+
+    cJSON_AddNumberToObject(dev_obj, "endpointscount", dev->endpoints_count);
+
+    if(dev->endpoints_count > 0 && dev->endpoints_array){
+        for (int j = 0; j < dev->endpoints_count; j++) {
+            endpoint_custom_t *ep = NULL;
+            ep = dev->endpoints_array[j];
+            if (!ep) {
+                ESP_LOGW(TAG, "zb_manager_get_device_json: endpoints_array[%d] is NULL", j);
+                continue;
+            }
+
+            ESP_LOGI(TAG, "zb_manager_get_device_json: Processing EP %d, deviceId=0x%04x, use_on_dev=%d",
+                    ep->ep_id, ep->deviceId, ep->is_use_on_device);
+
+            cJSON *ep_obj = NULL;
+            ep_obj = cJSON_CreateObject();
+            if (!ep_obj) {
+                ESP_LOGE(TAG, "zb_manager_get_device_json: Failed to create ep_obj for ep_id=%d", ep->ep_id);
+                continue;
+            }
+
+            cJSON_AddNumberToObject(ep_obj, "ep_id", ep->ep_id);
+            cJSON_AddNumberToObject(ep_obj, "is_use_on_device", ep->is_use_on_device);
+            cJSON_AddStringToObject(ep_obj, "friendly_name", ep->friendly_name);
+            cJSON_AddNumberToObject(ep_obj, "deviceId", ep->deviceId);
+            const char* dev_type_name = zbm_dev_base_extract_device_type_name_from_device_id(ep->deviceId);
+            cJSON_AddStringToObject(ep_obj, "device_type", dev_type_name);
+
+            // Identify Cluster
+            if (ep->is_use_identify_cluster && ep->server_IdentifyClusterObj) {
+                cJSON *identify = NULL;
+                identify = cJSON_CreateObject();
+                if (identify) {
+                    cJSON_AddNumberToObject(identify, "cluster_id", 0x0003);
+                    cJSON_AddNumberToObject(identify, "identify_time", ep->server_IdentifyClusterObj->identify_time);
+                    cJSON_AddItemToObject(ep_obj, "identify", identify);
+                }
+            }
+
+            // Temperature Measurement Cluster
+            if (ep->is_use_temperature_measurement_cluster && ep->server_TemperatureMeasurementClusterObj) {
+                cJSON *temp = NULL;
+                temp = cJSON_CreateObject();
+                if (temp) {
+                    cJSON_AddNumberToObject(temp, "cluster_id", 0x0402);
+                    cJSON_AddNumberToObject(temp, "measured_value", ep->server_TemperatureMeasurementClusterObj->measured_value);
+                    cJSON_AddNumberToObject(temp, "min_measured_value", ep->server_TemperatureMeasurementClusterObj->min_measured_value);
+                    cJSON_AddNumberToObject(temp, "max_measured_value", ep->server_TemperatureMeasurementClusterObj->max_measured_value);
+                    cJSON_AddNumberToObject(temp, "tolerance", ep->server_TemperatureMeasurementClusterObj->tolerance);
+                    cJSON_AddNumberToObject(temp, "last_update_ms", ep->server_TemperatureMeasurementClusterObj->last_update_ms);
+                    cJSON_AddBoolToObject(temp, "read_error", ep->server_TemperatureMeasurementClusterObj->read_error);
+                    cJSON_AddItemToObject(ep_obj, "temperature", temp);
+                }
+            }
+
+            // Humidity Measurement Cluster
+            if (ep->is_use_humidity_measurement_cluster && ep->server_HumidityMeasurementClusterObj) {
+                cJSON *hum = NULL;
+                hum = cJSON_CreateObject();
+                if (hum) {
+                    cJSON_AddNumberToObject(hum, "cluster_id", 0x0405);
+                    cJSON_AddNumberToObject(hum, "measured_value", ep->server_HumidityMeasurementClusterObj->measured_value);
+                    cJSON_AddNumberToObject(hum, "min_measured_value", ep->server_HumidityMeasurementClusterObj->min_measured_value);
+                    cJSON_AddNumberToObject(hum, "max_measured_value", ep->server_HumidityMeasurementClusterObj->max_measured_value);
+                    cJSON_AddNumberToObject(hum, "tolerance", ep->server_HumidityMeasurementClusterObj->tolerance);
+                    cJSON_AddNumberToObject(hum, "last_update_ms", ep->server_HumidityMeasurementClusterObj->last_update_ms);
+                    cJSON_AddBoolToObject(hum, "read_error", ep->server_HumidityMeasurementClusterObj->read_error);
+                    cJSON_AddItemToObject(ep_obj, "humidity", hum);
+                }
+            }
+
+            // OnOff Cluster
+            if (ep->is_use_on_off_cluster && ep->server_OnOffClusterObj) {
+                cJSON *onoff = NULL;
+                onoff = cJSON_CreateObject();
+                if (onoff) {
+                    cJSON_AddNumberToObject(onoff, "cluster_id", 0x0006);
+                    cJSON_AddBoolToObject(onoff, "on", ep->server_OnOffClusterObj->on_off);
+                    cJSON_AddNumberToObject(onoff, "on_time", ep->server_OnOffClusterObj->on_time);
+                    cJSON_AddNumberToObject(onoff, "off_wait_time", ep->server_OnOffClusterObj->off_wait_time);
+                    cJSON_AddNumberToObject(onoff, "start_up", ep->server_OnOffClusterObj->start_up_on_off);
+                    cJSON_AddNumberToObject(onoff, "last_update_ms", ep->server_OnOffClusterObj->last_update_ms);
+                    cJSON_AddItemToObject(ep_obj, "onoff", onoff);
+                }
+            }
+
+            
+            cJSON_AddNumberToObject(ep_obj, "unkinpclcount", ep->UnKnowninputClusterCount);
+            // Unknown Input Clusters
+            if (ep->UnKnowninputClusterCount > 0 && ep->UnKnowninputClusters_array) {
+                cJSON *unk_input = NULL;
+                unk_input = cJSON_CreateArray();
+                if (unk_input) {
+                    ESP_LOGI(TAG, "zb_manager_get_device_json: EP %d has %d unknown input clusters", ep->ep_id, ep->UnKnowninputClusterCount);
+                    for (int k = 0; k < ep->UnKnowninputClusterCount; k++) {
+                        cluster_custom_t *cl = NULL;
+                        cl = ep->UnKnowninputClusters_array[k];
+                        if (!cl) {
+                            ESP_LOGW(TAG, "zb_manager_get_device_json: UnKnowninputClusters_array[%d] is NULL", k);
+                            continue;
+                        }
+                        cJSON *cl_obj = NULL;
+                        cl_obj = cJSON_CreateObject();
+                        if (!cl_obj) 
+                        {
+                            ESP_LOGW(TAG, "cl_obj = cJSON_CreateObject(); ERROR str 1280");
+                            continue;
+                        }
+
+                        cJSON_AddNumberToObject(cl_obj, "id", cl->id);
+                        cJSON_AddStringToObject(cl_obj, "cluster_id_text", cl->cluster_id_text);
+                        cJSON_AddNumberToObject(cl_obj, "role_mask", cl->role_mask);
+                        cJSON_AddNumberToObject(cl_obj, "manuf_code", cl->manuf_code);
+                        cJSON_AddNumberToObject(cl_obj, "is_use_on_device", cl->is_use_on_device);
+
+                        cJSON *attrs = NULL;
+                        attrs = cJSON_CreateArray();
+                        if (attrs) {
+                            for (int a = 0; a < cl->attr_count; a++) {
+                                attribute_custom_t *attr = NULL;
+                                attr = cl->attr_array[a];
+                                if (!attr) continue;
+                                cJSON *attr_obj = NULL;
+                                attr_obj = cJSON_CreateObject();
+                                if (!attr_obj) continue;
+
+                                cJSON_AddNumberToObject(attr_obj, "id", attr->id);
+                                cJSON_AddStringToObject(attr_obj, "attr_id_text", attr->attr_id_text);
+                                cJSON_AddNumberToObject(attr_obj, "type", attr->type);
+                                cJSON_AddNumberToObject(attr_obj, "acces", attr->acces);
+                                cJSON_AddNumberToObject(attr_obj, "size", attr->size);
+                                cJSON_AddNumberToObject(attr_obj, "is_void_pointer", attr->is_void_pointer);
+                                cJSON_AddNumberToObject(attr_obj, "manuf_code", attr->manuf_code);
+                                cJSON_AddNumberToObject(attr_obj, "parent_cluster_id", attr->parent_cluster_id);
+                                cJSON_AddItemToArray(attrs, attr_obj);
+                            }
+                            cJSON_AddItemToObject(cl_obj, "attributes", attrs);
+                        }
+                        cJSON_AddItemToArray(unk_input, cl_obj);
+                    }
+                    cJSON_AddItemToObject(ep_obj, "unknown_input_clusters", unk_input);
+                }
+            } else {
+                ESP_LOGI(TAG, "zb_manager_get_device_json: EP %d has NO unknown input clusters (count=%d, ptr=%p)",
+                        ep->ep_id, ep->UnKnowninputClusterCount, ep->UnKnowninputClusters_array);
+            }
+
+            cJSON_AddNumberToObject(ep_obj, "outpclcount", ep->output_clusters_count);
+            // Output Clusters
+            if (ep->output_clusters_count > 0 && ep->output_clusters_array) {
+                cJSON *out_clusters = NULL;
+                out_clusters = cJSON_CreateArray();
+                if (out_clusters) {
+                    ESP_LOGD(TAG, "zb_manager_get_device_json: EP %d has %d output clusters", ep->ep_id, ep->output_clusters_count);
+                    for (int k = 0; k < ep->output_clusters_count; k++) {
+                        cJSON_AddItemToArray(out_clusters, cJSON_CreateNumber(ep->output_clusters_array[k]));
+                    }
+                    cJSON_AddItemToObject(ep_obj, "output_clusters", out_clusters);
+                }
+            }
+
+            cJSON_AddNumberToObject(ep_obj, "unkoutpclcount", ep->UnKnownoutputClusterCount);
+            // Unknown Output Clusters
+            if (ep->UnKnownoutputClusterCount > 0 && ep->UnKnownoutputClusters_array) {
+                cJSON *unk_output = NULL;
+                unk_output = cJSON_CreateArray();
+                if (unk_output) {
+                    ESP_LOGI(TAG, "zb_manager_get_device_json: EP %d has %d unknown output clusters", ep->ep_id, ep->UnKnownoutputClusterCount);
+                    for (int k = 0; k < ep->UnKnownoutputClusterCount; k++) {
+                        cluster_custom_t *cl = NULL;
+                        cl = ep->UnKnownoutputClusters_array[k];
+                        if (!cl) {
+                            ESP_LOGW(TAG, "zb_manager_get_device_json: UnKnownoutputClusters_array[%d] is NULL", k);
+                            continue;
+                        }
+                        cJSON *cl_obj = NULL;
+                        cl_obj = cJSON_CreateObject();
+                        if (!cl_obj) continue;
+
+                        cJSON_AddNumberToObject(cl_obj, "id", cl->id);
+                        cJSON_AddStringToObject(cl_obj, "cluster_id_text", cl->cluster_id_text);
+                        cJSON_AddNumberToObject(cl_obj, "role_mask", cl->role_mask);
+                        cJSON_AddNumberToObject(cl_obj, "manuf_code", cl->manuf_code);
+                        cJSON_AddNumberToObject(cl_obj, "is_use_on_device", cl->is_use_on_device);
+
+                        cJSON *attrs = NULL;
+                        attrs = cJSON_CreateArray();
+                        if (attrs) {
+                            for (int a = 0; a < cl->attr_count; a++) {
+                                attribute_custom_t *attr = NULL;
+                                attr = cl->attr_array[a];
+                                if (!attr) continue;
+                                cJSON *attr_obj = NULL;
+                                attr_obj = cJSON_CreateObject();
+                                if (!attr_obj) continue;
+
+                                cJSON_AddNumberToObject(attr_obj, "id", attr->id);
+                                cJSON_AddStringToObject(attr_obj, "attr_id_text", attr->attr_id_text);
+                                cJSON_AddNumberToObject(attr_obj, "type", attr->type);
+                                cJSON_AddNumberToObject(attr_obj, "acces", attr->acces);
+                                cJSON_AddNumberToObject(attr_obj, "size", attr->size);
+                                cJSON_AddNumberToObject(attr_obj, "is_void_pointer", attr->is_void_pointer);
+                                cJSON_AddNumberToObject(attr_obj, "manuf_code", attr->manuf_code);
+                                cJSON_AddNumberToObject(attr_obj, "parent_cluster_id", attr->parent_cluster_id);
+                                cJSON_AddItemToArray(attrs, attr_obj);
+                            }
+                            cJSON_AddItemToObject(cl_obj, "attributes", attrs);
+                        }
+                        cJSON_AddItemToArray(unk_output, cl_obj);
+                    }
+                    cJSON_AddItemToObject(ep_obj, "unknown_output_clusters", unk_output);
+                }
+            } else {
+                ESP_LOGI(TAG, "zb_manager_get_device_json: EP %d has NO unknown output clusters (count=%d, ptr=%p)",
+                        ep->ep_id, ep->UnKnownoutputClusterCount, ep->UnKnownoutputClusters_array);
+            }
+
+            cJSON_AddItemToArray(eps, ep_obj);
+        }
+    } // end if endpoints count > 0
+    cJSON_AddItemToObject(dev_obj, "endpoints", eps);
+    ESP_LOGI(TAG, "zb_manager_get_device_json: Successfully built JSON for device %s", ieee_str);
+    return dev_obj;
+}
+
+cJSON *zb_manager_get_device_json_not_log(device_custom_t *dev) {
+    if (!dev) {
+        return NULL;
+    }
+
+    cJSON *dev_obj = cJSON_CreateObject();
+    if (!dev_obj) {
+        return NULL;
+    }
+
+    // === Основные поля устройства ===
+    char ieee_str[24] = {0};
+    ieee_to_str(ieee_str, dev->ieee_addr);
+    cJSON_AddStringToObject(dev_obj, "ieee_addr", ieee_str);
+    cJSON_AddNumberToObject(dev_obj, "short_addr", dev->short_addr);
+    cJSON_AddNumberToObject(dev_obj, "is_in_build_status", dev->is_in_build_status);
+    cJSON_AddNumberToObject(dev_obj, "index_in_array", dev->index_in_array);
+    cJSON_AddStringToObject(dev_obj, "friendly_name", dev->friendly_name);
+    cJSON_AddNumberToObject(dev_obj, "friendly_name_len", dev->friendly_name_len);
+    cJSON_AddNumberToObject(dev_obj, "capability", dev->capability);
+    cJSON_AddNumberToObject(dev_obj, "lqi", dev->lqi);
+    cJSON_AddNumberToObject(dev_obj, "last_seen_ms", dev->last_seen_ms);
+    cJSON_AddNumberToObject(dev_obj, "device_timeout_ms", dev->device_timeout_ms);
+    cJSON_AddBoolToObject(dev_obj, "is_online", dev->is_online);
+
+    if (dev->manufacturer_code != 0) {
+        cJSON_AddNumberToObject(dev_obj, "manufacturer_code", dev->manufacturer_code);
+        cJSON_AddStringToObject(dev_obj, "manufacturer_name_str",
+            zbm_extract_manufacturer_name_by_code(dev->manufacturer_code));
+    }
+
+    // Basic Cluster
+    if (dev->server_BasicClusterObj) {
+        cJSON *basic = cJSON_CreateObject();
+        if (basic) {
+            cJSON_AddNumberToObject(basic, "cluster_id", 0x0000);
+            cJSON_AddNumberToObject(basic, "zcl_version", dev->server_BasicClusterObj->zcl_version);
+            cJSON_AddNumberToObject(basic, "app_version", dev->server_BasicClusterObj->application_version);
+            cJSON_AddNumberToObject(basic, "stack_version", dev->server_BasicClusterObj->stack_version);
+            cJSON_AddNumberToObject(basic, "hw_version", dev->server_BasicClusterObj->hw_version);
+            cJSON_AddStringToObject(basic, "manufacturer_name", dev->server_BasicClusterObj->manufacturer_name);
+            cJSON_AddStringToObject(basic, "model_id", dev->server_BasicClusterObj->model_identifier);
+            cJSON_AddStringToObject(basic, "date_code", dev->server_BasicClusterObj->date_code);
+            cJSON_AddNumberToObject(basic, "power_source", dev->server_BasicClusterObj->power_source);
+            const char* power_text = get_power_source_string(dev->server_BasicClusterObj->power_source);
+            cJSON_AddStringToObject(basic, "power_source_text", power_text);
+            cJSON_AddStringToObject(basic, "location", dev->server_BasicClusterObj->location_description);
+            cJSON_AddNumberToObject(basic, "env", dev->server_BasicClusterObj->physical_environment);
+            cJSON_AddBoolToObject(basic, "enabled", dev->server_BasicClusterObj->device_enabled);
+            cJSON_AddNumberToObject(basic, "last_update_ms", dev->server_BasicClusterObj->last_update_ms);
+            cJSON_AddItemToObject(dev_obj, "device_basic_cluster", basic);
+        }
+    }
+
+    // Power Configuration Cluster
+    if (dev->server_PowerConfigurationClusterObj) {
+        cJSON *power_config = cJSON_CreateObject();
+        if (power_config) {
+            cJSON_AddNumberToObject(power_config, "cluster_id", 0x0001);
+            cJSON_AddNumberToObject(power_config, "battery_voltage", dev->server_PowerConfigurationClusterObj->battery_voltage);
+            cJSON_AddNumberToObject(power_config, "battery_percentage", dev->server_PowerConfigurationClusterObj->battery_percentage);
+            cJSON_AddStringToObject(power_config, "battery_voltage_str", get_battery_voltage_string(dev->server_PowerConfigurationClusterObj->battery_voltage));
+            cJSON_AddStringToObject(power_config, "battery_percentage_str", get_battery_percentage_string(dev->server_PowerConfigurationClusterObj->battery_percentage));
+            cJSON_AddStringToObject(power_config, "battery_manufacturer", dev->server_PowerConfigurationClusterObj->battery_manufacturer);
+            cJSON_AddNumberToObject(power_config, "battery_size", dev->server_PowerConfigurationClusterObj->battery_size);
+            cJSON_AddStringToObject(power_config, "battery_size_str", get_battery_size_string(dev->server_PowerConfigurationClusterObj->battery_size));
+            cJSON_AddNumberToObject(power_config, "battery_a_hr_rating", dev->server_PowerConfigurationClusterObj->battery_a_hr_rating);
+            cJSON_AddNumberToObject(power_config, "battery_quantity", dev->server_PowerConfigurationClusterObj->battery_quantity);
+            cJSON_AddNumberToObject(power_config, "battery_rated_voltage", dev->server_PowerConfigurationClusterObj->battery_rated_voltage);
+            cJSON_AddNumberToObject(power_config, "battery_alarm_mask", dev->server_PowerConfigurationClusterObj->battery_alarm_mask);
+            cJSON_AddNumberToObject(power_config, "battery_voltage_min_th", dev->server_PowerConfigurationClusterObj->battery_voltage_min_th);
+            cJSON_AddNumberToObject(power_config, "battery_voltage_th1", dev->server_PowerConfigurationClusterObj->battery_voltage_th1);
+            cJSON_AddNumberToObject(power_config, "battery_voltage_th2", dev->server_PowerConfigurationClusterObj->battery_voltage_th2);
+            cJSON_AddNumberToObject(power_config, "battery_voltage_th3", dev->server_PowerConfigurationClusterObj->battery_voltage_th3);
+            cJSON_AddNumberToObject(power_config, "battery_percentage_min_th", dev->server_PowerConfigurationClusterObj->battery_percentage_min_th);
+            cJSON_AddNumberToObject(power_config, "battery_percentage_th1", dev->server_PowerConfigurationClusterObj->battery_percentage_th1);
+            cJSON_AddNumberToObject(power_config, "battery_percentage_th2", dev->server_PowerConfigurationClusterObj->battery_percentage_th2);
+            cJSON_AddNumberToObject(power_config, "battery_percentage_th3", dev->server_PowerConfigurationClusterObj->battery_percentage_th3);
+            cJSON_AddNumberToObject(power_config, "battery_alarm_state", dev->server_PowerConfigurationClusterObj->battery_alarm_state);
+            cJSON_AddNumberToObject(power_config, "mains_voltage", dev->server_PowerConfigurationClusterObj->mains_voltage);
+            cJSON_AddNumberToObject(power_config, "mains_frequency", dev->server_PowerConfigurationClusterObj->mains_frequency);
+            cJSON_AddNumberToObject(power_config, "mains_alarm_mask", dev->server_PowerConfigurationClusterObj->mains_alarm_mask);
+            cJSON_AddNumberToObject(power_config, "mains_voltage_min_th", dev->server_PowerConfigurationClusterObj->mains_voltage_min_th);
+            cJSON_AddNumberToObject(power_config, "mains_voltage_max_th", dev->server_PowerConfigurationClusterObj->mains_voltage_max_th);
+            cJSON_AddNumberToObject(power_config, "mains_dwell_trip_point", dev->server_PowerConfigurationClusterObj->mains_dwell_trip_point);
+            cJSON_AddNumberToObject(power_config, "last_update_ms", dev->server_PowerConfigurationClusterObj->last_update_ms);
+            cJSON_AddItemToObject(dev_obj, "device_power_config_cluster", power_config);
+        }
+    }
+
+    // === Endpoints ===
+    cJSON *eps = cJSON_CreateArray();
+    if (eps) {
+        for (int j = 0; j < dev->endpoints_count; j++) {
+            endpoint_custom_t *ep = dev->endpoints_array[j];
+            if (!ep) continue;
+
+            cJSON *ep_obj = cJSON_CreateObject();
+            if (!ep_obj) continue;
+
+            cJSON_AddNumberToObject(ep_obj, "ep_id", ep->ep_id);
+            cJSON_AddNumberToObject(ep_obj, "is_use_on_device", ep->is_use_on_device);
+            cJSON_AddStringToObject(ep_obj, "friendly_name", ep->friendly_name);
+            cJSON_AddNumberToObject(ep_obj, "deviceId", ep->deviceId);
+            const char* dev_type_name = zbm_dev_base_extract_device_type_name_from_device_id(ep->deviceId);
+            cJSON_AddStringToObject(ep_obj, "device_type", dev_type_name);
+
+            // Identify Cluster
+            if (ep->is_use_identify_cluster && ep->server_IdentifyClusterObj) {
+                cJSON *identify = cJSON_CreateObject();
+                if (identify) {
+                    cJSON_AddNumberToObject(identify, "cluster_id", 0x0003);
+                    cJSON_AddNumberToObject(identify, "identify_time", ep->server_IdentifyClusterObj->identify_time);
+                    cJSON_AddItemToObject(ep_obj, "identify", identify);
+                }
+            }
+
+            // Temperature Measurement Cluster
+            if (ep->is_use_temperature_measurement_cluster && ep->server_TemperatureMeasurementClusterObj) {
+                cJSON *temp = cJSON_CreateObject();
+                if (temp) {
+                    cJSON_AddNumberToObject(temp, "cluster_id", 0x0402);
+                    cJSON_AddNumberToObject(temp, "measured_value", ep->server_TemperatureMeasurementClusterObj->measured_value);
+                    cJSON_AddNumberToObject(temp, "min_measured_value", ep->server_TemperatureMeasurementClusterObj->min_measured_value);
+                    cJSON_AddNumberToObject(temp, "max_measured_value", ep->server_TemperatureMeasurementClusterObj->max_measured_value);
+                    cJSON_AddNumberToObject(temp, "tolerance", ep->server_TemperatureMeasurementClusterObj->tolerance);
+                    cJSON_AddNumberToObject(temp, "last_update_ms", ep->server_TemperatureMeasurementClusterObj->last_update_ms);
+                    cJSON_AddBoolToObject(temp, "read_error", ep->server_TemperatureMeasurementClusterObj->read_error);
+                    cJSON_AddItemToObject(ep_obj, "temperature", temp);
+                }
+            }
+
+            // Humidity Measurement Cluster
+            if (ep->is_use_humidity_measurement_cluster && ep->server_HumidityMeasurementClusterObj) {
+                cJSON *hum = cJSON_CreateObject();
+                if (hum) {
+                    cJSON_AddNumberToObject(hum, "cluster_id", 0x0405);
+                    cJSON_AddNumberToObject(hum, "measured_value", ep->server_HumidityMeasurementClusterObj->measured_value);
+                    cJSON_AddNumberToObject(hum, "min_measured_value", ep->server_HumidityMeasurementClusterObj->min_measured_value);
+                    cJSON_AddNumberToObject(hum, "max_measured_value", ep->server_HumidityMeasurementClusterObj->max_measured_value);
+                    cJSON_AddNumberToObject(hum, "tolerance", ep->server_HumidityMeasurementClusterObj->tolerance);
+                    cJSON_AddNumberToObject(hum, "last_update_ms", ep->server_HumidityMeasurementClusterObj->last_update_ms);
+                    cJSON_AddBoolToObject(hum, "read_error", ep->server_HumidityMeasurementClusterObj->read_error);
+                    cJSON_AddItemToObject(ep_obj, "humidity", hum);
+                }
+            }
+
+            // OnOff Cluster
+            if (ep->is_use_on_off_cluster && ep->server_OnOffClusterObj) {
+                cJSON *onoff = cJSON_CreateObject();
+                if (onoff) {
+                    cJSON_AddNumberToObject(onoff, "cluster_id", 0x0006);
+                    cJSON_AddBoolToObject(onoff, "on", ep->server_OnOffClusterObj->on_off);
+                    cJSON_AddNumberToObject(onoff, "on_time", ep->server_OnOffClusterObj->on_time);
+                    cJSON_AddNumberToObject(onoff, "off_wait_time", ep->server_OnOffClusterObj->off_wait_time);
+                    cJSON_AddNumberToObject(onoff, "start_up", ep->server_OnOffClusterObj->start_up_on_off);
+                    cJSON_AddNumberToObject(onoff, "last_update_ms", ep->server_OnOffClusterObj->last_update_ms);
+                    cJSON_AddItemToObject(ep_obj, "onoff", onoff);
+                }
+            }
+
+            // Output Clusters
+            if (ep->output_clusters_count > 0 && ep->output_clusters_array) {
+                cJSON *out_clusters = cJSON_CreateArray();
+                if (out_clusters) {
+                    for (int k = 0; k < ep->output_clusters_count; k++) {
+                        cJSON_AddItemToArray(out_clusters, cJSON_CreateNumber(ep->output_clusters_array[k]));
+                    }
+                    cJSON_AddItemToObject(ep_obj, "output_clusters", out_clusters);
+                }
+            }
+
+            // Unknown Input Clusters
+            if (ep->UnKnowninputClusterCount > 0 && ep->UnKnowninputClusters_array) {
+                cJSON *unk_input = cJSON_CreateArray();
+                if (unk_input) {
+                    for (int k = 0; k < ep->UnKnowninputClusterCount; k++) {
+                        cluster_custom_t *cl = ep->UnKnowninputClusters_array[k];
+                        if (!cl) continue;
+                        cJSON *cl_obj = cJSON_CreateObject();
+                        if (!cl_obj) continue;
+
+                        cJSON_AddNumberToObject(cl_obj, "id", cl->id);
+                        cJSON_AddStringToObject(cl_obj, "cluster_id_text", cl->cluster_id_text);
+                        cJSON_AddNumberToObject(cl_obj, "role_mask", cl->role_mask);
+                        cJSON_AddNumberToObject(cl_obj, "manuf_code", cl->manuf_code);
+                        cJSON_AddNumberToObject(cl_obj, "is_use_on_device", cl->is_use_on_device);
+
+                        cJSON *attrs = cJSON_CreateArray();
+                        if (attrs) {
+                            for (int a = 0; a < cl->attr_count; a++) {
+                                attribute_custom_t *attr = cl->attr_array[a];
+                                if (!attr) continue;
+                                cJSON *attr_obj = cJSON_CreateObject();
+                                if (!attr_obj) continue;
+
+                                cJSON_AddNumberToObject(attr_obj, "id", attr->id);
+                                cJSON_AddStringToObject(attr_obj, "attr_id_text", attr->attr_id_text);
+                                cJSON_AddNumberToObject(attr_obj, "type", attr->type);
+                                cJSON_AddNumberToObject(attr_obj, "acces", attr->acces);
+                                cJSON_AddNumberToObject(attr_obj, "size", attr->size);
+                                cJSON_AddNumberToObject(attr_obj, "is_void_pointer", attr->is_void_pointer);
+                                cJSON_AddNumberToObject(attr_obj, "manuf_code", attr->manuf_code);
+                                cJSON_AddNumberToObject(attr_obj, "parent_cluster_id", attr->parent_cluster_id);
+                                cJSON_AddItemToArray(attrs, attr_obj);
+                            }
+                            cJSON_AddItemToObject(cl_obj, "attributes", attrs);
+                        }
+                        cJSON_AddItemToArray(unk_input, cl_obj);
+                    }
+                    cJSON_AddItemToObject(ep_obj, "unknown_input_clusters", unk_input);
+                }
+            }
+
+            // Unknown Output Clusters
+            if (ep->UnKnownoutputClusterCount > 0 && ep->UnKnownoutputClusters_array) {
+                cJSON *unk_output = cJSON_CreateArray();
+                if (unk_output) {
+                    for (int k = 0; k < ep->UnKnownoutputClusterCount; k++) {
+                        cluster_custom_t *cl = ep->UnKnownoutputClusters_array[k];
+                        if (!cl) continue;
+                        cJSON *cl_obj = cJSON_CreateObject();
+                        if (!cl_obj) continue;
+
+                        cJSON_AddNumberToObject(cl_obj, "id", cl->id);
+                        cJSON_AddStringToObject(cl_obj, "cluster_id_text", cl->cluster_id_text);
+                        cJSON_AddNumberToObject(cl_obj, "role_mask", cl->role_mask);
+                        cJSON_AddNumberToObject(cl_obj, "manuf_code", cl->manuf_code);
+                        cJSON_AddNumberToObject(cl_obj, "is_use_on_device", cl->is_use_on_device);
+
+                        cJSON *attrs = cJSON_CreateArray();
+                        if (attrs) {
+                            for (int a = 0; a < cl->attr_count; a++) {
+                                attribute_custom_t *attr = cl->attr_array[a];
+                                if (!attr) continue;
+                                cJSON *attr_obj = cJSON_CreateObject();
+                                if (!attr_obj) continue;
+
+                                cJSON_AddNumberToObject(attr_obj, "id", attr->id);
+                                cJSON_AddStringToObject(attr_obj, "attr_id_text", attr->attr_id_text);
+                                cJSON_AddNumberToObject(attr_obj, "type", attr->type);
+                                cJSON_AddNumberToObject(attr_obj, "acces", attr->acces);
+                                cJSON_AddNumberToObject(attr_obj, "size", attr->size);
+                                cJSON_AddNumberToObject(attr_obj, "is_void_pointer", attr->is_void_pointer);
+                                cJSON_AddNumberToObject(attr_obj, "manuf_code", attr->manuf_code);
+                                cJSON_AddNumberToObject(attr_obj, "parent_cluster_id", attr->parent_cluster_id);
+                                cJSON_AddItemToArray(attrs, attr_obj);
+                            }
+                            cJSON_AddItemToObject(cl_obj, "attributes", attrs);
+                        }
+                        cJSON_AddItemToArray(unk_output, cl_obj);
+                    }
+                    cJSON_AddItemToObject(ep_obj, "unknown_output_clusters", unk_output);
+                }
+            }
+
+            cJSON_AddItemToArray(eps, ep_obj);
+        }
+        cJSON_AddItemToObject(dev_obj, "endpoints", eps);
+    }
+
+    return dev_obj;
+}
+
+cJSON *zb_manager_get_device_json_safe(device_custom_t *dev) {
+    cJSON *json = NULL;
+    if (xSemaphoreTake(g_device_array_mutex, pdMS_TO_TICKS(ZB_DEVICE_MUTEX_TIMEOUT_LONG_MS)) != pdTRUE) {
+        ESP_LOGE(TAG, "Failed to take mutex in zb_manager_get_full_json_from_remote_devices_array_safe");
+        return NULL;
+    }
+
+    json = zb_manager_get_device_json(dev);
+
+    xSemaphoreGive(g_device_array_mutex);
+    return json;
+}
+
+cJSON* zb_manager_get_full_json_from_remote_devices_array(void) {
+    cJSON *root = NULL;
+    root = cJSON_CreateArray();
+    if (!root) {
+        return NULL;
+    }
+
+    for (int i = 0; i < RemoteDevicesCount; i++) {
+        device_custom_t *dev = NULL;
+        dev = RemoteDevicesArray[i];
+        if (!dev) continue;
+        cJSON *dev_json = NULL;
+        dev_json = zb_manager_get_device_json(dev);
+        if (!dev_json) continue;
+        if (dev_json) {
+            cJSON_AddItemToArray(root, dev_json);
+        }
+    }
+
+    return root;
+}
+
+
+
+cJSON* zb_manager_get_full_json_from_remote_devices_array_safe(void) {
+    if (xSemaphoreTake(g_device_array_mutex, pdMS_TO_TICKS(ZB_DEVICE_MUTEX_TIMEOUT_LONG_MS)) != pdTRUE) {
+        ESP_LOGE(TAG, "Failed to take mutex in zb_manager_get_full_json_from_remote_devices_array_safe");
+        return NULL;
+    }
+
+    cJSON *json = zb_manager_get_full_json_from_remote_devices_array();
+
+    xSemaphoreGive(g_device_array_mutex);
+    return json;
+}
+
+static esp_err_t zb_manager_save_dev_to_json(const char *filepath) {
+    //cJSON *root = zb_manager_get_full_json_from_remote_devices_array_old();
+    cJSON *root = zb_manager_get_full_json_from_remote_devices_array_safe();
+    if (!root) {
+        ESP_LOGE(TAG, "Failed to generate JSON object for saving devices");
+        return ESP_FAIL;
+    }
+
+    char *json_str = cJSON_PrintUnformatted(root);
+    if (!json_str) {
         ESP_LOGE(TAG, "Failed to print JSON");
-        xSemaphoreGive(g_device_array_mutex);
         cJSON_Delete(root);
         return ESP_FAIL;
     }
 
+    FILE *file = fopen(filepath, "w");
+    if (!file) {
+        ESP_LOGE(TAG, "Failed to open %s for writing", filepath);
+        cJSON_Delete(root);
+        free(json_str);
+        return ESP_FAIL;
+    }
+
+    fwrite(json_str, 1, strlen(json_str), file);
+    fclose(file);
+    free(json_str);
     cJSON_Delete(root);
-    xSemaphoreGive(g_device_array_mutex);
+
+    ESP_LOGI(TAG, "Devices saved to %s", filepath);
     return ESP_OK;
 }
+
 
 esp_err_t zb_manager_queue_save_request(void)
 {
@@ -1095,7 +1786,7 @@ esp_err_t zb_manager_print_RemoteDevicesArray (void)
         if (dev->manufacturer_code != 0) {
             cJSON_AddNumberToObject(dev_obj, "manufacturer_code", dev->manufacturer_code);
             cJSON_AddStringToObject(dev_obj, "manufacturer_name_str",
-                zb_manager_get_manufacturer_name_by_code(dev->manufacturer_code));
+                zbm_extract_manufacturer_name_by_code(dev->manufacturer_code));
         }
 
         // Device-level Basic Cluster
@@ -1164,7 +1855,7 @@ esp_err_t zb_manager_print_RemoteDevicesArray (void)
             cJSON_AddNumberToObject(ep_obj, "is_use_on_device", ep->is_use_on_device);
             cJSON_AddStringToObject(ep_obj, "friendly_name", ep->friendly_name);
             cJSON_AddNumberToObject(ep_obj, "deviceId", ep->deviceId);
-            const char* dev_type_name = zb_manager_get_ha_device_type_name(ep->deviceId);
+            const char* dev_type_name = zbm_dev_base_extract_device_type_name_from_device_id(ep->deviceId);
             cJSON_AddStringToObject(ep_obj, "device_type", dev_type_name);
 
            
@@ -1279,6 +1970,484 @@ esp_err_t zb_manager_print_RemoteDevicesArray (void)
 }
 
 esp_err_t zb_manager_load_devices_from_json(const char *filepath) {
+    FILE *f = fopen(filepath, "r");
+    if (!f) {
+        ESP_LOGW(TAG, "No JSON file found: %s", filepath);
+        return ESP_ERR_NOT_FOUND;
+    }
+
+    fseek(f, 0, SEEK_END);
+    long len = ftell(f);
+    fseek(f, 0, SEEK_SET);
+
+    char *json_str = malloc(len + 1);
+    if (!json_str) {
+        fclose(f);
+        return ESP_ERR_NO_MEM;
+    }
+    fread(json_str, 1, len, f);
+    json_str[len] = '\0';
+    fclose(f);
+
+    cJSON *root = cJSON_Parse(json_str);
+    free(json_str);
+    if (!root) {
+        ESP_LOGE(TAG, "JSON parse failed: %s", cJSON_GetErrorPtr());
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    // === БЛОКИРОВКА ПЕРЕД ЗАГРУЗКОЙ ===
+    if (xSemaphoreTake(g_device_array_mutex, pdMS_TO_TICKS(ZB_DEVICE_MUTEX_TIMEOUT_LONG_MS)) != pdTRUE) {
+        ESP_LOGE(TAG, "Failed to take device mutex in zb_manager_load_devices_from_json");
+        cJSON_Delete(root);
+        return ESP_ERR_TIMEOUT;
+    }
+
+    // Очистка старых устройств
+    for (int i = 0; i < RemoteDevicesCount; i++) {
+        if (RemoteDevicesArray[i]) {
+            RemoteDeviceDelete(RemoteDevicesArray[i]);
+            RemoteDevicesArray[i] = NULL;
+        }
+    }
+
+    cJSON *dev_item = NULL;
+    cJSON_ArrayForEach(dev_item, root) {
+        device_custom_t *dev = NULL;
+        dev = calloc(1, sizeof(device_custom_t));
+        if (!dev) {
+            ESP_LOGE(TAG, "Failed to allocate memory for device");
+            continue;
+        }
+
+        // IEEE
+        cJSON *ieee_obj = NULL;
+        ieee_obj = cJSON_GetObjectItem(dev_item, "ieee_addr");
+        if (!ieee_obj || !str_to_ieee(ieee_obj->valuestring, dev->ieee_addr)) {
+            ESP_LOGW(TAG, "Invalid or missing IEEE address");
+            free(dev);
+            continue;
+        }
+
+        dev->short_addr = cJSON_GetObjectItem(dev_item, "short_addr")->valueint;
+        dev->is_in_build_status = cJSON_GetObjectItem(dev_item, "is_in_build_status")->valueint;
+        dev->index_in_array = cJSON_GetObjectItem(dev_item, "index_in_array")->valueint;
+
+        const char *name = cJSON_GetObjectItem(dev_item, "friendly_name")->valuestring;
+        strlcpy(dev->friendly_name, name ? name : "", sizeof(dev->friendly_name));
+
+        dev->friendly_name_len = strlen(dev->friendly_name);
+        dev->capability = cJSON_GetObjectItem(dev_item, "capability")->valueint;
+        dev->lqi = cJSON_GetObjectItem(dev_item, "lqi")->valueint;
+
+        cJSON *last_seen_item = cJSON_GetObjectItem(dev_item, "last_seen_ms");
+        if (last_seen_item) {
+            dev->last_seen_ms = 0; // Сбрасываем — будет обновлено при активности
+            dev->is_online = false;
+        }
+
+        cJSON *timeout_item = cJSON_GetObjectItem(dev_item, "device_timeout_ms");
+        if (timeout_item && cJSON_IsNumber(timeout_item)) {
+            dev->device_timeout_ms = timeout_item->valueint;
+        } else {
+            dev->device_timeout_ms = ZB_DEVICE_DEFAULT_TIMEOUT_MS;
+        }
+
+        // Manufacturer code
+        cJSON *manuf_code_obj = cJSON_GetObjectItem(dev_item, "manufacturer_code");
+        if (manuf_code_obj) {
+            dev->manufacturer_code = (uint16_t)manuf_code_obj->valueint;
+        }
+        
+        // Device-level Basic Cluster
+        cJSON *dev_basic = NULL;
+        dev_basic = cJSON_GetObjectItem(dev_item, "device_basic_cluster");
+        if (dev_basic) {
+            dev->server_BasicClusterObj = calloc(1, sizeof(zigbee_manager_basic_cluster_t));
+            if (dev->server_BasicClusterObj) {
+                dev->server_BasicClusterObj->zcl_version = cJSON_GetObjectItem(dev_basic, "zcl_version")->valueint;
+                dev->server_BasicClusterObj->application_version = cJSON_GetObjectItem(dev_basic, "app_version")->valueint;
+                dev->server_BasicClusterObj->stack_version = cJSON_GetObjectItem(dev_basic, "stack_version")->valueint;
+                dev->server_BasicClusterObj->hw_version = cJSON_GetObjectItem(dev_basic, "hw_version")->valueint;
+
+                LOAD_STRING(dev_basic, "manufacturer_name", dev->server_BasicClusterObj->manufacturer_name);
+                LOAD_STRING(dev_basic, "model_id", dev->server_BasicClusterObj->model_identifier);
+                LOAD_STRING(dev_basic, "date_code", dev->server_BasicClusterObj->date_code);
+                LOAD_STRING(dev_basic, "location", dev->server_BasicClusterObj->location_description);
+
+                cJSON *ps_item = cJSON_GetObjectItem(dev_basic, "power_source");
+                if (ps_item && cJSON_IsNumber(ps_item)) {
+                    dev->server_BasicClusterObj->power_source = ps_item->valueint;
+                }
+
+                dev->server_BasicClusterObj->physical_environment = cJSON_GetObjectItem(dev_basic, "env")->valueint;
+                dev->server_BasicClusterObj->device_enabled = cJSON_GetObjectItem(dev_basic, "enabled")->type == cJSON_True;
+
+                cJSON *last_update_item = cJSON_GetObjectItem(dev_basic, "last_update_ms");
+                if (last_update_item && cJSON_IsNumber(last_update_item)) {
+                    dev->server_BasicClusterObj->last_update_ms = last_update_item->valueint;
+                } else {
+                    dev->server_BasicClusterObj->last_update_ms = esp_log_timestamp();
+                }
+            }
+        }
+
+        // Power Configuration Cluster
+        cJSON *dev_power_config_item = NULL;
+        dev_power_config_item = cJSON_GetObjectItem(dev_item, "device_power_config_cluster");
+        if (dev_power_config_item) {
+            dev->server_PowerConfigurationClusterObj = calloc(1, sizeof(zb_manager_power_config_cluster_t));
+            if (dev->server_PowerConfigurationClusterObj) {
+                LOAD_NUMBER(dev_power_config_item, "battery_voltage", dev->server_PowerConfigurationClusterObj->battery_voltage);
+                LOAD_NUMBER(dev_power_config_item, "battery_percentage", dev->server_PowerConfigurationClusterObj->battery_percentage);
+                LOAD_STRING(dev_power_config_item, "battery_manufacturer", dev->server_PowerConfigurationClusterObj->battery_manufacturer);
+                LOAD_NUMBER(dev_power_config_item, "battery_size", dev->server_PowerConfigurationClusterObj->battery_size);
+                LOAD_NUMBER(dev_power_config_item, "battery_a_hr_rating", dev->server_PowerConfigurationClusterObj->battery_a_hr_rating);
+                LOAD_NUMBER(dev_power_config_item, "battery_quantity", dev->server_PowerConfigurationClusterObj->battery_quantity);
+                LOAD_NUMBER(dev_power_config_item, "battery_rated_voltage", dev->server_PowerConfigurationClusterObj->battery_rated_voltage);
+                LOAD_NUMBER(dev_power_config_item, "battery_alarm_mask", dev->server_PowerConfigurationClusterObj->battery_alarm_mask);
+                LOAD_NUMBER(dev_power_config_item, "battery_voltage_min_th", dev->server_PowerConfigurationClusterObj->battery_voltage_min_th);
+                LOAD_NUMBER(dev_power_config_item, "battery_voltage_th1", dev->server_PowerConfigurationClusterObj->battery_voltage_th1);
+                LOAD_NUMBER(dev_power_config_item, "battery_voltage_th2", dev->server_PowerConfigurationClusterObj->battery_voltage_th2);
+                LOAD_NUMBER(dev_power_config_item, "battery_voltage_th3", dev->server_PowerConfigurationClusterObj->battery_voltage_th3);
+                LOAD_NUMBER(dev_power_config_item, "battery_percentage_min_th", dev->server_PowerConfigurationClusterObj->battery_percentage_min_th);
+                LOAD_NUMBER(dev_power_config_item, "battery_percentage_th1", dev->server_PowerConfigurationClusterObj->battery_percentage_th1);
+                LOAD_NUMBER(dev_power_config_item, "battery_percentage_th2", dev->server_PowerConfigurationClusterObj->battery_percentage_th2);
+                LOAD_NUMBER(dev_power_config_item, "battery_percentage_th3", dev->server_PowerConfigurationClusterObj->battery_percentage_th3);
+                LOAD_NUMBER(dev_power_config_item, "battery_alarm_state", dev->server_PowerConfigurationClusterObj->battery_alarm_state);
+                LOAD_NUMBER(dev_power_config_item, "mains_voltage", dev->server_PowerConfigurationClusterObj->mains_voltage);
+                LOAD_NUMBER(dev_power_config_item, "mains_frequency", dev->server_PowerConfigurationClusterObj->mains_frequency);
+                LOAD_NUMBER(dev_power_config_item, "mains_alarm_mask", dev->server_PowerConfigurationClusterObj->mains_alarm_mask);
+                LOAD_NUMBER(dev_power_config_item, "mains_voltage_min_th", dev->server_PowerConfigurationClusterObj->mains_voltage_min_th);
+                LOAD_NUMBER(dev_power_config_item, "mains_voltage_max_th", dev->server_PowerConfigurationClusterObj->mains_voltage_max_th);
+                LOAD_NUMBER(dev_power_config_item, "mains_dwell_trip_point", dev->server_PowerConfigurationClusterObj->mains_dwell_trip_point);
+
+                cJSON *last_update_item = cJSON_GetObjectItem(dev_power_config_item, "last_update_ms");
+                if (last_update_item && cJSON_IsNumber(last_update_item)) {
+                    dev->server_PowerConfigurationClusterObj->last_update_ms = last_update_item->valueint;
+                } else {
+                    dev->server_PowerConfigurationClusterObj->last_update_ms = esp_log_timestamp();
+                }
+            }
+        }
+
+        // Endpoints
+        dev->endpoints_count = cJSON_GetObjectItem(dev_item, "endpointscount")->valueint;
+        if (dev->endpoints_count == 0)
+        {
+            continue;
+        }
+        cJSON *eps = cJSON_GetObjectItem(dev_item, "endpoints");
+        if (cJSON_IsArray(eps)) {
+            //dev->endpoints_count = cJSON_GetArraySize(eps);
+            dev->endpoints_array = calloc(dev->endpoints_count, sizeof(endpoint_custom_t*));
+            if (!dev->endpoints_array) {
+                ESP_LOGE(TAG, "Failed to allocate endpoints_array for device %02x:%02x...", dev->ieee_addr[7], dev->ieee_addr[6]);
+                free(dev);
+                continue;
+            }
+
+            for (int j = 0; j < dev->endpoints_count; j++) {
+                cJSON *ep_obj = NULL;
+                ep_obj = cJSON_GetArrayItem(eps, j);
+                if (!ep_obj) {
+                    ESP_LOGW(TAG, "Missing endpoint at index %d", j);
+                    continue;
+                }
+
+                endpoint_custom_t *ep = NULL;
+                ep = calloc(1, sizeof(endpoint_custom_t));
+                if (!ep) {
+                    ESP_LOGE(TAG, "Failed to allocate memory for endpoint %d", j);
+                    continue;
+                }
+
+                ep->ep_id = cJSON_GetObjectItem(ep_obj, "ep_id")->valueint;
+                ep->is_use_on_device = cJSON_GetObjectItem(ep_obj, "is_use_on_device")->valueint;
+
+                const char *ep_name = cJSON_GetObjectItem(ep_obj, "friendly_name")->valuestring;
+                strlcpy(ep->friendly_name, ep_name ? ep_name : "", sizeof(ep->friendly_name));
+
+                ep->deviceId = cJSON_GetObjectItem(ep_obj, "deviceId")->valueint;
+
+                const char *dev_id_name = cJSON_GetObjectItem(ep_obj, "device_type")->valuestring;
+                strlcpy(ep->device_Id_text, ep_name ? ep_name : "", sizeof(ep->device_Id_text));
+                /*cJSON *dev_type_obj = cJSON_GetObjectItem(ep_obj, "device_type");
+                if (dev_type_obj && dev_type_obj->valuestring) {
+                    strlcpy(ep->device_Id_text, dev_type_obj->valuestring, sizeof(ep->device_Id_text));
+                }*/
+
+                // Identify Cluster
+                cJSON *identify = NULL;
+                identify = cJSON_GetObjectItem(ep_obj, "identify");
+                if (identify) {
+                    ep->is_use_identify_cluster = 1;
+                    ep->server_IdentifyClusterObj = calloc(1, sizeof(zb_manager_identify_cluster_t));
+                    if (ep->server_IdentifyClusterObj) {
+                        //ep->server_IdentifyClusterObj->cluster_Id_name
+                        ep->server_IdentifyClusterObj->identify_time = cJSON_GetObjectItem(identify, "identify_time")->valueint;
+                    }
+                }
+
+                // Temperature Cluster
+                cJSON *temp = NULL;
+                temp = cJSON_GetObjectItem(ep_obj, "temperature");
+                if (temp) {
+                    ep->is_use_temperature_measurement_cluster = 1;
+                    ep->server_TemperatureMeasurementClusterObj = calloc(1, sizeof(zb_manager_temperature_measurement_cluster_t));
+                    if (ep->server_TemperatureMeasurementClusterObj) {
+                        ep->server_TemperatureMeasurementClusterObj->measured_value = cJSON_GetObjectItem(temp, "measured_value")->valueint;
+                        ep->server_TemperatureMeasurementClusterObj->min_measured_value = cJSON_GetObjectItem(temp, "min_measured_value")->valueint;
+                        ep->server_TemperatureMeasurementClusterObj->max_measured_value = cJSON_GetObjectItem(temp, "max_measured_value")->valueint;
+                        ep->server_TemperatureMeasurementClusterObj->tolerance = cJSON_GetObjectItem(temp, "tolerance")->valueint;
+                        ep->server_TemperatureMeasurementClusterObj->last_update_ms = cJSON_GetObjectItem(temp, "last_update_ms")->valueint;
+                        ep->server_TemperatureMeasurementClusterObj->read_error = cJSON_GetObjectItem(temp, "read_error")->type == cJSON_True;
+                    }
+                }
+
+                // Humidity Cluster
+                cJSON *hum = NULL;
+                hum = cJSON_GetObjectItem(ep_obj, "humidity");
+                if (hum) {
+                    ep->is_use_humidity_measurement_cluster = 1;
+                    ep->server_HumidityMeasurementClusterObj = calloc(1, sizeof(zb_manager_humidity_measurement_cluster_t));
+                    if (ep->server_HumidityMeasurementClusterObj) {
+                        ep->server_HumidityMeasurementClusterObj->measured_value = cJSON_GetObjectItem(hum, "measured_value")->valueint;
+                        ep->server_HumidityMeasurementClusterObj->min_measured_value = cJSON_GetObjectItem(hum, "min_measured_value")->valueint;
+                        ep->server_HumidityMeasurementClusterObj->max_measured_value = cJSON_GetObjectItem(hum, "max_measured_value")->valueint;
+                        ep->server_HumidityMeasurementClusterObj->tolerance = cJSON_GetObjectItem(hum, "tolerance")->valueint;
+                        ep->server_HumidityMeasurementClusterObj->last_update_ms = cJSON_GetObjectItem(hum, "last_update_ms")->valueint;
+                        ep->server_HumidityMeasurementClusterObj->read_error = cJSON_GetObjectItem(hum, "read_error")->type == cJSON_True;
+                    }
+                }
+
+                // ON/OFF Cluster
+                cJSON *onoff = NULL;
+                onoff = cJSON_GetObjectItem(ep_obj, "onoff");
+                if (onoff) {
+                    ep->is_use_on_off_cluster = 1;
+                    ep->server_OnOffClusterObj = calloc(1, sizeof(zb_manager_on_off_cluster_t));
+                    if (ep->server_OnOffClusterObj) {
+                        ep->server_OnOffClusterObj->on_off = cJSON_GetObjectItem(onoff, "on")->type == cJSON_True;
+                        ep->server_OnOffClusterObj->on_time = cJSON_GetObjectItem(onoff, "on_time")->valueint;
+                        ep->server_OnOffClusterObj->off_wait_time = cJSON_GetObjectItem(onoff, "off_wait_time")->valueint;
+                        ep->server_OnOffClusterObj->start_up_on_off = cJSON_GetObjectItem(onoff, "start_up")->valueint;
+                        ep->server_OnOffClusterObj->last_update_ms = cJSON_GetObjectItem(onoff, "last_update_ms")->valueint;
+                    }
+                }
+
+                
+
+                // === Загрузка unknown_input_clusters ===
+                ep->UnKnowninputClusterCount = cJSON_GetObjectItem(ep_obj, "unkinpclcount")->valueint;
+                if (ep->UnKnowninputClusterCount > 0)
+                {
+                    cJSON *unk_input = NULL;
+                    unk_input = cJSON_GetObjectItem(ep_obj, "unknown_input_clusters");
+                    if (unk_input && cJSON_IsArray(unk_input)) {
+                        //int count = cJSON_GetArraySize(unk_input);
+                        //ep->UnKnowninputClusterCount = count;
+                        ep->UnKnowninputClusters_array = NULL;
+                        ep->UnKnowninputClusters_array = calloc(ep->UnKnowninputClusterCount, sizeof(cluster_custom_t*));
+                        if (!ep->UnKnowninputClusters_array) {
+                            ESP_LOGE(TAG, "Failed to allocate UnKnowninputClusters_array for EP %d", ep->ep_id);
+                        } else {
+                            bool alloc_failed = false;
+                            for (int k = 0; k < ep->UnKnowninputClusterCount; k++) {
+                                cJSON *cl_obj = NULL;
+                                cl_obj = cJSON_GetArrayItem(unk_input, k);
+                                if (!cl_obj) {
+                                    ESP_LOGW(TAG, "Missing unknown_input_cluster at index %d", k);
+                                    continue;
+                                }
+
+                                cluster_custom_t *cl = NULL;
+                                cl = calloc(1, sizeof(cluster_custom_t));
+                                if (!cl) {
+                                    ESP_LOGE(TAG, "Failed to allocate cluster for input cluster %d", k);
+                                    alloc_failed = true;
+                                    continue;
+                                }
+
+                                cl->id = cJSON_GetObjectItem(cl_obj, "id")->valueint;
+                                LOAD_STRING(cl_obj, "cluster_id_text", cl->cluster_id_text);
+                                cl->role_mask = cJSON_GetObjectItem(cl_obj, "role_mask")->valueint;
+                                cl->manuf_code = cJSON_GetObjectItem(cl_obj, "manuf_code")->valueint;
+                                cl->is_use_on_device = cJSON_GetObjectItem(cl_obj, "is_use_on_device")->valueint;
+
+                                cJSON *attrs = NULL;
+                                attrs = cJSON_GetObjectItem(cl_obj, "attributes");
+                                if (attrs && cJSON_IsArray(attrs)) {
+                                    int attr_count = cJSON_GetArraySize(attrs);
+                                    cl->attr_count = attr_count;
+                                    if (cl->attr_count > 0)
+                                    {
+                                        cl->attr_array = calloc(attr_count, sizeof(attribute_custom_t*));
+                                        if (!cl->attr_array) {
+                                            ESP_LOGE(TAG, "Failed to allocate attr_array for cluster %d", k);
+                                            free(cl);
+                                            alloc_failed = true;
+                                            continue;
+                                        }
+
+                                        for (int a = 0; a < attr_count; a++) {
+                                            cJSON *attr_obj = cJSON_GetArrayItem(attrs, a);
+                                            if (!attr_obj) continue;
+
+                                            attribute_custom_t *attr = calloc(1, sizeof(attribute_custom_t));
+                                            if (!attr) continue;
+
+                                            attr->id = cJSON_GetObjectItem(attr_obj, "id")->valueint;
+                                            LOAD_STRING(attr_obj, "attr_id_text", attr->attr_id_text);
+                                            attr->type = cJSON_GetObjectItem(attr_obj, "type")->valueint;
+                                            attr->acces = cJSON_GetObjectItem(attr_obj, "acces")->valueint;
+                                            attr->size = cJSON_GetObjectItem(attr_obj, "size")->valueint;
+                                            attr->is_void_pointer = cJSON_GetObjectItem(attr_obj, "is_void_pointer")->valueint;
+                                            attr->manuf_code = cJSON_GetObjectItem(attr_obj, "manuf_code")->valueint;
+                                            attr->parent_cluster_id = cJSON_GetObjectItem(attr_obj, "parent_cluster_id")->valueint;
+                                            attr->p_value = NULL;
+
+                                            cl->attr_array[a] = attr;
+                                        }
+                                    }
+                                }
+
+                                ep->UnKnowninputClusters_array[k] = cl;
+                            }
+                            if (alloc_failed) {
+                                ESP_LOGW(TAG, "Partial failure in loading unknown_input_clusters for EP %d", ep->ep_id);
+                            }
+                        }
+                    }
+                } // end if count > 0
+                // Output Clusters
+                ep->output_clusters_count = cJSON_GetObjectItem(ep_obj, "outpclcount")->valueint;
+                if (ep->output_clusters_count > 0)
+                {
+                    cJSON *out_clusters = NULL;
+                    out_clusters = cJSON_GetObjectItem(ep_obj, "output_clusters");
+                    if (out_clusters && cJSON_IsArray(out_clusters)) {
+                        //int count = cJSON_GetArraySize(out_clusters);
+                        //ep->output_clusters_count = count;
+                        ep->output_clusters_array = calloc(ep->output_clusters_count, sizeof(uint16_t));
+                        if (ep->output_clusters_array) {
+                            for (int k = 0; k < ep->output_clusters_count; k++) {
+                                cJSON *item = cJSON_GetArrayItem(out_clusters, k);
+                                if (cJSON_IsNumber(item)) {
+                                    ep->output_clusters_array[k] = (uint16_t)item->valueint;
+                                }
+                            }
+                        }
+                    }
+                }
+                // === Загрузка unknown_output_clusters ===
+                ep->UnKnownoutputClusterCount = cJSON_GetObjectItem(ep_obj, "unkoutpclcount")->valueint;
+                if (ep->UnKnownoutputClusterCount > 0)
+                {
+                    cJSON *unk_output = NULL;
+                    unk_output = cJSON_GetObjectItem(ep_obj, "unknown_output_clusters");
+                    if (unk_output && cJSON_IsArray(unk_output)) {
+                        //int count = cJSON_GetArraySize(unk_output);
+                        //ep->UnKnownoutputClusterCount = count;
+                        ep->UnKnownoutputClusters_array = calloc(ep->UnKnownoutputClusterCount, sizeof(cluster_custom_t*));
+                        if (!ep->UnKnownoutputClusters_array) {
+                            ESP_LOGE(TAG, "Failed to allocate UnKnownoutputClusters_array for EP %d", ep->ep_id);
+                        } else {
+                            bool alloc_failed = false;
+                            for (int k = 0; k < ep->UnKnownoutputClusterCount; k++) {
+                                cJSON *cl_obj = NULL;
+                                cl_obj = cJSON_GetArrayItem(unk_output, k);
+                                if (!cl_obj) continue;
+
+                                cluster_custom_t *cl = NULL;
+                                cl = calloc(1, sizeof(cluster_custom_t));
+                                if (!cl) {
+                                    ESP_LOGE(TAG, "Failed to allocate cluster for output cluster %d", k);
+                                    alloc_failed = true;
+                                    continue;
+                                }
+
+                                cl->id = cJSON_GetObjectItem(cl_obj, "id")->valueint;
+                                LOAD_STRING(cl_obj, "cluster_id_text", cl->cluster_id_text);
+                                cl->role_mask = cJSON_GetObjectItem(cl_obj, "role_mask")->valueint;
+                                cl->manuf_code = cJSON_GetObjectItem(cl_obj, "manuf_code")->valueint;
+                                cl->is_use_on_device = cJSON_GetObjectItem(cl_obj, "is_use_on_device")->valueint;
+
+                                cJSON *attrs = NULL;
+                                attrs = cJSON_GetObjectItem(cl_obj, "attributes");
+                                if (attrs && cJSON_IsArray(attrs)) {
+                                    int attr_count = cJSON_GetArraySize(attrs);
+                                    cl->attr_count = attr_count;
+                                    cl->attr_array = calloc(attr_count, sizeof(attribute_custom_t*));
+                                    if (!cl->attr_array) {
+                                        free(cl);
+                                        alloc_failed = true;
+                                        continue;
+                                    }
+
+                                    for (int a = 0; a < attr_count; a++) {
+                                        cJSON *attr_obj = cJSON_GetArrayItem(attrs, a);
+                                        if (!attr_obj) continue;
+
+                                        attribute_custom_t *attr = calloc(1, sizeof(attribute_custom_t));
+                                        if (!attr) continue;
+
+                                        attr->id = cJSON_GetObjectItem(attr_obj, "id")->valueint;
+                                        LOAD_STRING(attr_obj, "attr_id_text", attr->attr_id_text);
+                                        attr->type = cJSON_GetObjectItem(attr_obj, "type")->valueint;
+                                        attr->acces = cJSON_GetObjectItem(attr_obj, "acces")->valueint;
+                                        attr->size = cJSON_GetObjectItem(attr_obj, "size")->valueint;
+                                        attr->is_void_pointer = cJSON_GetObjectItem(attr_obj, "is_void_pointer")->valueint;
+                                        attr->manuf_code = cJSON_GetObjectItem(attr_obj, "manuf_code")->valueint;
+                                        attr->parent_cluster_id = cJSON_GetObjectItem(attr_obj, "parent_cluster_id")->valueint;
+                                        attr->p_value = NULL;
+
+                                        cl->attr_array[a] = attr;
+                                    }
+                                }else alloc_failed = true;
+
+                                ep->UnKnownoutputClusters_array[k] = cl;
+                            }
+                            if (alloc_failed) {
+                                ESP_LOGW(TAG, "Partial failure in loading unknown_output_clusters for EP %d", ep->ep_id);
+                            }
+                        }
+                    }
+                }
+                dev->endpoints_array[j] = ep;
+            }
+        }
+
+        // Найти свободный слот
+        bool inserted = false;
+        for (int idx = 0; idx < RemoteDevicesCount; idx++) {
+            if (RemoteDevicesArray[idx] == NULL) {
+                RemoteDevicesArray[idx] = dev;
+                inserted = true;
+                break;
+            }
+        }
+        if (!inserted) {
+            ESP_LOGE(TAG, "No free slot for device %02x:%02x...", dev->ieee_addr[7], dev->ieee_addr[6]);
+            RemoteDeviceDelete(dev);
+        }
+    }
+
+    // Настройка таймаутов
+    for (int i = 0; i < RemoteDevicesCount; i++) {
+        if (RemoteDevicesArray[i]) {
+            zb_manager_configure_device_timeout(RemoteDevicesArray[i]);
+        }
+    }
+
+    DEVICE_ARRAY_UNLOCK();
+    cJSON_Delete(root);
+
+    ESP_LOGI(TAG, "Devices loaded from JSON: %s", filepath);
+    return ESP_OK;
+}
+
+esp_err_t zb_manager_load_devices_from_json_old(const char *filepath) {
     FILE *f = fopen(filepath, "r");
     if (!f) {
         ESP_LOGW(TAG, "No JSON file found: %s", filepath);
@@ -1477,46 +2646,7 @@ esp_err_t zb_manager_load_devices_from_json(const char *filepath) {
                     ep->device_Id_text[0] = '\0';
                 }
 
-                // Basic Cluster
-                /*cJSON *basic = cJSON_GetObjectItem(ep_obj, "basic");
-                if (basic) {
-                    // Проверим cluster_id
-                        cJSON *cluster_id_item = cJSON_GetObjectItem(basic, "cluster_id");
-                        if (cluster_id_item && cluster_id_item->valueint != 0x0000) {
-                            ESP_LOGW(TAG, "Invalid cluster_id for 'basic': expected 0x0000, got 0x%04x", cluster_id_item->valueint);
-                            // Можно пропустить или обработать ошибку
-                        }
-                        ep->is_use_basic_cluster = 1;
-                        ep->server_BasicClusterObj = calloc(1, sizeof(zigbee_manager_basic_cluster_t));
-                    if (ep->server_BasicClusterObj) {
-                        ep->server_BasicClusterObj->zcl_version = cJSON_GetObjectItem(basic, "zcl_version")->valueint;
-                        ep->server_BasicClusterObj->application_version = cJSON_GetObjectItem(basic, "app_version")->valueint;
-                        ep->server_BasicClusterObj->stack_version = cJSON_GetObjectItem(basic, "stack_version")->valueint;
-                        ep->server_BasicClusterObj->hw_version = cJSON_GetObjectItem(basic, "hw_version")->valueint;
-                        strncpy(ep->server_BasicClusterObj->manufacturer_name,
-                                cJSON_GetObjectItem(basic, "manufacturer_name")->valuestring, 64);
-                        strncpy(ep->server_BasicClusterObj->model_identifier,
-                                cJSON_GetObjectItem(basic, "model_id")->valuestring, 33);
-                        strncpy(ep->server_BasicClusterObj->date_code,
-                                cJSON_GetObjectItem(basic, "date_code")->valuestring, 17);
-                        cJSON *ps_item = cJSON_GetObjectItem(basic, "power_source");
-                        if (ps_item && cJSON_IsNumber(ps_item)) {
-                            ep->server_BasicClusterObj->power_source = ps_item->valueint;
-                        }
-                        strncpy(ep->server_BasicClusterObj->location_description,
-                                cJSON_GetObjectItem(basic, "location")->valuestring, 17);
-                        ep->server_BasicClusterObj->physical_environment = cJSON_GetObjectItem(basic, "env")->valueint;
-                        ep->server_BasicClusterObj->device_enabled = cJSON_GetObjectItem(basic, "enabled")->type == cJSON_True;
-
-                        cJSON *last_update_item = cJSON_GetObjectItem(basic, "last_update_ms");
-                        if (last_update_item && cJSON_IsNumber(last_update_item)) {
-                            ep->server_BasicClusterObj->last_update_ms = last_update_item->valueint;
-                        } else {
-                            ep->server_BasicClusterObj->last_update_ms = esp_log_timestamp(); // или 0
-                        }
-
-                    }
-                }*/
+               
 
                 // Identify Cluster
                 cJSON *identify = cJSON_GetObjectItem(ep_obj, "identify");
@@ -1610,6 +2740,128 @@ esp_err_t zb_manager_load_devices_from_json(const char *filepath) {
                     }
                 }
                 
+                                // === Загрузка unknown_input_clusters ===
+                cJSON *unk_input = cJSON_GetObjectItem(ep_obj, "unknown_input_clusters");
+                if (unk_input && cJSON_IsArray(unk_input)) {
+                    int count = cJSON_GetArraySize(unk_input);
+                    ESP_LOGW(TAG, "Trying to alloc %d unknown input clusters", count);
+                    ep->UnKnowninputClusterCount = count;
+                    ep->UnKnowninputClusters_array = calloc(count, sizeof(cluster_custom_t*));
+                    if (!ep->UnKnowninputClusters_array) {
+                        ESP_LOGE(TAG, "Failed to allocate memory for UnKnowninputClusters_array");
+                        continue;
+                    }
+
+                    for (int k = 0; k < count; k++) {
+                        cJSON *cl_obj = cJSON_GetArrayItem(unk_input, k);
+                        if (!cl_obj) continue;
+
+                        cluster_custom_t *cl = calloc(1, sizeof(cluster_custom_t));
+                        if (!cl) continue;
+
+                        cl->id = cJSON_GetObjectItem(cl_obj, "id")->valueint;
+                        LOAD_STRING(cl_obj, "cluster_id_text", cl->cluster_id_text);
+                        cl->role_mask = cJSON_GetObjectItem(cl_obj, "role_mask")->valueint;
+                        cl->manuf_code = cJSON_GetObjectItem(cl_obj, "manuf_code")->valueint;
+                        cl->is_use_on_device = cJSON_GetObjectItem(cl_obj, "is_use_on_device")->valueint;
+
+                        // Загрузка атрибутов
+                        cJSON *attrs = cJSON_GetObjectItem(cl_obj, "attributes");
+                        if (attrs && cJSON_IsArray(attrs)) {
+                            int attr_count = cJSON_GetArraySize(attrs);
+                            cl->attr_count = attr_count;
+                            cl->attr_array = calloc(attr_count, sizeof(attribute_custom_t*));
+                            if (!cl->attr_array) {
+                                free(cl);
+                                continue;
+                            }
+
+                            for (int a = 0; a < attr_count; a++) {
+                                cJSON *attr_obj = cJSON_GetArrayItem(attrs, a);
+                                if (!attr_obj) continue;
+
+                                attribute_custom_t *attr = calloc(1, sizeof(attribute_custom_t));
+                                if (!attr) continue;
+
+                                attr->id = cJSON_GetObjectItem(attr_obj, "id")->valueint;
+                                LOAD_STRING(attr_obj, "attr_id_text", attr->attr_id_text);
+                                attr->type = cJSON_GetObjectItem(attr_obj, "type")->valueint;
+                                attr->acces = cJSON_GetObjectItem(attr_obj, "acces")->valueint;
+                                attr->size = cJSON_GetObjectItem(attr_obj, "size")->valueint;
+                                attr->is_void_pointer = cJSON_GetObjectItem(attr_obj, "is_void_pointer")->valueint;
+                                attr->manuf_code = cJSON_GetObjectItem(attr_obj, "manuf_code")->valueint;
+                                attr->parent_cluster_id = cJSON_GetObjectItem(attr_obj, "parent_cluster_id")->valueint;
+
+                                // p_value не сохраняется, остаётся NULL — будет заполнено позже при чтении
+                                attr->p_value = NULL;
+
+                                cl->attr_array[a] = attr;
+                            }
+                        }
+
+                        ep->UnKnowninputClusters_array[k] = cl;
+                    }
+                }
+
+                // === Загрузка unknown_output_clusters ===
+                cJSON *unk_output = cJSON_GetObjectItem(ep_obj, "unknown_output_clusters");
+                if (unk_output && cJSON_IsArray(unk_output)) {
+                    int count = cJSON_GetArraySize(unk_output);
+                    ep->UnKnownoutputClusterCount = count;
+                    ep->UnKnownoutputClusters_array = calloc(count, sizeof(cluster_custom_t*));
+                    if (!ep->UnKnownoutputClusters_array) {
+                        ESP_LOGE(TAG, "Failed to allocate memory for UnKnownoutputClusters_array");
+                        continue;
+                    }
+
+                    for (int k = 0; k < count; k++) {
+                        cJSON *cl_obj = cJSON_GetArrayItem(unk_output, k);
+                        if (!cl_obj) continue;
+
+                        cluster_custom_t *cl = calloc(1, sizeof(cluster_custom_t));
+                        if (!cl) continue;
+
+                        cl->id = cJSON_GetObjectItem(cl_obj, "id")->valueint;
+                        LOAD_STRING(cl_obj, "cluster_id_text", cl->cluster_id_text);
+                        cl->role_mask = cJSON_GetObjectItem(cl_obj, "role_mask")->valueint;
+                        cl->manuf_code = cJSON_GetObjectItem(cl_obj, "manuf_code")->valueint;
+                        cl->is_use_on_device = cJSON_GetObjectItem(cl_obj, "is_use_on_device")->valueint;
+
+                        // Загрузка атрибутов
+                        cJSON *attrs = cJSON_GetObjectItem(cl_obj, "attributes");
+                        if (attrs && cJSON_IsArray(attrs)) {
+                            int attr_count = cJSON_GetArraySize(attrs);
+                            cl->attr_count = attr_count;
+                            cl->attr_array = calloc(attr_count, sizeof(attribute_custom_t*));
+                            if (!cl->attr_array) {
+                                free(cl);
+                                continue;
+                            }
+
+                            for (int a = 0; a < attr_count; a++) {
+                                cJSON *attr_obj = cJSON_GetArrayItem(attrs, a);
+                                if (!attr_obj) continue;
+
+                                attribute_custom_t *attr = calloc(1, sizeof(attribute_custom_t));
+                                if (!attr) continue;
+
+                                attr->id = cJSON_GetObjectItem(attr_obj, "id")->valueint;
+                                LOAD_STRING(attr_obj, "attr_id_text", attr->attr_id_text);
+                                attr->type = cJSON_GetObjectItem(attr_obj, "type")->valueint;
+                                attr->acces = cJSON_GetObjectItem(attr_obj, "acces")->valueint;
+                                attr->size = cJSON_GetObjectItem(attr_obj, "size")->valueint;
+                                attr->is_void_pointer = cJSON_GetObjectItem(attr_obj, "is_void_pointer")->valueint;
+                                attr->manuf_code = cJSON_GetObjectItem(attr_obj, "manuf_code")->valueint;
+                                attr->parent_cluster_id = cJSON_GetObjectItem(attr_obj, "parent_cluster_id")->valueint;
+                                attr->p_value = NULL;
+
+                                cl->attr_array[a] = attr;
+                            }
+                        }
+
+                        ep->UnKnownoutputClusters_array[k] = cl;
+                    }
+                }
 
                 dev->endpoints_array[j] = ep;
             }

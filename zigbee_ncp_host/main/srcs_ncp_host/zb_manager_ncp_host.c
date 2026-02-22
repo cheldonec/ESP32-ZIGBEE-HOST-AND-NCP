@@ -4,7 +4,7 @@
 #include "string.h"
 #include "zb_manager_devices.h"
 #include "freertos/FreeRTOS.h"
-#include "zb_manager_devices_manufactory_table.h"
+//#include "zb_manager_devices_manufactory_table.h"
 #include "zb_manager_tuya_dp.h"
 #include "ncp_host_bus.h"
 #include "ncp_host.h"
@@ -69,7 +69,8 @@ esp_err_t zb_manager_start_main_task(uint8_t core)
 esp_err_t zb_manager_init_devices_base(void)
 {
     // создаём список устройств
-    esp_err_t err = zb_manager_devices_init();      // !!!! zb_manager_devices.h
+    //esp_err_t err = zb_manager_devices_init();      // !!!! zb_manager_devices.h
+    esp_err_t err = zbm_dev_base_init(1);
     //local_RemoteDevicesCount = RemoteDevicesCount; //!!!! zb_manager_devices.h */
     //local_RemoteDevicesArray = RemoteDevicesArray;
     //local_DeviceAppendShedulerCount = DeviceAppendShedulerCount;

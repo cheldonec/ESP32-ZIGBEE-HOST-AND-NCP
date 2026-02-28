@@ -232,14 +232,60 @@ void ws_notify_state_changed(uint16_t short_addr, bool state)
 
 
 // Структура для асинхронной отправки
-typedef struct {
+/*typedef struct {
     httpd_handle_t hd;
     char *payload;
     size_t len;
+} ws_async_data_t;*/
+
+typedef struct {
+    httpd_handle_t hd;
+    uint8_t *payload;  // ✅ Теперь совместимо с httpd_ws_frame_t
+    size_t len;
 } ws_async_data_t;
 
-// Функция отправки (та же, что и раньше)
+// Функция отправки 
 void ws_send_async_task(void *arg)
+{
+    ws_async_data_t *data = (ws_async_data_t *)arg;
+    if (!data || !data->hd || !data->payload) {
+        free(data);
+        return;
+    }
+
+    httpd_ws_frame_t frame = {
+        .type = HTTPD_WS_TYPE_TEXT,
+        .payload = data->payload,
+        .len = data->len
+    };
+
+    size_t fd_count = CONFIG_LWIP_MAX_LISTENING_TCP;
+    int client_fds[CONFIG_LWIP_MAX_LISTENING_TCP];
+
+    esp_err_t ret = httpd_get_client_list(data->hd, &fd_count, client_fds);
+    if (ret != ESP_OK) {
+        // ❌ Освобождаем ВСЁ
+        free(data->payload);
+        free(data);
+        return;
+    }
+
+    bool sent = false;
+    for (size_t i = 0; i < fd_count; i++) {
+        int client_info = httpd_ws_get_fd_info(data->hd, client_fds[i]);
+        if (client_info == HTTPD_WS_CLIENT_WEBSOCKET) {
+            if (httpd_ws_send_frame_async(data->hd, client_fds[i], &frame) == ESP_OK) {
+                sent = true;
+            }
+        }
+    }
+
+    // Даже если не отправилось — освобождаем
+    free(data->payload);
+    free(data);
+}
+
+void ws_send_async_task_old(void *arg)
 {
     ws_async_data_t *data = (ws_async_data_t *)arg;
     httpd_ws_frame_t frame = {
@@ -498,9 +544,51 @@ cJSON* create_device_json_old(device_custom_t *dev)
 
 
 
-
-
 void ws_notify_network_status(void)
+{
+    if(s_is_in_ap_only_mode || !server_handle) return;
+
+    cJSON *data = cJSON_CreateObject();
+    cJSON_AddStringToObject(data, "event", "network_status");
+    cJSON_AddStringToObject(data, "wifi_ssid", s_last_ssid);
+    cJSON_AddBoolToObject(data, "zigbee_open", isZigbeeNetworkOpened);
+
+    // Сериализуем в буфер
+    int len = cJSON_PrintPreallocated(data, json_print_buffer, sizeof(json_print_buffer), false);
+    cJSON_Minify(json_print_buffer);
+    cJSON_Delete(data);
+    if (len < 0) {
+        ESP_LOGE(TAG, "Failed to print JSON for network status");
+        return;
+    }
+
+    // ✅ Используем strndup с ограничением по размеру буфера
+    char *rendered_copy = strndup(json_print_buffer, sizeof(json_print_buffer) - 1);
+    if (!rendered_copy) {
+        ESP_LOGE(TAG, "Failed to allocate memory for JSON copy");
+        return;
+    }
+
+    // Подготавливаем асинхронную структуру
+    ws_async_data_t *async_data = malloc(sizeof(ws_async_data_t));
+    if (!async_data) {
+        free(rendered_copy); // Освобождаем копию при ошибке
+        return;
+    }
+
+    async_data->hd = server_handle;
+    async_data->payload = (uint8_t*)rendered_copy;
+    async_data->len = strlen(rendered_copy);
+
+    // Отправляем в очередь
+    if (httpd_queue_work(server_handle, ws_send_async_task, async_data) != ESP_OK) {
+        free(rendered_copy);
+        free(async_data);
+        ESP_LOGW(TAG, "Failed to queue work for ws_notify_network_status");
+    }
+}
+
+/*void ws_notify_network_status_old(void)
 {
     if(s_is_in_ap_only_mode == true) return; // режим настройки SSID постить не надо на websocet
     ESP_LOGI(TAG, "🌐 Notify network status");
@@ -539,7 +627,7 @@ void ws_notify_network_status(void)
         //free(rendered);
         free(async_data);
     }
-}
+}*/
 
 // web_server.c или ws_server.c
 void ws_notify_rules_update(void)
@@ -558,28 +646,35 @@ void ws_notify_rules_update(void)
         cJSON_Delete(msg);
         return;
     }
-    char *rendered = json_print_buffer;
-    cJSON_Delete(msg);
+    char *rendered_copy = strndup(json_print_buffer, sizeof(json_print_buffer) - 1);
+    if (!rendered_copy) {
+        ESP_LOGE(TAG, "Failed to allocate memory for JSON copy in ws_notify_rules_update");
+        return;
+    }
 
     ws_async_data_t *async_data = malloc(sizeof(ws_async_data_t));
     if (!async_data) {
+        free(rendered_copy);
         return;
     }
 
     async_data->hd = server_handle;
-    async_data->payload = rendered;
-    async_data->len = strlen(rendered);
+    async_data->payload = (uint8_t*)rendered_copy;
+    async_data->len = strlen(rendered_copy);
 
     if (httpd_queue_work(server_handle, ws_send_async_task, async_data) != ESP_OK) {
+        free(rendered_copy);  // ← ОБЯЗАТЕЛЬНО!
         free(async_data);
     }
 }
 
 void ws_notify_endpoint_name_update(device_custom_t *dev, endpoint_custom_t *ep)
 {
-    if(s_is_in_ap_only_mode == true) return;
+    if (s_is_in_ap_only_mode == true || !dev || !ep || !server_handle) return;
 
     cJSON *data = cJSON_CreateObject();
+    if (!data) return;
+
     cJSON_AddStringToObject(data, "event", "endpoint_name_updated");
     cJSON_AddNumberToObject(data, "short", dev->short_addr);
     cJSON_AddNumberToObject(data, "endpoint_id", ep->ep_id);
@@ -587,23 +682,36 @@ void ws_notify_endpoint_name_update(device_custom_t *dev, endpoint_custom_t *ep)
 
     int len = cJSON_PrintPreallocated(data, json_print_buffer, sizeof(json_print_buffer), false);
     cJSON_Minify(json_print_buffer);
+    cJSON_Delete(data);
     if (len < 0) {
-        cJSON_Delete(data);
+        ESP_LOGE(TAG, "Failed to print JSON for endpoint name update");
         return;
     }
-    char *rendered = json_print_buffer;
-    cJSON_Delete(data);
+
+    char *rendered_copy = strndup(json_print_buffer, sizeof(json_print_buffer) - 1);
+    if (!rendered_copy) {
+        ESP_LOGE(TAG, "Failed to allocate memory for JSON copy in ws_notify_endpoint_name_update");
+        return;
+    }
 
     ws_async_data_t *async_data = malloc(sizeof(ws_async_data_t));
-    if (!async_data) return;
+    if (!async_data) {
+        free(rendered_copy); // ← Освобождаем, если не смогли создать async_data
+        return;
+    }
 
     async_data->hd = server_handle;
-    async_data->payload = rendered;
-    async_data->len = strlen(rendered);
+    async_data->payload = (uint8_t*)rendered_copy;
+    async_data->len = strlen(rendered_copy);
 
     if (httpd_queue_work(server_handle, ws_send_async_task, async_data) != ESP_OK) {
-        free(async_data);
+        free(rendered_copy); // ← ОБЯЗАТЕЛЬНО!
+        free(async_data);    // ← и эту тоже
+        ESP_LOGW(TAG, "Failed to queue work for ws_notify_endpoint_name_update");
+        return;
     }
+
+    // 
 }
 
 
@@ -895,6 +1003,88 @@ static uint32_t last_update_time[256] = {0};  // хэш от short_addr
 // 🔹 Версия для использования ВНУТРИ мьютекса (не берёт мьютекс!)
 void ws_notify_device_update_unlocked(device_custom_t *dev)
 {
+    if(s_is_in_ap_only_mode == true || !dev || !server_handle) return;
+
+    uint32_t now = esp_log_timestamp();
+    uint8_t idx = dev->short_addr % 256;
+
+    // Проверка изменения состояния On/Off (для debounce bypass)
+    bool current_on_off = false;
+    bool has_on_off = false;
+    for (int i = 0; i < dev->endpoints_count; i++) {
+        endpoint_custom_t *ep = dev->endpoints_array[i];
+        if (ep && ep->is_use_on_off_cluster && ep->server_OnOffClusterObj) {
+            current_on_off = ep->server_OnOffClusterObj->on_off;
+            has_on_off = true;
+            break;
+        }
+    }
+
+    static bool last_on_off_state[256] = {0};
+    static bool state_known[256] = {0};
+
+    // Если состояние On/Off изменилось — отправляем немедленно
+    if (has_on_off && state_known[idx]) {
+        if (last_on_off_state[idx] != current_on_off) {
+            goto send_update;
+        }
+    }
+
+    // Обычный дебаунс по времени
+    if (now - last_update_time[idx] < DEBOUNCE_TIMEOUT_MS) {
+        goto update_cache;
+    }
+
+send_update:
+    {
+        cJSON *device_json = zbm_dev_base_device_to_json(dev);
+        if (!device_json) return;
+
+        cJSON_AddStringToObject(device_json, "event", "device_update");
+
+        // Сериализуем в временный буфер
+        int len = cJSON_PrintPreallocated(device_json, json_print_buffer, sizeof(json_print_buffer), false);
+        cJSON_Minify(json_print_buffer);
+        if (len < 0) {
+            cJSON_Delete(device_json);
+            return;
+        }
+        cJSON_Delete(device_json);
+
+        // ✅ КОПИРУЕМ строку, чтобы она была независимой
+       char *rendered_copy = strndup(json_print_buffer, sizeof(json_print_buffer) - 1);
+        if (!rendered_copy) {
+            ESP_LOGE(TAG, "Failed to allocate memory for JSON copy");
+            return;
+        }
+
+        ws_async_data_t *async_data = malloc(sizeof(ws_async_data_t));
+        if (!async_data) {
+            free(rendered_copy); // ← освобождаем, если не смогли создать структуру
+            return;
+        }
+
+        async_data->hd = server_handle;
+        async_data->payload = (uint8_t*)rendered_copy; // теперь можно безопасно освободить
+        async_data->len = strlen(rendered_copy);
+
+        if (httpd_queue_work(server_handle, ws_send_async_task, async_data) != ESP_OK) {
+            free(rendered_copy);
+            free(async_data);
+        } else {
+            last_update_time[idx] = now;
+        }
+    }
+
+update_cache:
+    if (has_on_off) {
+        last_on_off_state[idx] = current_on_off;
+        state_known[idx] = true;
+    }
+}
+
+void ws_notify_device_update_unlocked_old(device_custom_t *dev)
+{
     //if(s_is_in_ap_only_mode == true) return; // режим настройки SSID постить не надо на websocket
     uint32_t now = esp_log_timestamp();
     uint8_t idx = dev->short_addr % 256;
@@ -961,7 +1151,7 @@ send_update:
         }
 
         data->hd = server_handle;
-        data->payload = rendered;
+        data->payload = (uint8_t*)rendered;
         data->len = strlen(rendered);
 
         if (httpd_queue_work(server_handle, ws_send_async_task, data) != ESP_OK) {
@@ -982,87 +1172,7 @@ update_cache:
 
 
 
-// 🔹 Версия для использования ВНУТРИ мьютекса (не берёт мьютекс!)
-void ws_notify_device_update_unlocked_old(device_custom_t *dev)
-{
-    uint32_t now = esp_log_timestamp();
-    uint8_t idx = dev->short_addr % 256;
 
-    // 🔹 Проверим: изменилось ли состояние On/Off?
-    bool current_on_off = false;
-    bool has_on_off = false;
-
-    for (int i = 0; i < dev->endpoints_count; i++) {
-        endpoint_custom_t *ep = dev->endpoints_array[i];
-        if (ep && ep->is_use_on_off_cluster && ep->server_OnOffClusterObj) {
-            current_on_off = ep->server_OnOffClusterObj->on_off;
-            has_on_off = true;
-            break;
-        }
-    }
-
-    // ✅ Если значение изменилось — отправляем, даже если дебаунс
-    static bool last_on_off_state[256] = {0};
-    static bool state_known[256] = {0};
-
-    if (has_on_off && state_known[idx]) {
-        if (last_on_off_state[idx] != current_on_off) {
-            goto send_update; // → пропускаем дебаунс
-        }
-    }
-
-    // 🔹 Обычный дебаунс
-    if (now - last_update_time[idx] < DEBOUNCE_TIMEOUT_MS) {
-        ESP_LOGD(TAG, "ws_notify_device_update: skipped 0x%04x — debounced", dev->short_addr);
-        goto update_cache;
-    }
-
-send_update:
-    {
-        cJSON *device_json = create_device_json(dev);
-        if (!device_json) return;
-
-        cJSON_AddStringToObject(device_json, "event", "device_update");
-        //char *rendered = cJSON_PrintUnformatted(device_json);
-        //cJSON_Minify(device_json); // опционально — убирает пробелы
-        int len = cJSON_PrintPreallocated(device_json, json_print_buffer, sizeof(json_print_buffer), false);
-        cJSON_Minify(json_print_buffer); // опционально — убирает пробелы
-        if (len < 0) {
-            ESP_LOGE(TAG, "Failed to print JSON into buffer");
-            cJSON_Delete(device_json);
-            return;
-        }
-        char *rendered = json_print_buffer;
-        cJSON_Delete(device_json);
-        if (!rendered) return;
-
-        last_update_time[idx] = now;
-
-        ws_async_data_t *data = malloc(sizeof(ws_async_data_t));
-        if (!data) {
-            //free(rendered);
-            goto update_cache;
-        }
-
-        data->hd = server_handle;
-        data->payload = rendered;
-        data->len = strlen(rendered);
-
-        if (httpd_queue_work(server_handle, ws_send_async_task, data) != ESP_OK) {
-            //free(rendered);
-            free(data);
-        } else {
-            ESP_LOGI("WS_NOTIFY", "📤 Sent device_update: %s (0x%04x) → on_off=%s", 
-                     dev->friendly_name, dev->short_addr, current_on_off ? "ON" : "OFF");
-        }
-    }
-
-update_cache:
-    if (has_on_off) {
-        last_on_off_state[idx] = current_on_off;
-        state_known[idx] = true;
-    }
-}
 
 /**
  * @brief Основная функция для отправки обновления устройства (вызывается извне)
@@ -1531,6 +1641,7 @@ esp_err_t handle_report_config_api(httpd_req_t *req)
         httpd_resp_sendstr(req, "{\"status\":\"ok\"}");
     } else {
         free(cfg_req);
+        cfg_req = NULL;
         httpd_resp_sendstr(req, "{\"status\":\"fail\",\"error\":\"queue_full\"}");
     }
 

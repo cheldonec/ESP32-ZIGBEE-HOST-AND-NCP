@@ -3,7 +3,10 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include "esp_err.h"
+#include "zbm_clusters.h"
 #include "esp_zigbee_zcl_command.h"
+
+
 
 /** @brief Basic cluster information attribute set identifiers
 */
@@ -85,6 +88,9 @@ typedef struct {
      * Time in milliseconds when the `on_off` state was last updated.
      */
     uint32_t last_update_ms;
+
+    uint16_t                    nostandart_attr_count;
+    attribute_custom_t**        nostandart_attr_array;
 } zigbee_manager_basic_cluster_t;
 
 #define ZIGBEE_BASIC_CLUSTER_DEFAULT_INIT() { \
@@ -119,6 +125,8 @@ typedef struct {
     /* Software Information */ \
     .sw_build_id = {0}, \
     .last_update_ms = 0, \
+    .nostandart_attr_count = 0, \
+    .nostandart_attr_array = NULL, \
 }
 
 esp_err_t zb_manager_basic_cluster_update_attribute(zigbee_manager_basic_cluster_t* cluster, uint16_t attr_id, void* value);

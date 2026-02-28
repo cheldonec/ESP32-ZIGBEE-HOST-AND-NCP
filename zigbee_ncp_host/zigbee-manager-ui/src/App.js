@@ -8,6 +8,7 @@ import OnOffCommandModal from './components/OnOffCommandModal';
 import OnOffTimedOffModal from './components/OnOffTimedOffModal';
 import RuleList from './components/RuleList';
 import RuleEditor from './components/RuleEditor';
+import DeviceExplorerModal from './components/DeviceExplorerModal';
 import DeviceCard from './components/DeviceCard';
 
 function App() {
@@ -35,6 +36,9 @@ function App() {
   const [showRules, setShowRules] = useState(false);
   const [rules, setRules] = useState([]);
   const [editingRule, setEditingRule] = useState(null);
+  
+  // === Dev Explorer ===
+  const [showDeviceExplorer, setShowDeviceExplorer] = useState(false);
 
   // === Команды для endpoint ===
   const [showCommandModal, setShowCommandModal] = useState(false);
@@ -708,6 +712,22 @@ function App() {
             📊 Репорты
           </button>
 
+          <button 
+            className="bind-btn" 
+            onClick={() => setShowRules(!showRules)} 
+            title="Модуль автоматизации"
+          >
+            🎯 Сценарии
+          </button>
+
+          <button 
+           className="bind-btn" 
+           onClick={() => setShowDeviceExplorer(true)} 
+           title="Исследование устройств"
+         >
+           🔍 Устройства
+         </button>
+
           <button className="theme-toggle-inline" onClick={toggleTheme}>
             {theme === 'dark' ? '☀️' : '🌙'}
           </button>
@@ -716,9 +736,7 @@ function App() {
             ⚙️
           </button>
 
-          <button className="rules-btn" onClick={() => setShowRules(!showRules)} title="Модуль автоматизации">
-            🎯 Сценарии
-          </button>
+          
         </div>
 
         {/* Панель настроек */}
@@ -1059,6 +1077,13 @@ function App() {
           </div>
         </div>
       )}
+
+      {/* === Модальное окно: Исследование устройств === */}
+      <DeviceExplorerModal
+        show={showDeviceExplorer}
+        onClose={() => setShowDeviceExplorer(false)}
+        devices={devices}
+      />
     </div>
   );
 }

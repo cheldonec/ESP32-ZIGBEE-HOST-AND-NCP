@@ -8,7 +8,7 @@
 
 static const char* TAG = "SYS_CONFIG";
 
-#define CONFIG_FILE_PATH "/spiffs_config/config.json"
+
 
 zb_manager_app_main_config_t g_app_config;
 

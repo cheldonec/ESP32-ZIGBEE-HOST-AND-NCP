@@ -4,6 +4,8 @@
 #include <stdint.h>
 #include "esp_err.h"
 #include <stdbool.h>
+#include "zbm_clusters.h"
+
 
 typedef enum {
     ATTR_REL_HUMIDITY_MEASUREMENT_VALUE_ID     = 0x0000,  /*!<  MeasuredValue */
@@ -88,6 +90,9 @@ typedef struct {
      */
     bool read_error;
 
+    uint16_t                    nostandart_attr_count;
+    attribute_custom_t**        nostandart_attr_array;
+
 } zb_manager_humidity_measurement_cluster_t;
 
 /**
@@ -100,6 +105,8 @@ typedef struct {
     .tolerance = 0, \
     .last_update_ms = 0, \
     .read_error = false, \
+    .nostandart_attr_count = 0, \
+    .nostandart_attr_array = NULL, \
 }
 
 /**

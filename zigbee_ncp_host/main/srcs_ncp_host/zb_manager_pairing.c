@@ -232,7 +232,9 @@ static void zb_pairing_worker_task(void *pvParameters)
                     {
                         ESP_LOGI(TAG, "ZB_PAIRING_DEVICE_UPDATE_EVENT: 0x%04x re-joined the network and parent is 0x%04x ", data->params.short_addr, data->params.parent_short);
                         device->parent_short_addr = data->params.parent_short;
-                        zb_manager_update_device_activity(device->short_addr, 10);
+                        device->last_seen_ms = esp_log_timestamp();
+                        device->is_online = true;
+                        //zb_manager_update_device_activity(device->short_addr, 10);
                     }
                     break;
                 }
@@ -897,12 +899,12 @@ static void zb_pairing_worker_task(void *pvParameters)
                     uint16_t short_addr = sheduler->appending_device->short_addr;
                     if (zbm_dev_base_dev_obj_append_safe(sheduler->appending_device) == ESP_OK)
                     {
-                        //zb_manager_queue_save_request();
-                        
-                        zbm_dev_base_queue_save_req_cmd();
                         // ✅ Уведомляем веб-интерфейс с задержкой, пусть сохраниться успеет: устройство готово!
                         //vTaskDelay(pdMS_TO_TICKS(300));
                         ws_notify_device_update(short_addr);
+                        //zb_manager_queue_save_request();
+                        zbm_dev_base_queue_save_req_cmd();
+                        
                         // ✅ ПУБЛИКУЕМ ПОЛНОЕ ПЕРЕОПРЕДЕЛЕНИЕ В HA
                         //ha_mqtt_republish_discovery_for_device(sheduler->appending_device);
                     }else {

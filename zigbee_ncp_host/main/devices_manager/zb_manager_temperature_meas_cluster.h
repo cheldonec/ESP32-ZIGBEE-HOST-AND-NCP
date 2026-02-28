@@ -5,6 +5,8 @@
 #include <stdint.h>
 #include "esp_err.h"
 #include <stdbool.h>
+#include "zbm_clusters.h"
+
 
 typedef enum {
     ATTR_TEMP_MEASUREMENT_VALUE_ID         = 0x0000,  /*!< MeasuredValue */
@@ -73,7 +75,10 @@ typedef struct {
      * - Unit: Degrees Celsius * 100 (e.g., ±0.5°C = 50)
      * - Range: 0 (exact) to 20.48°C (2048)
      * - Default Value: 0
+     * 
      */
+    uint16_t                    nostandart_attr_count;
+    attribute_custom_t**        nostandart_attr_array;
     uint16_t tolerance;
 
     /**
@@ -108,6 +113,8 @@ typedef struct {
     .tolerance = 0, \
     .last_update_ms = 0, \
     .read_error = false, \
+    .nostandart_attr_count = 0, \
+    .nostandart_attr_array = NULL, \
 }
 
 /**

@@ -353,6 +353,12 @@ static void ssdp_task(void* pvParameters) {
     int sock = socket(AF_INET, SOCK_DGRAM, 0);
     if (sock < 0) { vTaskDelete(NULL); return; }
 
+     // Устанавливаем таймаут на recvfrom
+    struct timeval tv;
+    tv.tv_sec = 1;   // 1 секунда
+    tv.tv_usec = 0;
+    setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    
     struct sockaddr_in addr = {
         .sin_family = AF_INET,
         .sin_port = htons(SSDP_PORT),
@@ -399,22 +405,64 @@ static void ssdp_task(void* pvParameters) {
 }
 
 void start_ssdp_server(void) {
-    if (s_running) return;
-    s_running = true;
-    init_ssdp_load_boot_id();
-    generate_uuid_from_mac();
-    xTaskCreatePinnedToCore(ssdp_task, "ssdp_server", 4096, NULL, 5, &s_task_handle, 0);
-    ESP_LOGI(TAG, "SSDP server started");
-}
+    // Защита от двойного запуска
+    if (s_running) {
+        ESP_LOGW(TAG, "SSDP server already running, restarting...");
+        stop_ssdp_server();
+        vTaskDelay(pdMS_TO_TICKS(10));  // Дайте системе время освободить ресурсы
+    }
 
-void stop_ssdp_server(void) {
-    if (!s_running) return;
-    s_running = false;
+    // На случай, если задача осталась "висеть"
     if (s_task_handle) {
         vTaskDelete(s_task_handle);
         s_task_handle = NULL;
+        vTaskDelay(pdMS_TO_TICKS(10));
     }
-    ESP_LOGI(TAG, "SSDP server stopped");
+
+    s_running = true;
+
+    // Загружаем или увеличиваем boot_id
+    init_ssdp_load_boot_id();
+
+    // Генерируем UUID (один раз при старте)
+    generate_uuid_from_mac();
+
+    // Создаём задачу
+    BaseType_t ret = xTaskCreatePinnedToCore(
+        ssdp_task,
+        "ssdp_server",
+        4096,
+        NULL,
+        5,
+        &s_task_handle,
+        0
+    );
+
+    if (ret != pdPASS) {
+        ESP_LOGE(TAG, "Failed to create SSDP task (err=%d)", ret);
+        s_running = false;
+        s_task_handle = NULL;
+    } else {
+        ESP_LOGI(TAG, "SSDP server task started on core 0");
+    }
+}
+
+void stop_ssdp_server(void) {
+    if (!s_running) {
+        ESP_LOGD(TAG, "SSDP server already stopped");
+        return;
+    }
+
+    s_running = false;
+
+    if (s_task_handle) {
+        ESP_LOGI(TAG, "Stopping SSDP server task...");
+        vTaskDelete(s_task_handle);
+        s_task_handle = NULL;
+        ESP_LOGI(TAG, "SSDP server task stopped");
+    } else {
+        ESP_LOGW(TAG, "s_task_handle is NULL during stop");
+    }
 }
 
 esp_err_t description_xml_handler(httpd_req_t *req) {

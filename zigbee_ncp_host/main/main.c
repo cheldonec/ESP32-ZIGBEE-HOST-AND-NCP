@@ -90,7 +90,7 @@ void app_main(void)
     };
 
    ret = zm_init_devices_base();
-   ret = json_load_and_print(ZB_MANAGER_JSON_DEVICES_FILE);
+   //ret = json_load_and_print(ZB_MANAGER_JSON_DEVICES_FILE);
 
    ESP_ERROR_CHECK(ret);
 

@@ -5,6 +5,8 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include "esp_err.h"
+#include "zbm_clusters.h"
+
 
 
 #ifdef __cplusplus
@@ -119,6 +121,9 @@ typedef struct {
      * Time in milliseconds when the `on_off` state was last updated.
      */
     uint32_t last_update_ms;
+
+    uint16_t                    nostandart_attr_count;
+    attribute_custom_t**        nostandart_attr_array;
 } zb_manager_power_config_cluster_t;
 
 // Default init
@@ -149,6 +154,8 @@ typedef struct {
     .battery_percentage_th3 = 0, \
     .battery_alarm_state = 0, \
     .last_update_ms = 0, \
+    .nostandart_attr_count = 0, \
+    .nostandart_attr_array = NULL, \
 }
 
 // Функции

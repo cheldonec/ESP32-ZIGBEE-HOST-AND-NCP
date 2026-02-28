@@ -493,14 +493,14 @@ static void zb_action_worker_task(void *pvParameters)
             if (zbm_dev_base_dev_update_from_report_notify_safe(rep) == ESP_OK)
             {
                 ws_notify_device_update(rep->src_address.u.short_addr);
-                zb_rule_trigger_state_update(
+                /*zb_rule_trigger_state_update(
                                 rep->src_address.u.short_addr,
                                 rep->cluster,
                                 rep->attr.attr_id,
                                 rep->attr.attr_value,
                                 rep->attr.attr_len,
                                 rep->attr.attr_type
-                            );
+                            );*/
             }else {
                 ESP_LOGW(TAG,"zbm_dev_base_dev_update_from_report_notify_safe(rep) != ESP_OK");
             }
@@ -936,7 +936,7 @@ static void zb_action_worker_task(void *pvParameters)
             case ZB_ACTION_DELAYED_CONFIG_REPORT_REQ: {
                 ESP_LOGI(TAG, "✅ DELAYED_CONFIG_REPORT_REQ_LOCAL: processing");
                 delayed_configure_report_req_t *req = (delayed_configure_report_req_t *)msg.event_data;
-                device_custom_t *dev = zb_manager_find_device_by_short(req->short_addr);
+                device_custom_t *dev = zbm_dev_base_find_device_by_short_safe(req->short_addr);
                 if (!dev) {
                     ESP_LOGW(TAG, "DELAYED_CONFIG_REPORT_REQ: device 0x%04x not found", req->short_addr);
                     break;

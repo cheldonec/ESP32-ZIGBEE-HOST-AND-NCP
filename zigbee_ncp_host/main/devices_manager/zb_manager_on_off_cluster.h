@@ -5,7 +5,9 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include "esp_err.h"
+#include "zbm_clusters.h"
 #include "esp_zigbee_zcl_command.h"
+
 /**
  * @brief Structure representing the Zigbee On/Off Cluster
  *
@@ -72,6 +74,9 @@ typedef struct {
      */
     uint32_t last_update_ms;
 
+    uint16_t                    nostandart_attr_count;
+    attribute_custom_t**        nostandart_attr_array;
+
 } zb_manager_on_off_cluster_t;
 
 /**
@@ -84,6 +89,8 @@ typedef struct {
     .off_wait_time = 0, \
     .start_up_on_off = 0xFF, \
     .last_update_ms = 0, \
+    .nostandart_attr_count = 0, \
+    .nostandart_attr_array = NULL, \
 }
 
 /**

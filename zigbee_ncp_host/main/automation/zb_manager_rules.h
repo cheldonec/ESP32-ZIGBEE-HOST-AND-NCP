@@ -21,7 +21,7 @@ extern "C" {
 /**
  * @brief Максимальное количество триггеров и действий
  */
-#define ZB_RULE_MAX_TRIGGERS 8
+#define ZB_RULE_MAX_TRIGGERS 4
 #define ZB_RULE_MAX_ACTIONS  4
 
 /**

@@ -1,0 +1,118 @@
+{
+  "ieee_addr": "a4:c1:38:18:4c:e7:66:ac",
+  "short_addr": 32820,
+  "is_in_build_status": 2,
+  "index_in_array": 0,
+  "friendly_name": "реле",
+  "friendly_name_len": 8,
+  "capability": 0,
+  "lqi": 10,
+  "last_seen_ms": 10120,
+  "device_timeout_ms": 60000,
+  "is_online": true,
+  "manufacturer_code": 4098,
+  "manufacturer_name_str": "Tuya",
+  "device_basic_cluster": {
+    "cluster_id": 0,
+    "zcl_version": 3,
+    "app_version": 74,
+    "stack_version": 0,
+    "hw_version": 0,
+    "manufacturer_name": "_TZ3000_rmjr4ufz",
+    "model_id": "TS0001",
+    "date_code": "",
+    "power_source": 1,
+    "power_source_text": "Mains (Single Phase)",
+    "location": "",
+    "env": 0,
+    "enabled": true,
+    "last_update_ms": 10120
+  },
+  "endpointscount": 2,
+  "endpoints": [
+    {
+      "ep_id": 1,
+      "is_use_on_device": 1,
+      "friendly_name": "[0x8034] [0x01]",
+      "deviceId": 256,
+      "device_type": "on_off_light",
+      "identify": {
+        "cluster_id": 3,
+        "identify_time": 0
+      },
+      "onoff": {
+        "cluster_id": 6,
+        "on": false,
+        "on_time": 0,
+        "off_wait_time": 0,
+        "start_up": 255,
+        "last_update_ms": 2295139
+      },
+      "unkinpclcount": 6,
+      "unknown_input_clusters": [
+        {
+          "id": 4,
+          "cluster_id_text": "Groups",
+          "role_mask": 1,
+          "manuf_code": 0,
+          "is_use_on_device": 1,
+          "attributes": []
+        },
+        {
+          "id": 5,
+          "cluster_id_text": "Scenes",
+          "role_mask": 1,
+          "manuf_code": 0,
+          "is_use_on_device": 1,
+          "attributes": []
+        },
+        {
+          "id": 1794,
+          "cluster_id_text": "Metering",
+          "role_mask": 1,
+          "manuf_code": 0,
+          "is_use_on_device": 1,
+          "attributes": []
+        },
+        {
+          "id": 2820,
+          "cluster_id_text": "Electrical Measurement",
+          "role_mask": 1,
+          "manuf_code": 0,
+          "is_use_on_device": 1,
+          "attributes": []
+        },
+        {
+          "id": 57344,
+          "cluster_id_text": "Unknown Cluster",
+          "role_mask": 1,
+          "manuf_code": 0,
+          "is_use_on_device": 1,
+          "attributes": []
+        },
+        {
+          "id": 57345,
+          "cluster_id_text": "Unknown Cluster",
+          "role_mask": 1,
+          "manuf_code": 0,
+          "is_use_on_device": 1,
+          "attributes": []
+        }
+      ],
+      "outpclcount": 2,
+      "output_clusters": [25, 10],
+      "unkoutpclcount": 0
+    },
+    {
+      "ep_id": 242,
+      "is_use_on_device": 0,
+      "friendly_name": "",
+      "deviceId": 0,
+      "device_type": "on_off_switch",
+      "unkinpclcount": 0,
+      "outpclcount": 0,
+      "unkoutpclcount": 0
+    }
+  ],
+  "event": "device_update"
+}

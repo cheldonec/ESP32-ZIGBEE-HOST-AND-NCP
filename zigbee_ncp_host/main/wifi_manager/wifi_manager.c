@@ -358,6 +358,8 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
         ha_integration_update_ip_from_event(event->ip_info.ip.addr);
 
         ESP_LOGI(TAG, "Starting SSDP Server"); // если был уже запущен, не страшно
+        stop_ssdp_server();                    // ← Обязательно!
+        vTaskDelay(pdMS_TO_TICKS(10));
         start_ssdp_server();
         vTaskDelay(pdMS_TO_TICKS(100)); // Wait before retrying
         //update_ip_from_event_extern_call_and_send_notify(event->ip_info.ip.addr);

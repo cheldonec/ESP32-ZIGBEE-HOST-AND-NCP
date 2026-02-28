@@ -34,11 +34,11 @@ typedef enum {
 #define HOST_BUS_TASK_PRIORITY           18
 #define HOST_BUS_BUF_SIZE                4096
 */
-#define HOST_BUS_RINGBUF_SIZE         8192      // Было: 20480 → ОГРОМНО
+#define HOST_BUS_RINGBUF_SIZE         4096      // Было: 20480 → ОГРОМНО
 #define HOST_BUS_RINGBUF_TIMEOUT_MS   50
-#define HOST_BUS_TASK_STACK           8192      // Было: 8192
-#define HOST_BUS_TASK_PRIORITY        15        // Было: 18
-#define HOST_BUS_BUF_SIZE             4096      // Было: 4096 → слишком много
+#define HOST_BUS_TASK_STACK           4096      // Было: 8192
+#define HOST_BUS_TASK_PRIORITY        18        // Было: 18
+#define HOST_BUS_BUF_SIZE             1024      // Было: 4096 → слишком много
 /**
  * @brief A function for bus initialize.
  *

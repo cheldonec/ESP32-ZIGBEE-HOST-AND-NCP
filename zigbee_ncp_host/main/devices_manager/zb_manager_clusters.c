@@ -112,7 +112,7 @@ const char* zb_manager_get_attr_name(uint16_t clusterID, uint16_t attr_id) {
             return cluster_attr_funcs[i].func(attr_id);
         }
     }
-    return "Unknown Cluster";
+    return "Unknown Attr";
 }
 
 /// @brief Логирует значение Zigbee-атрибута с учётом типа и кластера

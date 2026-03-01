@@ -20,7 +20,7 @@
 
 static const char *TAG = "WEB_SERVER";
 
-static char json_print_buffer[4096]; // буфер для cJSON
+static char json_print_buffer[8192]; // буфер для cJSON
 
 static const uint16_t coordinator_output_clusters[] = {
     ESP_ZB_ZCL_CLUSTER_ID_OTA_UPGRADE,   // 0x0019
@@ -757,50 +757,7 @@ esp_err_t ws_handler(httpd_req_t *req)
     // !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! Загрузка устройств изменена
     if (req_json) {
         cJSON *cmd = cJSON_GetObjectItem(req_json, "cmd");
-        /*if (cmd && strcmp(cmd->valuestring, "get_devices") == 0) {
-            ESP_LOGI(TAG, "CMD: get_devices received");
-
-            cJSON *devices = cJSON_CreateArray();
-            cJSON *response = cJSON_CreateObject();
-
-            if (xSemaphoreTake(g_device_array_mutex, pdMS_TO_TICKS(ZB_DEVICE_MUTEX_TIMEOUT_LONG_MS)) == pdTRUE) {
-                for (int i = 0; i < RemoteDevicesCount; i++) {
-                    device_custom_t *dev = RemoteDevicesArray[i];
-                    if (!dev) continue;
-
-                    cJSON *d = create_device_json(dev);
-                    if (d) {
-                        cJSON_AddItemToArray(devices, d);
-                    }
-                }
-                DEVICE_ARRAY_UNLOCK();
-            } else {
-                ESP_LOGE(TAG, "Failed to take mutex in get_devices");
-            }
-
-            cJSON_AddItemToObject(response, "devices", devices);
-            //char *rendered = cJSON_PrintUnformatted(response);
-            
-            int len = cJSON_PrintPreallocated(response, json_print_buffer, sizeof(json_print_buffer), false);
-            cJSON_Minify(json_print_buffer); // опционально — убирает пробелы
-            if (len < 0) {
-                ESP_LOGE(TAG, "Failed to print JSON into buffer");
-                cJSON_Delete(response);
-                return ESP_FAIL;
-            }
-            char *rendered = json_print_buffer;
-            cJSON_Delete(response);
-
-            httpd_ws_frame_t resp = {
-                .type = HTTPD_WS_TYPE_TEXT,
-                .payload = (uint8_t*)rendered,
-                .len = strlen(rendered)
-            };
-            httpd_ws_send_frame(req, &resp);
-            //free(rendered);
-        } */ // end get_devices
-
- ///////////
+        
         if (strcmp(cmd->valuestring, "send_automation_command") == 0) {
             cJSON *short_addr = cJSON_GetObjectItem(req_json, "short_addr");
             cJSON *endpoint = cJSON_GetObjectItem(req_json, "endpoint");
@@ -988,7 +945,164 @@ esp_err_t ws_handler(httpd_req_t *req)
             // здесь отправлять рано ответ будет отправляться из  zb_manager_action_handler_worker.c
             //ws_notify_network_status();
         }
+        else if (strcmp(cmd->valuestring, "discover_attributes") == 0) {
+            cJSON *short_addr_item = cJSON_GetObjectItem(req_json, "short_addr");
+            cJSON *endpoint_item   = cJSON_GetObjectItem(req_json, "endpoint");
+            cJSON *cluster_item    = cJSON_GetObjectItem(req_json, "cluster_id");
+            cJSON *start_attr_item = cJSON_GetObjectItem(req_json, "start_attr");
+            cJSON *max_attr_item   = cJSON_GetObjectItem(req_json, "max_attr_count");
+
+            if (!short_addr_item || !cluster_item || !start_attr_item || !max_attr_item) {
+                ESP_LOGW(TAG, "Missing required fields in discover_attributes");
+                
+                // ❌ Ответ: ошибка
+                const char *resp = "{\"status\":\"fail\",\"error\":\"missing_fields\"}";
+                httpd_ws_frame_t frame = {
+                    .type = HTTPD_WS_TYPE_TEXT,
+                    .payload = (uint8_t*)resp,
+                    .len = strlen(resp)
+                };
+                httpd_ws_send_frame(req, &frame);
+                goto cleanup;
+            }
+
+            uint16_t short_addr = short_addr_item->valueint;
+            uint8_t  endpoint   = endpoint_item ? endpoint_item->valueint : 0;
+            uint16_t cluster_id = cluster_item->valueint;
+            uint16_t start_attr = start_attr_item->valueint;
+            uint8_t  max_count  = (uint8_t)(max_attr_item->valueint > 255 ? 255 : max_attr_item->valueint);
+
+            ESP_LOGI(TAG, "🔍 DISCOVER ATTRS: short=0x%04x, ep=%d, cluster=0x%04x, start=0x%04x, max=%u",
+                    short_addr, endpoint, cluster_id, start_attr, max_count);
+
+            // Создаём запрос
+            delayed_discovery_attr_req_t *disc_req = calloc(1, sizeof(delayed_discovery_attr_req_t));
+            if (!disc_req) {
+                ESP_LOGE(TAG, "❌ Failed to allocate disc_req");
+
+                const char *resp = "{\"status\":\"fail\",\"error\":\"alloc_failed\"}";
+                httpd_ws_frame_t frame = {
+                    .type = HTTPD_WS_TYPE_TEXT,
+                    .payload = (uint8_t*)resp,
+                    .len = strlen(resp)
+                };
+                httpd_ws_send_frame(req, &frame);
+                goto cleanup;
+            }
+
+            disc_req->short_addr     = short_addr;
+            disc_req->endpoint       = endpoint;
+            disc_req->cluster_id     = cluster_id;
+            disc_req->start_attr_id  = start_attr;
+            disc_req->max_attr_number = max_count;
+
+            // Отправляем в action worker
+            bool status = zb_manager_post_to_action_worker(ZB_ACTION_DELAYED_DISCOVER_ATTR_REQ, disc_req, sizeof(*disc_req));
+            
+            if (status) {
+                ESP_LOGI(TAG, "✅ Posted ZB_ACTION_DELAYED_DISCOVER_ATTR_REQ to worker");
+                const char *resp = "{\"status\":\"ok\"}";
+                httpd_ws_frame_t frame = {
+                    .type = HTTPD_WS_TYPE_TEXT,
+                    .payload = (uint8_t*)resp,
+                    .len = strlen(resp)
+                };
+                httpd_ws_send_frame(req, &frame);
+            } else {
+                ESP_LOGE(TAG, "❌ Failed to post discovery request to worker");
+                char err_resp[64];
+                snprintf(err_resp, sizeof(err_resp), "{\"status\":\"fail\",\"error\":\"queue_full\"}");
+                httpd_ws_frame_t frame = {
+                    .type = HTTPD_WS_TYPE_TEXT,
+                    .payload = (uint8_t*)err_resp,
+                    .len = strlen(err_resp)
+                };
+                httpd_ws_send_frame(req, &frame);
+            }
+
+            free(disc_req);  // ← освобождаем, worker сделал копию
+        }
+        else if (strcmp(cmd->valuestring, "read_attribute") == 0) {
+            cJSON *short_addr_item = cJSON_GetObjectItem(req_json, "short_addr");
+            cJSON *endpoint_item   = cJSON_GetObjectItem(req_json, "endpoint");
+            cJSON *cluster_item    = cJSON_GetObjectItem(req_json, "cluster_id");
+            cJSON *attr_id_item    = cJSON_GetObjectItem(req_json, "attr_id");
+
+            if (!short_addr_item || !endpoint_item || !cluster_item || !attr_id_item) {
+                ESP_LOGW(TAG, "Missing required fields in read_attribute");
+                
+                const char *resp = "{\"status\":\"fail\",\"error\":\"missing_fields\"}";
+                httpd_ws_frame_t frame = {
+                    .type = HTTPD_WS_TYPE_TEXT,
+                    .payload = (uint8_t*)resp,
+                    .len = strlen(resp)
+                };
+                httpd_ws_send_frame(req, &frame);
+                goto cleanup;
+            }
+
+            uint16_t short_addr = short_addr_item->valueint;
+            uint8_t  endpoint   = endpoint_item->valueint;
+            if (endpoint == 0) endpoint = 1;
+            uint16_t cluster_id = cluster_item->valueint;
+            uint16_t attr_id    = attr_id_item->valueint;
+
+            ESP_LOGI(TAG, "🔍 READ ATTRIBUTE: short=0x%04x, ep=%d, cluster=0x%04x, attr=0x%04x",
+                    short_addr, endpoint, cluster_id, attr_id);
+
+            // Подготавливаем команду Read Attribute
+            esp_zb_zcl_read_attr_cmd_t read_cmd = {0};
+
+            // Заполняем базовую информацию
+            read_cmd.zcl_basic_cmd.dst_addr_u.addr_short = short_addr;
+            read_cmd.zcl_basic_cmd.dst_endpoint = endpoint;
+            read_cmd.zcl_basic_cmd.src_endpoint = 1;  // Можно сделать конфигурируемым при необходимости
+
+            read_cmd.address_mode = ESP_ZB_APS_ADDR_MODE_16_ENDP_PRESENT;
+            read_cmd.clusterID = cluster_id;
+
+            // Флаги: направление = клиентское (по умолчанию), default response разрешён
+            read_cmd.direction = ESP_ZB_ZCL_CMD_DIRECTION_TO_SRV; // Читаем атрибут на сервере
+            read_cmd.dis_defalut_resp = 0; // Разрешаем default response
+
+            // Поддержка производителя (manuf_specific): не используется по умолчанию
+            read_cmd.manuf_specific = 0;
+            read_cmd.manuf_code = 0; // Устанавливай, если нужен manuf-specific запрос
+
+            //read_cmd.manuf_specific = 1;
+            //read_cmd.manuf_code = 0x115F; // Устанавливай, если нужен manuf-specific запрос
+
+            // Один атрибут
+            read_cmd.attr_number = 1;
+            read_cmd.attr_field = &attr_id; // указатель на ID атрибута
+
+            // Отправляем команду
+            uint8_t tsn = zb_manager_zcl_read_attr_cmd_req(&read_cmd);
+            if (tsn == 0xFF) {
+                ESP_LOGE(TAG, "❌ Failed to send Read Attribute command");
+                const char *resp = "{\"status\":\"fail\",\"error\":\"send_failed\"}";
+                httpd_ws_frame_t frame = {
+                    .type = HTTPD_WS_TYPE_TEXT,
+                    .payload = (uint8_t*)resp,
+                    .len = strlen(resp)
+                };
+                httpd_ws_send_frame(req, &frame);
+            } else {
+                ESP_LOGI(TAG, "✅ Read Attribute sent with TSN=%d", tsn);
+                const char *resp = "{\"status\":\"ok\",\"tsn\":%d}";
+                char resp_buf[64];
+                snprintf(resp_buf, sizeof(resp_buf), "{\"status\":\"ok\",\"tsn\":%d}", tsn);
+                httpd_ws_frame_t frame = {
+                    .type = HTTPD_WS_TYPE_TEXT,
+                    .payload = (uint8_t*)resp_buf,
+                    .len = strlen(resp_buf)
+                };
+                httpd_ws_send_frame(req, &frame);
+            }
+        } 
+
     }
+    cleanup:
     cJSON_Delete(req_json);
     free(buf);
     return ESP_OK;
@@ -1002,6 +1116,89 @@ static uint32_t last_update_time[256] = {0};  // хэш от short_addr
 
 // 🔹 Версия для использования ВНУТРИ мьютекса (не берёт мьютекс!)
 void ws_notify_device_update_unlocked(device_custom_t *dev)
+{
+    if(s_is_in_ap_only_mode == true || !dev || !server_handle) return;
+
+    uint32_t now = esp_log_timestamp();
+    uint8_t idx = dev->short_addr % 256;
+
+    // Проверка On/Off для быстрого обновления
+    bool current_on_off = false;
+    bool has_on_off = false;
+    for (int i = 0; i < dev->endpoints_count; i++) {
+        endpoint_custom_t *ep = dev->endpoints_array[i];
+        if (ep && ep->is_use_on_off_cluster && ep->server_OnOffClusterObj) {
+            current_on_off = ep->server_OnOffClusterObj->on_off;
+            has_on_off = true;
+            break;
+        }
+    }
+
+    static bool last_on_off_state[256] = {0};
+    static bool state_known[256] = {0};
+
+    if (has_on_off && state_known[idx]) {
+        if (last_on_off_state[idx] != current_on_off) {
+            goto send_update;
+        }
+    }
+
+    if (now - last_update_time[idx] < DEBOUNCE_TIMEOUT_MS) {
+        goto update_cache;
+    }
+
+send_update:
+    {
+        cJSON *device_json = zbm_dev_base_device_to_json(dev);
+        if (!device_json) return;
+
+        cJSON_AddStringToObject(device_json, "event", "device_update");
+
+        // ✅ Используем нормальное форматирование
+        char *rendered = cJSON_PrintUnformatted(device_json); // ← НЕ зависит от json_print_buffer!
+        if (!rendered) {
+            ESP_LOGE(TAG, "❌ FAILED: Not enough memory to print JSON! Heap: %u", esp_get_free_heap_size());
+            cJSON_Delete(device_json);
+            return;
+        }
+        cJSON_Delete(device_json);
+
+        if (!rendered) {
+            ESP_LOGE(TAG, "Failed to print JSON");
+            return;
+        }
+
+        // Минифицируем на лету
+        cJSON_Minify(rendered);
+
+        // Создаём асинхронную структуру
+        ws_async_data_t *async_data = malloc(sizeof(ws_async_data_t));
+        if (!async_data) {
+            free(rendered);
+            return;
+        }
+
+        async_data->hd = server_handle;
+        async_data->payload = (uint8_t*)rendered;
+        async_data->len = strlen(rendered);
+
+        if (httpd_queue_work(server_handle, ws_send_async_task, async_data) != ESP_OK) {
+            free(rendered);
+            free(async_data);
+            ESP_LOGW(TAG, "Failed to queue work for device_update");
+        } else {
+            last_update_time[idx] = now;
+        }
+    }
+
+update_cache:
+    if (has_on_off) {
+        last_on_off_state[idx] = current_on_off;
+        state_known[idx] = true;
+    }
+}
+
+void ws_notify_device_update_unlocked_temp(device_custom_t *dev)
 {
     if(s_is_in_ap_only_mode == true || !dev || !server_handle) return;
 
@@ -1171,7 +1368,74 @@ update_cache:
 }
 
 
+// ws_notify_discovery_result.c
 
+// web_server.c
+
+void ws_notify_discovery_result(uint16_t short_addr, uint8_t endpoint, uint16_t cluster_id,
+                                const uint8_t *raw_data, uint16_t raw_len)
+{
+    if (!server_handle) return;
+
+    cJSON *obj = cJSON_CreateObject();
+    if (!obj) return;
+
+    cJSON_AddStringToObject(obj, "event", "discovery_result");
+    cJSON_AddNumberToObject(obj, "short_addr", short_addr);
+    cJSON_AddNumberToObject(obj, "endpoint", endpoint);
+    cJSON_AddNumberToObject(obj, "cluster_id", cluster_id);
+
+    cJSON *attrs = cJSON_AddArrayToObject(obj, "attributes");
+
+    esp_zb_zcl_cmd_info_t *info = (esp_zb_zcl_cmd_info_t *)raw_data;
+    uint8_t count = raw_data[sizeof(*info)];
+    const uint8_t *ptr = raw_data + sizeof(*info) + 1;
+
+    for (int i = 0; i < count; i++) {
+        cJSON *attr = cJSON_CreateObject();
+        uint16_t attr_id = (ptr[1] << 8) | ptr[0];
+        uint8_t attr_type = ptr[2];
+        cJSON_AddNumberToObject(attr, "id", attr_id);
+        cJSON_AddNumberToObject(attr, "type", attr_type);
+        cJSON_AddItemToArray(attrs, attr);
+        ptr += 3;
+    }
+
+    // Сериализуем в общий буфер
+    int len = cJSON_PrintPreallocated(obj, json_print_buffer, sizeof(json_print_buffer), false);
+    cJSON_Minify(json_print_buffer);
+    cJSON_Delete(obj);
+
+    if (len < 0) {
+        ESP_LOGE(TAG, "Failed to print discovery result JSON");
+        return;
+    }
+
+    // Создаём копию строки
+    char *rendered_copy = strndup(json_print_buffer, sizeof(json_print_buffer) - 1);
+    if (!rendered_copy) {
+        ESP_LOGE(TAG, "Failed to allocate memory for discovery result JSON copy");
+        return;
+    }
+
+    // Подготавливаем асинхронную структуру
+    ws_async_data_t *async_data = malloc(sizeof(ws_async_data_t));
+    if (!async_data) {
+        free(rendered_copy);
+        return;
+    }
+
+    async_data->hd = server_handle;
+    async_data->payload = (uint8_t*)rendered_copy;
+    async_data->len = strlen(rendered_copy);
+
+    // Отправляем в очередь
+    if (httpd_queue_work(server_handle, ws_send_async_task, async_data) != ESP_OK) {
+        free(rendered_copy);
+        free(async_data);
+        ESP_LOGW(TAG, "Failed to queue work for ws_notify_discovery_result");
+    }
+}
 
 
 /**
@@ -1376,31 +1640,7 @@ esp_err_t memory_api_handler(httpd_req_t *req)
 }
 
 
-esp_err_t memory_api_handler_old(httpd_req_t *req)
-{
-    httpd_resp_set_type(req, "application/json");
-    char response[128];
-    int free = esp_get_free_heap_size();
-    int min = esp_get_minimum_free_heap_size();
 
-    int len = snprintf(response, sizeof(response),
-        "{\"free\":%d,\"min\":%d,\"timestamp\":%lld}",
-        free, min, esp_timer_get_time() / 1000);
-
-    httpd_resp_send(req, response, len);
-    return ESP_OK;
-
-    /*size_t total = heap_caps_get_free_size(MALLOC_CAP_8BIT);
-    size_t largest = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
-    size_t min = heap_caps_get_minimum_free_size(MALLOC_CAP_8BIT);
-
-    httpd_resp_set_type(req, "application/json");
-    char response[256];
-    int len = snprintf(response, sizeof(response),"{\"free\":%d,\"min\":%d\"largest\":%d,\"frag_pct\":%lu,\"timestamp\":%lld}",
-        (int)total, (int)min, largest,(uint32_t)(100 - (largest * 100.0 / total)), esp_timer_get_time() / 1000);
-    httpd_resp_send(req, response, len);
-    return ESP_OK;*/
-}
 
 //=== Получение устройств для Биндинга и Анбиндинга ===
 //LocalIeeeAdr
@@ -2257,7 +2497,7 @@ void start_webserver(void)
     //load_index_html();
 
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
-    config.stack_size = 12288; //16384
+    config.stack_size = 16384; //16384
     config.core_id = 0;
     config.send_wait_timeout = 5;
     config.recv_wait_timeout = 5;
@@ -2265,7 +2505,7 @@ void start_webserver(void)
     config.lru_purge_enable = true;
     config.uri_match_fn = httpd_uri_match_wildcard;  // ✅ ВАЖНО! чтобы пути через * работали
     config.max_uri_handlers = 40;
-    config.max_open_sockets = 5;
+    config.max_open_sockets = 7;
     if (httpd_start(&server_handle, &config) == ESP_OK) {
         // Регистрируем КАПТИВНЫЕ порталы ВСЕГДА
         httpd_register_uri_handler(server_handle, &uri_save_wifi);

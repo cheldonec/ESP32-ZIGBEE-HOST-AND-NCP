@@ -2,6 +2,7 @@
 
 #define ZBM_CLUSTERS_H
 #include "stdint.h"
+#include "esp_err.h"
 
 typedef struct attribute_custom_s{
     uint16_t                    id;
@@ -12,6 +13,7 @@ typedef struct attribute_custom_s{
     uint8_t                     is_void_pointer; /*!if (attr_type < 0x41U && attr_type > 0x51U) is_void_pointer = 0 // 0x41U - 0x51U размер в себе имеют и поэтому они будут через указатель*/
     uint16_t                    manuf_code;
     uint16_t                    parent_cluster_id;
+    uint64_t last_update_ms;
     void*                       p_value;
 }attribute_custom_t;
 
@@ -26,5 +28,14 @@ typedef struct cluster_custom_s{
     attribute_custom_t**        attr_array;
     // Надо добавить специфичные команды
 }cluster_custom_t;
+
+esp_err_t zbm_cluster_add_custom_attribute(cluster_custom_t *cluster,uint16_t attr_id, uint8_t attr_type);
+
+esp_err_t zbm_cluster_remove_custom_attribute(cluster_custom_t *cluster, uint16_t attr_id);
+void zbm_cluster_free_all_attributes(cluster_custom_t *cluster);
+
+void zbm_update_custom_attribute_value(attribute_custom_t *attr, const uint8_t *new_value, uint16_t value_len);
+
+attribute_custom_t* zbm_cluster_find_custom_attribute(cluster_custom_t *cluster, uint16_t attr_id);
 
 #endif // ZBM_CLUSTERS_H

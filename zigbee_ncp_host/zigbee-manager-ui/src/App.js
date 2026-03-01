@@ -451,75 +451,88 @@ function App() {
     };
 
     websocket.onmessage = (event) => {
-      const data = JSON.parse(event.data);
-
-      // 1. Полная замена всех устройств (на всякий случай)
-      if (data.devices) {
-        const converted = data.devices.map(convertToDeviceCardFormat).filter(Boolean);
-        setDevices(converted);
+      if (typeof event.data !== 'string') {
+        console.warn('Игнорируем бинарные данные', event.data);
+        return;
       }
 
-      // 2. Частичное обновление одного устройства
-      else if (data.event === 'device_update') {
-        const converted = convertToDeviceCardFormat(data);
-        if (!converted) return;
-
-        setDevices((prev) => {
-          const exists = prev.some((d) => d.short === converted.short);
-          if (exists) {
-            return prev.map((d) => (d.short === converted.short ? { ...d, ...converted } : d));
-          } else {
-            return [...prev, converted];
-          }
-        });
+      if (!event.data.startsWith('{') && !event.data.startsWith('[')) {
+        console.warn('Игнорируем не-JSON сообщение:', event.data);
+        return;
       }
+      try{
+        const data = JSON.parse(event.data);
 
-      // 3. Обновление онлайн-статуса
-      else if (data.event === 'state_update') {
-        setDevices((prev) =>
-          prev.map((d) =>
-            d.short === data.short ? { ...d, online: data.online } : d
-          )
-        );
-      }
+        // 1. Полная замена всех устройств (на всякий случай)
+        if (data.devices) {
+          const converted = data.devices.map(convertToDeviceCardFormat).filter(Boolean);
+          setDevices(converted);
+        }
 
-      // 4. Обновление имени
-      else if (data.event === 'friendly_name_updated') {
-        setDevices((prev) =>
-          prev.map((d) => (d.short === data.short ? { ...d, name: data.name } : d))
-        );
-      }
+        // 2. Частичное обновление одного устройства
+        else if (data.event === 'device_update') {
+          const converted = convertToDeviceCardFormat(data);
+          if (!converted) return;
 
-      // 5. Обновление имени endpoint
-      else if (data.event === 'endpoint_name_updated') {
-        setDevices((prev) =>
-          prev.map((d) =>
-            d.short === data.short
-              ? {
-                  ...d,
-                  clusters: d.clusters.map((c) =>
-                    c.endpoint_id === data.endpoint_id
-                      ? { ...c, endpoint_name: data.name }
-                      : c
-                  ),
-                }
-              : d
-          )
-        );
-      }
+          setDevices((prev) => {
+            const exists = prev.some((d) => d.short === converted.short);
+            if (exists) {
+              return prev.map((d) => (d.short === converted.short ? { ...d, ...converted } : d));
+            } else {
+              return [...prev, converted];
+            }
+          });
+        }
 
-      // 6. Статус сети Zigbee/WiFi
-      else if (data.event === 'network_status') {
-        setWifiSSID(data.wifi_ssid || '—');
-        setIsNetworkOpen(data.zigbee_open || false);
-      }
+        // 3. Обновление онлайн-статуса
+        else if (data.event === 'state_update') {
+          setDevices((prev) =>
+            prev.map((d) =>
+              d.short === data.short ? { ...d, online: data.online } : d
+            )
+          );
+        }
 
-      // 7. Обновление правил
-      else if (data.event === 'rules_updated') {
-        fetch('/api/rules/load')
-          .then((r) => r.json())
-          .then((newRules) => Array.isArray(newRules) && setRules(newRules))
-          .catch((err) => console.error('Ошибка при обновлении правил:', err));
+        // 4. Обновление имени
+        else if (data.event === 'friendly_name_updated') {
+          setDevices((prev) =>
+            prev.map((d) => (d.short === data.short ? { ...d, name: data.name } : d))
+          );
+        }
+
+        // 5. Обновление имени endpoint
+        else if (data.event === 'endpoint_name_updated') {
+          setDevices((prev) =>
+            prev.map((d) =>
+              d.short === data.short
+                ? {
+                    ...d,
+                    clusters: d.clusters.map((c) =>
+                      c.endpoint_id === data.endpoint_id
+                        ? { ...c, endpoint_name: data.name }
+                        : c
+                    ),
+                  }
+                : d
+            )
+          );
+        }
+
+        // 6. Статус сети Zigbee/WiFi
+        else if (data.event === 'network_status') {
+          setWifiSSID(data.wifi_ssid || '—');
+          setIsNetworkOpen(data.zigbee_open || false);
+        }
+
+        // 7. Обновление правил
+        else if (data.event === 'rules_updated') {
+          fetch('/api/rules/load')
+            .then((r) => r.json())
+            .then((newRules) => Array.isArray(newRules) && setRules(newRules))
+            .catch((err) => console.error('Ошибка при обновлении правил:', err));
+        }
+      } catch (err) {
+        console.error('Не удалось распарсить JSON:', event.data);
       }
     };
 

@@ -18,12 +18,26 @@ export const ClusterItem = ({
   onWriteAttribute,
 }) => {
   const handleDiscover = () => {
-    onDiscover();
-  };
+    const short_addr = Number(discoveryForm.short_addr);
+    const cluster = Number(discoveryForm.cluster);
 
-  const handleChange = (updates) => {
-    setDiscoveryForm((prev) => ({ ...prev, ...updates }));
-  };
+    if (isNaN(short_addr) || short_addr <= 0) {
+      alert('Некорректный адрес устройства');
+      return;
+    }
+
+    if (isNaN(cluster) || cluster < 0) {
+      alert('Некорректный ID кластера');
+      return;
+    }
+
+    console.log('Отправляем:', { short_addr, cluster });
+      onDiscover(discoveryForm);
+    };
+
+    const handleChange = (updates) => {
+      setDiscoveryForm((prev) => ({ ...prev, ...updates }));
+    };
 
   return (
     <div style={{ marginBottom: '10px' }}>

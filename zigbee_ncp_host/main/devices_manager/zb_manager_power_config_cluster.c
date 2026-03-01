@@ -6,112 +6,192 @@
 #include "string.h"
 #include "stdio.h"
 #include "esp_log.h"
+#include "esp_zigbee_type.h"
+#include "esp_zigbee_zcl_command.h"
+
+static const char *TAG = "ZB_PWR_CFG_CL";
 
 /// @brief [zb_manager_power_config_cluster.c] Обновляет значение атрибута в Power Config-кластере Zigbee
 /// @param cluster Указатель на структуру кластера
 /// @param attr_id Идентификатор атрибута (например, 0x0020 — Battery Voltage)
 /// @param value Указатель на значение атрибута
 /// @return ESP_OK при успехе, иначе ошибка
-esp_err_t zb_manager_power_config_cluster_update_attribute(zb_manager_power_config_cluster_t* cluster, uint16_t attr_id, void* value)
+esp_err_t zb_manager_power_config_cluster_update_attribute(zb_manager_power_config_cluster_t* cluster,uint16_t attr_id,uint8_t attr_type,void* value,uint16_t value_len)
 {
     uint8_t *data = NULL;
     uint8_t len = 0;
+
     if (value == NULL) {
+        ESP_LOGW(TAG, "attr_id=0x%04x: value is NULL", attr_id);
         return ESP_ERR_INVALID_ARG;
     }
-    
-    cluster->last_update_ms = esp_log_timestamp(); //
+
+    ESP_LOGD(TAG, "Updating PowerConfig attr 0x%04x", attr_id);
+    cluster->last_update_ms = esp_log_timestamp();
 
     switch (attr_id)
     {
-    case 0x0000: // ESP_ZB_ZCL_ATTR_POWER_CONFIG_MAINS_VOLTAGE_ID
-        cluster->mains_voltage = *(uint16_t*)value;
-        cluster->last_update_ms = esp_log_timestamp();
-        break;
-    case 0x0001: // ESP_ZB_ZCL_ATTR_POWER_CONFIG_MAINS_FREQUENCY_ID
-        cluster->mains_frequency = *(uint8_t*)value;
-        cluster->last_update_ms = esp_log_timestamp();
-        break;
+        // === Mains Power ===
+        case ESP_ZB_ZCL_ATTR_POWER_CONFIG_MAINS_VOLTAGE_ID:
+            cluster->mains_voltage = *(uint16_t*)value;
+            break;
+        case ESP_ZB_ZCL_ATTR_POWER_CONFIG_MAINS_FREQUENCY_ID:
+            cluster->mains_frequency = *(uint8_t*)value;
+            break;
 
-    case 0x0010:
-        cluster->mains_alarm_mask = *(uint8_t*)value;
-        break;
-    case 0x0011:
-        cluster->mains_voltage_min_th = *(uint16_t*)value;
-        break;
-    case 0x0012:
-        cluster->mains_voltage_max_th = *(uint16_t*)value;
-        break;
-    case 0x0013:
-        cluster->mains_dwell_trip_point = *(uint16_t*)value;
-        break;
+        case ESP_ZB_ZCL_ATTR_POWER_CONFIG_MAINS_ALARM_MASK_ID:
+            cluster->mains_alarm_mask = *(uint8_t*)value;
+            break;
+        case ESP_ZB_ZCL_ATTR_POWER_CONFIG_MAINS_VOLTAGE_MIN_THRESHOLD:
+            cluster->mains_voltage_min_th = *(uint16_t*)value;
+            break;
+        case ESP_ZB_ZCL_ATTR_POWER_CONFIG_MAINS_VOLTAGE_MAX_THRESHOLD:
+            cluster->mains_voltage_max_th = *(uint16_t*)value;
+            break;
+        case ESP_ZB_ZCL_ATTR_POWER_CONFIG_MAINS_DWELL_TRIP_POINT:
+            cluster->mains_dwell_trip_point = *(uint16_t*)value;
+            break;
 
-    case 0x0020: // BatteryVoltage
-        cluster->battery_voltage = *(uint8_t*)value;
-        
-        break;
-    case 0x0021: // BatteryPercentageRemaining
-        cluster->battery_percentage = *(uint8_t*)value;
-        
-        break;
+        // === Battery 1 ===
+        case ESP_ZB_ZCL_ATTR_POWER_CONFIG_BATTERY_VOLTAGE_ID:
+            cluster->battery_voltage = *(uint8_t*)value;
+            break;
 
-    case 0x0030: // BatteryManufacturer
-        memset(cluster->battery_manufacturer, 0, sizeof(cluster->battery_manufacturer));
-        data = (uint8_t*)value;
-        len = data[0];
-        if (len > 0 && len < sizeof(cluster->battery_manufacturer)) {
-            memcpy(cluster->battery_manufacturer, data + 1, len);
-            cluster->battery_manufacturer[len] = '\0';
+        case ESP_ZB_ZCL_ATTR_POWER_CONFIG_BATTERY_PERCENTAGE_REMAINING_ID:
+            cluster->battery_percentage = *(uint8_t*)value;
+            break;
+
+        case ESP_ZB_ZCL_ATTR_POWER_CONFIG_BATTERY_MANUFACTURER_ID:
+            memset(cluster->battery_manufacturer, 0, sizeof(cluster->battery_manufacturer));
+            data = (uint8_t*)value;
+            len = data[0];
+            if (len > 0 && len < sizeof(cluster->battery_manufacturer)) {
+                memcpy(cluster->battery_manufacturer, data + 1, len);
+                cluster->battery_manufacturer[len] = '\0';
+            } else {
+                ESP_LOGW(TAG, "Invalid battery manufacturer string length: %u", len);
+            }
+            break;
+
+        case ESP_ZB_ZCL_ATTR_POWER_CONFIG_BATTERY_SIZE_ID:
+            cluster->battery_size = *(uint8_t*)value;
+            break;
+
+        case ESP_ZB_ZCL_ATTR_POWER_CONFIG_BATTERY_A_HR_RATING_ID:
+            cluster->battery_a_hr_rating = *(uint16_t*)value;
+            break;
+
+        case ESP_ZB_ZCL_ATTR_POWER_CONFIG_BATTERY_QUANTITY_ID:
+            cluster->battery_quantity = *(uint8_t*)value;
+            break;
+
+        case ESP_ZB_ZCL_ATTR_POWER_CONFIG_BATTERY_RATED_VOLTAGE_ID:
+            cluster->battery_rated_voltage = *(uint8_t*)value;
+            break;
+
+        case ESP_ZB_ZCL_ATTR_POWER_CONFIG_BATTERY_ALARM_MASK_ID:
+            cluster->battery_alarm_mask = *(uint8_t*)value;
+            break;
+
+        case ESP_ZB_ZCL_ATTR_POWER_CONFIG_BATTERY_VOLTAGE_MIN_THRESHOLD_ID:
+            cluster->battery_voltage_min_th = *(uint8_t*)value;
+            break;
+
+        case ESP_ZB_ZCL_ATTR_POWER_CONFIG_BATTERY_VOLTAGE_THRESHOLD1_ID:
+            cluster->battery_voltage_th1 = *(uint8_t*)value;
+            break;
+
+        case ESP_ZB_ZCL_ATTR_POWER_CONFIG_BATTERY_VOLTAGE_THRESHOLD2_ID:
+            cluster->battery_voltage_th2 = *(uint8_t*)value;
+            break;
+
+        case ESP_ZB_ZCL_ATTR_POWER_CONFIG_BATTERY_VOLTAGE_THRESHOLD3_ID:
+            cluster->battery_voltage_th3 = *(uint8_t*)value;
+            break;
+
+        case ESP_ZB_ZCL_ATTR_POWER_CONFIG_BATTERY_PERCENTAGE_MIN_THRESHOLD_ID:
+            cluster->battery_percentage_min_th = *(uint8_t*)value;
+            break;
+
+        case ESP_ZB_ZCL_ATTR_POWER_CONFIG_BATTERY_PERCENTAGE_THRESHOLD1_ID:
+            cluster->battery_percentage_th1 = *(uint8_t*)value;
+            break;
+
+        case ESP_ZB_ZCL_ATTR_POWER_CONFIG_BATTERY_PERCENTAGE_THRESHOLD2_ID:
+            cluster->battery_percentage_th2 = *(uint8_t*)value;
+            break;
+
+        case ESP_ZB_ZCL_ATTR_POWER_CONFIG_BATTERY_PERCENTAGE_THRESHOLD3_ID:
+            cluster->battery_percentage_th3 = *(uint8_t*)value;
+            break;
+
+        case ESP_ZB_ZCL_ATTR_POWER_CONFIG_BATTERY_ALARM_STATE_ID:
+            cluster->battery_alarm_state = *(uint32_t*)value;
+            break;
+
+        // === Battery 2 & 3 (опционально, можно расширить позже) ===
+        // Пока не реализуем — но можно добавить аналогично
+
+        default: {
+            // === Обработка кастомного атрибута ===
+            attribute_custom_t *custom_attr = zb_manager_power_config_cluster_find_custom_attr_obj(cluster, attr_id);
+            if (custom_attr) {
+                // Для строковых типов: значение включает длину → используем её
+                uint16_t expected_len = custom_attr->size;
+                if (custom_attr->is_void_pointer) {
+                    if (value_len < 1 || data[0] == 0xFF) {
+                        ESP_LOGW(TAG, "Invalid string length: %u", data[0]);
+                        return ESP_ERR_INVALID_ARG;
+                    }
+                    expected_len = data[0] + 1;
+                }
+
+                // Перевыделяем память при необходимости
+                if (custom_attr->p_value == NULL || custom_attr->size != expected_len) {
+                    if (custom_attr->p_value) free(custom_attr->p_value);
+                    custom_attr->p_value = malloc(expected_len);
+                    if (!custom_attr->p_value) {
+                        ESP_LOGE(TAG, "Failed to allocate p_value for attr 0x%04x", attr_id);
+                        return ESP_ERR_NO_MEM;
+                    }
+                    custom_attr->size = expected_len;
+                }
+
+                memcpy(custom_attr->p_value, value, expected_len);
+                //custom_attr->last_update_ms = esp_log_timestamp();
+
+                ESP_LOGI(TAG, ".updated attr 0x%04x in PowerConfig Cluster (type=0x%02x, len=%u)",
+                         attr_id, attr_type, expected_len);
+                return ESP_OK;
+            } else {
+                // === Автосоздание атрибута при REPORT ===
+                ESP_LOGI(TAG, "Auto-create PowerConfig attr 0x%04x (type=0x%02x, len=%u)", attr_id, attr_type, value_len);
+
+                esp_err_t err = zb_manager_power_config_cluster_add_custom_attribute(cluster, attr_id, attr_type);
+                if (err != ESP_OK) return err;
+
+                custom_attr = zb_manager_power_config_cluster_find_custom_attr_obj(cluster, attr_id);
+                if (custom_attr) {
+                    uint16_t alloc_len = custom_attr->size;
+                    if (custom_attr->is_void_pointer) {
+                        if (value_len < 1 || data[0] == 0xFF) return ESP_ERR_INVALID_ARG;
+                        alloc_len = data[0] + 1;
+                    }
+
+                    custom_attr->p_value = malloc(alloc_len);
+                    if (!custom_attr->p_value) return ESP_ERR_NO_MEM;
+                    memcpy(custom_attr->p_value, value, alloc_len);
+                    custom_attr->size = alloc_len;
+                    //custom_attr->last_update_ms = esp_log_timestamp();
+
+                    ESP_LOGI(TAG, ".created+updated attr 0x%04x", attr_id);
+                    return ESP_OK;
+                }
+                return ESP_ERR_NOT_FOUND;
+            }
         }
-        break;
-
-    case 0x0031: // BatterySize
-        cluster->battery_size = *(uint8_t*)value;
-        break;
-    case 0x0032: // BatteryA-HrRating
-        cluster->battery_a_hr_rating = *(uint16_t*)value;
-        break;
-    case 0x0033: // BatteryQuantity
-        cluster->battery_quantity = *(uint8_t*)value;
-        break;
-    case 0x0034: // BatteryRatedVoltage
-        cluster->battery_rated_voltage = *(uint8_t*)value;
-        break;
-    case 0x0035: // BatteryAlarmMask
-        cluster->battery_alarm_mask = *(uint8_t*)value;
-        break;
-    case 0x0036: // BatteryVoltageMinThreshold
-        cluster->battery_voltage_min_th = *(uint8_t*)value;
-        break;
-    case 0x0037: // Threshold 1
-        cluster->battery_voltage_th1 = *(uint8_t*)value;
-        break;
-    case 0x0038:
-        cluster->battery_voltage_th2 = *(uint8_t*)value;
-        break;
-    case 0x0039:
-        cluster->battery_voltage_th3 = *(uint8_t*)value;
-        break;
-    case 0x003a:
-        cluster->battery_percentage_min_th = *(uint8_t*)value;
-        break;
-    case 0x003b:
-        cluster->battery_percentage_th1 = *(uint8_t*)value;
-        break;
-    case 0x003c:
-        cluster->battery_percentage_th2 = *(uint8_t*)value;
-        break;
-    case 0x003d:
-        cluster->battery_percentage_th3 = *(uint8_t*)value;
-        break;
-    case 0x003e: // BatteryAlarmState
-        cluster->battery_alarm_state = *(uint32_t*)value;
-        break;
-
-    default:
-        ESP_LOGW("Power_Config_Cluster_module", "PowerConfig: unknown attr 0x%04x", attr_id);
-        return ESP_ERR_NOT_SUPPORTED;
     }
+
     return ESP_OK;
 }
 
@@ -198,4 +278,150 @@ const char* get_battery_percentage_string(uint8_t percentage_units)
             snprintf(buf, sizeof(buf), "%.1f%%", perc);
             return buf;
     }
+}
+
+esp_err_t zb_manager_power_config_cluster_add_custom_attribute(
+    zb_manager_power_config_cluster_t *cluster,
+    uint16_t attr_id,
+    uint8_t attr_type)
+{
+    if (!cluster) {
+        ESP_LOGE(TAG, "Cluster is NULL");
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    // Список стандартных атрибутов Power Configuration-кластера
+    bool is_standard = false;
+    switch (attr_id) {
+        case ESP_ZB_ZCL_ATTR_POWER_CONFIG_MAINS_VOLTAGE_ID:
+        case ESP_ZB_ZCL_ATTR_POWER_CONFIG_MAINS_FREQUENCY_ID:
+        case ESP_ZB_ZCL_ATTR_POWER_CONFIG_MAINS_ALARM_MASK_ID:
+        case ESP_ZB_ZCL_ATTR_POWER_CONFIG_MAINS_VOLTAGE_MIN_THRESHOLD:
+        case ESP_ZB_ZCL_ATTR_POWER_CONFIG_MAINS_VOLTAGE_MAX_THRESHOLD:
+        case ESP_ZB_ZCL_ATTR_POWER_CONFIG_MAINS_DWELL_TRIP_POINT:
+
+        case ESP_ZB_ZCL_ATTR_POWER_CONFIG_BATTERY_VOLTAGE_ID:
+        case ESP_ZB_ZCL_ATTR_POWER_CONFIG_BATTERY_PERCENTAGE_REMAINING_ID:
+
+        case ESP_ZB_ZCL_ATTR_POWER_CONFIG_BATTERY_MANUFACTURER_ID:
+        case ESP_ZB_ZCL_ATTR_POWER_CONFIG_BATTERY_SIZE_ID:
+        case ESP_ZB_ZCL_ATTR_POWER_CONFIG_BATTERY_A_HR_RATING_ID:
+        case ESP_ZB_ZCL_ATTR_POWER_CONFIG_BATTERY_QUANTITY_ID:
+        case ESP_ZB_ZCL_ATTR_POWER_CONFIG_BATTERY_RATED_VOLTAGE_ID:
+        case ESP_ZB_ZCL_ATTR_POWER_CONFIG_BATTERY_ALARM_MASK_ID:
+        case ESP_ZB_ZCL_ATTR_POWER_CONFIG_BATTERY_VOLTAGE_MIN_THRESHOLD_ID:
+        case ESP_ZB_ZCL_ATTR_POWER_CONFIG_BATTERY_VOLTAGE_THRESHOLD1_ID:
+        case ESP_ZB_ZCL_ATTR_POWER_CONFIG_BATTERY_VOLTAGE_THRESHOLD2_ID:
+        case ESP_ZB_ZCL_ATTR_POWER_CONFIG_BATTERY_VOLTAGE_THRESHOLD3_ID:
+        case ESP_ZB_ZCL_ATTR_POWER_CONFIG_BATTERY_PERCENTAGE_MIN_THRESHOLD_ID:
+        case ESP_ZB_ZCL_ATTR_POWER_CONFIG_BATTERY_PERCENTAGE_THRESHOLD1_ID:
+        case ESP_ZB_ZCL_ATTR_POWER_CONFIG_BATTERY_PERCENTAGE_THRESHOLD2_ID:
+        case ESP_ZB_ZCL_ATTR_POWER_CONFIG_BATTERY_PERCENTAGE_THRESHOLD3_ID:
+        case ESP_ZB_ZCL_ATTR_POWER_CONFIG_BATTERY_ALARM_STATE_ID:
+
+        case ESP_ZB_ZCL_ATTR_POWER_CONFIG_BATTERY2_VOLTAGE_ID:
+        case ESP_ZB_ZCL_ATTR_POWER_CONFIG_BATTERY2_PERCENTAGE_REMAINING_ID:
+        case ESP_ZB_ZCL_ATTR_POWER_CONFIG_BATTERY2_MANUFACTURER_ID:
+        case ESP_ZB_ZCL_ATTR_POWER_CONFIG_BATTERY2_SIZE_ID:
+        case ESP_ZB_ZCL_ATTR_POWER_CONFIG_BATTERY2_A_HR_RATING_ID:
+        case ESP_ZB_ZCL_ATTR_POWER_CONFIG_BATTERY2_QUANTITY_ID:
+        case ESP_ZB_ZCL_ATTR_POWER_CONFIG_BATTERY2_RATED_VOLTAGE_ID:
+        case ESP_ZB_ZCL_ATTR_POWER_CONFIG_BATTERY2_ALARM_MASK_ID:
+        case ESP_ZB_ZCL_ATTR_POWER_CONFIG_BATTERY2_VOLTAGE_MIN_THRESHOLD_ID:
+        case ESP_ZB_ZCL_ATTR_POWER_CONFIG_BATTERY2_VOLTAGE_THRESHOLD1_ID:
+        case ESP_ZB_ZCL_ATTR_POWER_CONFIG_BATTERY2_VOLTAGE_THRESHOLD2_ID:
+        case ESP_ZB_ZCL_ATTR_POWER_CONFIG_BATTERY2_VOLTAGE_THRESHOLD3_ID:
+        case ESP_ZB_ZCL_ATTR_POWER_CONFIG_BATTERY2_PERCENTAGE_MIN_THRESHOLD_ID:
+        case ESP_ZB_ZCL_ATTR_POWER_CONFIG_BATTERY2_PERCENTAGE_THRESHOLD1_ID:
+        case ESP_ZB_ZCL_ATTR_POWER_CONFIG_BATTERY2_PERCENTAGE_THRESHOLD2_ID:
+        case ESP_ZB_ZCL_ATTR_POWER_CONFIG_BATTERY2_PERCENTAGE_THRESHOLD3_ID:
+        case ESP_ZB_ZCL_ATTR_POWER_CONFIG_BATTERY2_ALARM_STATE_ID:
+
+        case ESP_ZB_ZCL_ATTR_POWER_CONFIG_BATTERY3_VOLTAGE_ID:
+        case ESP_ZB_ZCL_ATTR_POWER_CONFIG_BATTERY3_PERCENTAGE_REMAINING_ID:
+        case ESP_ZB_ZCL_ATTR_POWER_CONFIG_BATTERY3_MANUFACTURER_ID:
+        case ESP_ZB_ZCL_ATTR_POWER_CONFIG_BATTERY3_SIZE_ID:
+        case ESP_ZB_ZCL_ATTR_POWER_CONFIG_BATTERY3_A_HR_RATING_ID:
+        case ESP_ZB_ZCL_ATTR_POWER_CONFIG_BATTERY3_QUANTITY_ID:
+        case ESP_ZB_ZCL_ATTR_POWER_CONFIG_BATTERY3_RATED_VOLTAGE_ID:
+        case ESP_ZB_ZCL_ATTR_POWER_CONFIG_BATTERY3_ALARM_MASK_ID:
+        case ESP_ZB_ZCL_ATTR_POWER_CONFIG_BATTERY3_VOLTAGE_MIN_THRESHOLD_ID:
+        case ESP_ZB_ZCL_ATTR_POWER_CONFIG_BATTERY3_VOLTAGE_THRESHOLD1_ID:
+        case ESP_ZB_ZCL_ATTR_POWER_CONFIG_BATTERY3_VOLTAGE_THRESHOLD2_ID:
+        case ESP_ZB_ZCL_ATTR_POWER_CONFIG_BATTERY3_VOLTAGE_THRESHOLD3_ID:
+        case ESP_ZB_ZCL_ATTR_POWER_CONFIG_BATTERY3_PERCENTAGE_MIN_THRESHOLD_ID:
+        case ESP_ZB_ZCL_ATTR_POWER_CONFIG_BATTERY3_PERCENTAGE_THRESHOLD1_ID:
+        case ESP_ZB_ZCL_ATTR_POWER_CONFIG_BATTERY3_PERCENTAGE_THRESHOLD2_ID:
+        case ESP_ZB_ZCL_ATTR_POWER_CONFIG_BATTERY3_PERCENTAGE_THRESHOLD3_ID:
+        case ESP_ZB_ZCL_ATTR_POWER_CONFIG_BATTERY3_ALARM_STATE_ID:
+            is_standard = true;
+            break;
+        default:
+            is_standard = false;
+            break;
+    }
+
+    if (is_standard) {
+        ESP_LOGD(TAG, "Attr 0x%04x is standard — skipping", attr_id);
+        return ESP_ERR_NOT_SUPPORTED; // или ESP_OK, по желанию
+    }
+
+    // Проверка: уже есть такой атрибут?
+    for (int i = 0; i < cluster->nostandart_attr_count; i++) {
+        if (cluster->nostandart_attr_array[i] && cluster->nostandart_attr_array[i]->id == attr_id) {
+            ESP_LOGD(TAG, "Attr 0x%04x already exists", attr_id);
+            return ESP_OK;
+        }
+    }
+
+    // Создаём новый атрибут
+    attribute_custom_t *new_attr = calloc(1, sizeof(attribute_custom_t));
+    if (!new_attr) {
+        ESP_LOGE(TAG, "Failed to allocate memory for attribute 0x%04x", attr_id);
+        return ESP_ERR_NO_MEM;
+    }
+
+    new_attr->id = attr_id;
+    new_attr->type = attr_type;
+    new_attr->parent_cluster_id = 0x0001; // Power Configuration Cluster ID
+    new_attr->size = zb_manager_get_zcl_attr_size(attr_type);
+    new_attr->is_void_pointer = (attr_type >= 0x41 && attr_type <= 0x51); // строки, массивы и т.п.
+    new_attr->acces = 0; // может быть обновлён позже
+    new_attr->manuf_code = 0; // можно установить отдельно при необходимости
+    new_attr->p_value = NULL; // значение не выделяем здесь
+
+    // Формируем текстовое имя атрибута
+    snprintf(new_attr->attr_id_text, sizeof(new_attr->attr_id_text), "Custom_0x%04X", attr_id);
+
+    // Реаллокируем массив атрибутов
+    void *new_array = realloc(cluster->nostandart_attr_array,
+                              (cluster->nostandart_attr_count + 1) * sizeof(attribute_custom_t*));
+    if (!new_array) {
+        free(new_attr);
+        ESP_LOGE(TAG, "Failed to realloc nostandart_attr_array");
+        return ESP_ERR_NO_MEM;
+    }
+
+    cluster->nostandart_attr_array = (attribute_custom_t**)new_array;
+    cluster->nostandart_attr_array[cluster->nostandart_attr_count] = new_attr;
+    cluster->nostandart_attr_count++;
+
+    ESP_LOGI(TAG, "Added custom attribute: 0x%04x (type: 0x%02x)", attr_id, attr_type);
+    return ESP_OK;
+}
+
+attribute_custom_t *zb_manager_power_config_cluster_find_custom_attr_obj(zb_manager_power_config_cluster_t *cluster, uint16_t attr_id)
+{
+    if (!cluster) {
+        return NULL;
+    }
+
+    for (int i = 0; i < cluster->nostandart_attr_count; i++) {
+        attribute_custom_t *attr = cluster->nostandart_attr_array[i];
+        if (attr && attr->id == attr_id) {
+            return attr;
+        }
+    }
+
+    return NULL; // not found
 }

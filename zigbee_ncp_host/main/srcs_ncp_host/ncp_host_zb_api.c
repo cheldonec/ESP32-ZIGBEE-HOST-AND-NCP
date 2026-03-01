@@ -978,6 +978,41 @@ static esp_err_t zb_manager_custom_cluster_rep_event_fn(const uint8_t *input, ui
 
 static esp_err_t zb_manager_disc_attr_resp_fn(const uint8_t *input, uint16_t inlen)
 {
+    ESP_LOGI(TAG, "Received ZB_MANAGER_DISCOVERY_ATTR_RESP, len=%u", inlen);
+
+    if (inlen < sizeof(esp_zb_zcl_cmd_info_t) + 1) {
+        ESP_LOGE(TAG, "Invalid length for discover attr response");
+        return ESP_ERR_INVALID_SIZE;
+    }
+
+    // Копируем RAW-данные, чтобы передать в worker
+    uint8_t *raw_copy = malloc(inlen);
+    if (!raw_copy) {
+        ESP_LOGE(TAG, "Failed to allocate raw_copy");
+        return ESP_ERR_NO_MEM;
+    }
+    memcpy(raw_copy, input, inlen);
+
+    // Проверим: устройство уже известно? Если да — шлём в action_worker, иначе в pairing?
+    esp_zb_zcl_cmd_info_t *info = (esp_zb_zcl_cmd_info_t *)raw_copy;
+    device_custom_t *dev_info = zbm_dev_base_find_device_by_short_safe(info->src_address.u.short_addr);
+
+    bool post_ok = false;
+    if (dev_info) {
+        ESP_LOGI(TAG, "Forwarding discovery response to action_worker (short=0x%04x)", info->src_address.u.short_addr);
+        post_ok = zb_manager_post_to_action_worker(ZB_ACTION_DISCOVER_ATTR_RESP, raw_copy, inlen);
+    } else {
+        ESP_LOGI(TAG, "Device not found → forwarding to pairing_worker");
+        post_ok = zb_manager_post_to_pairing_worker(ZB_ACTION_DISCOVER_ATTR_RESP, raw_copy, inlen);
+    }
+
+    if (!post_ok) {
+        ESP_LOGE(TAG, "Failed to post discovery response to worker");
+        free(raw_copy);
+        return ESP_FAIL;
+    }
+
+    ESP_LOGI(TAG, "ZB_ACTION_DISCOVER_ATTR_RESP posted successfully");
     return ESP_OK;
 }
 

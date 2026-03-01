@@ -2,7 +2,7 @@
 import React, { useState } from 'react';
 import { ClusterItem } from './DeviceExplorerClusterItem';
 import { getStandardAttrsForCluster } from '../utils/zclAttributes';
-import { getClusterName } from '../utils/clusterNames'; // ✅ Импорт функции
+import { getClusterName } from '../utils/clusterNames';
 
 export const EndpointItem = ({
   ep,
@@ -16,7 +16,7 @@ export const EndpointItem = ({
 }) => {
   const [expanded, setExpanded] = useState(false);
 
-  // Известные кластеры (поддерживаемые на уровне UI)
+  // Известные кластеры
   const knownClusters = [];
   if (ep.device_basic_cluster) {
     knownClusters.push({ id: 0, name: 'Basic', data: ep.device_basic_cluster });
@@ -34,7 +34,7 @@ export const EndpointItem = ({
     knownClusters.push({ id: 6, name: 'On/Off', data: ep.onoff });
   }
 
-  // Неизвестные input-кластеры — из ep.unknown_input_clusters (не epObj!)
+  // Неизвестные input-кластеры
   const unknownInputClusters = ep.unknown_input_clusters || [];
 
   return (
@@ -75,11 +75,11 @@ export const EndpointItem = ({
               standardAttrs={getStandardAttrsForCluster(cl.id, cl.data)}
               customAttrs={
                 (() => {
-                  if (cl.id === 0) return epObj?.server_BasicClusterObj?.nostandart_attr_array || [];
-                  if (cl.id === 1) return epObj?.server_PowerConfigurationClusterObj?.nostandart_attr_array || [];
-                  if (cl.id === 1026) return epObj?.server_TemperatureMeasurementClusterObj?.nostandart_attr_array || [];
-                  if (cl.id === 1029) return epObj?.server_HumidityMeasurementClusterObj?.nostandart_attr_array || [];
-                  if (cl.id === 6) return epObj?.server_OnOffClusterObj?.nostandart_attr_array || [];
+                  if (cl.id === 0) return ep?.device_basic_cluster?.nostandart_attributes || [];
+                  if (cl.id === 1) return ep?.device_power_config_cluster?.nostandart_attributes || [];
+                  if (cl.id === 1026) return ep?.temperature?.nostandart_attributes || [];
+                  if (cl.id === 1029) return ep?.humidity?.nostandart_attributes || [];
+                  if (cl.id === 6) return ep?.onoff?.nostandart_attributes || [];
                   return [];
                 })()
               }
@@ -114,7 +114,7 @@ export const EndpointItem = ({
                   title={`${clusterName} (0x${clusterId.toString(16).padStart(4, '0')})`}
                   clusterId={clusterId}
                   standardAttrs={[]}
-                  customAttrs={[]}
+                  customAttrs={cl.attributes || []}  // ← Здесь теперь передаются атрибуты
                   deviceShort={deviceShort}
                   endpointId={ep.ep_id}
                   discoveryForm={{
@@ -131,34 +131,33 @@ export const EndpointItem = ({
               );
             })}
 
-          {/* === OUTPUT-КЛАСТЕРЫ (ТОЛЬКО ДЛЯ ОТОБРАЖЕНИЯ) === */}
-          {/* === OUTPUT-КЛАСТЕРЫ (ТОЛЬКО ДЛЯ ОТОБРАЖЕНИЯ) === */}
-            {Array.isArray(ep?.output_clusters) && ep.output_clusters.length > 0 && (
+          {/* === OUTPUT-КЛАСТЕРЫ === */}
+          {Array.isArray(ep?.output_clusters) && ep.output_clusters.length > 0 && (
             <div style={{ marginLeft: '10px', marginTop: '6px', fontSize: '13px', color: '#888' }}>
-                <strong>📤 Output Clusters:</strong>
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginTop: '4px' }}>
+              <strong>📤 Output Clusters:</strong>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginTop: '4px' }}>
                 {ep.output_clusters.map((id) => {
-                    const hexId = typeof id === 'number' ? id.toString(16).padStart(4, '0') : id;
-                    const name = getClusterName(id);
-                    return (
+                  const hexId = typeof id === 'number' ? id.toString(16).padStart(4, '0') : id;
+                  const name = getClusterName(id);
+                  return (
                     <span
-                        key={`out-${id}`}
-                        title={name}
-                        style={{
+                      key={`out-${id}`}
+                      title={name}
+                      style={{
                         background: '#555',
                         padding: '2px 6px',
                         borderRadius: '4px',
                         fontSize: '12px',
                         cursor: 'help',
-                        }}
+                      }}
                     >
-                        0x{hexId} ({name})
+                      0x{hexId} ({name})
                     </span>
-                    );
+                  );
                 })}
-                </div>
+              </div>
             </div>
-            )}
+          )}
         </div>
       )}
     </div>

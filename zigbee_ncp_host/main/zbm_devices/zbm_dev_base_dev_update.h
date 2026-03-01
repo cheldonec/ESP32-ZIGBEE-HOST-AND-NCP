@@ -9,5 +9,7 @@ esp_err_t zbm_dev_base_dev_update_from_read_response(device_custom_t* dev, endpo
 
 esp_err_t zbm_dev_base_dev_update_from_report(device_custom_t* dev, endpoint_custom_t* ep, zb_manager_cmd_report_attr_resp_message_t* rep);
 
+
+
 #endif
 

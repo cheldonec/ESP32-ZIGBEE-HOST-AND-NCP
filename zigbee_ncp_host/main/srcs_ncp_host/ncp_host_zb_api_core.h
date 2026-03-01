@@ -119,6 +119,8 @@ typedef enum {
     ZB_ACTION_DELAYED_NODE_DESC_REQ,
     ZB_ACTION_DELAYED_BIND_REQ,                  // only dev bind coordinator
     ZB_ACTION_DELAYED_BIND_DEV_DEV_REQ,          // dev bind dev and can coordinator
+    ZB_ACTION_DELAYED_DISCOVER_ATTR_REQ,
+    ZB_ACTION_DISCOVER_ATTR_RESP,
     ZB_ACTION_BIND_RESP,
     ZB_ACTION_UNBIND_RESP,
     ZB_ACTION_DELAYED_CONFIG_REPORT_REQ,

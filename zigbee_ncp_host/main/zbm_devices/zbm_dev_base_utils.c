@@ -286,3 +286,10 @@ int ieee_addr_compare(esp_zb_ieee_addr_t *a, esp_zb_ieee_addr_t *b)
     return memcmp((const uint8_t *)a, (const uint8_t *)b, sizeof(esp_zb_ieee_addr_t));
 }
 //********************************************************************************************************************************
+
+uint64_t hexstr_to_uint64(const char* hex_str)
+{
+    uint64_t val = 0;
+    sscanf(hex_str, "0x%llx", (unsigned long long*)&val);
+    return val;
+}

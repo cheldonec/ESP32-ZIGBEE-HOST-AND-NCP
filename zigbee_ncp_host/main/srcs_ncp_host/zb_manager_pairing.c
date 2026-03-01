@@ -417,9 +417,10 @@ static void zb_pairing_worker_task(void *pvParameters)
                             ESP_LOGI(TAG, "Basic Cluster added to device");
 
                             for (int i = 0; i < read_resp->attr_count; i++) {
+                                void *value = read_resp->attr_arr[i].attr_value;
                                 zb_manager_basic_cluster_update_attribute(device->server_BasicClusterObj,
-                                                                read_resp->attr_arr[i].attr_id,
-                                                                read_resp->attr_arr[i].attr_value);
+                                                                read_resp->attr_arr[i].attr_id, read_resp->attr_arr[i].attr_type,
+                                                                value, read_resp->attr_arr[i].attr_len);
                                 ESP_LOGI(TAG, "Basic Cluster attribute 0x%04x updated", read_resp->attr_arr[i].attr_id);
                             }
 

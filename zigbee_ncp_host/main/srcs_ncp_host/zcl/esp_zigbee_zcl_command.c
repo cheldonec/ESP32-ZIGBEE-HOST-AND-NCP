@@ -409,59 +409,94 @@ uint16_t zb_manager_get_attr_data_size(esp_zb_zcl_attr_type_t attr_type, void* a
 uint16_t zb_manager_get_zcl_attr_size(esp_zb_zcl_attr_type_t attr_type)
 {
     switch (attr_type) {
-        case ESP_ZB_ZCL_ATTR_TYPE_BOOL:
+        // === Fixed-size scalar types ===
+        case ESP_ZB_ZCL_ATTR_TYPE_NULL:
+            return 0;
+
+        // 8-bit types
         case ESP_ZB_ZCL_ATTR_TYPE_8BIT:
+        case ESP_ZB_ZCL_ATTR_TYPE_BOOL:
+        case ESP_ZB_ZCL_ATTR_TYPE_8BITMAP:
         case ESP_ZB_ZCL_ATTR_TYPE_U8:
         case ESP_ZB_ZCL_ATTR_TYPE_S8:
-        case ESP_ZB_ZCL_ATTR_TYPE_8BITMAP:
         case ESP_ZB_ZCL_ATTR_TYPE_8BIT_ENUM:
             return 1;
+
+        // 16-bit types
         case ESP_ZB_ZCL_ATTR_TYPE_16BIT:
+        case ESP_ZB_ZCL_ATTR_TYPE_16BITMAP:
         case ESP_ZB_ZCL_ATTR_TYPE_U16:
         case ESP_ZB_ZCL_ATTR_TYPE_S16:
-        case ESP_ZB_ZCL_ATTR_TYPE_16BITMAP:
         case ESP_ZB_ZCL_ATTR_TYPE_16BIT_ENUM:
         case ESP_ZB_ZCL_ATTR_TYPE_SEMI:
         case ESP_ZB_ZCL_ATTR_TYPE_CLUSTER_ID:
         case ESP_ZB_ZCL_ATTR_TYPE_ATTRIBUTE_ID:
             return 2;
+
+        // 24-bit types
         case ESP_ZB_ZCL_ATTR_TYPE_24BIT:
         case ESP_ZB_ZCL_ATTR_TYPE_U24:
         case ESP_ZB_ZCL_ATTR_TYPE_S24:
             return 3;
+
+        // 32-bit types
         case ESP_ZB_ZCL_ATTR_TYPE_32BIT:
+        case ESP_ZB_ZCL_ATTR_TYPE_32BITMAP:
         case ESP_ZB_ZCL_ATTR_TYPE_U32:
         case ESP_ZB_ZCL_ATTR_TYPE_S32:
-        case ESP_ZB_ZCL_ATTR_TYPE_32BITMAP:
         case ESP_ZB_ZCL_ATTR_TYPE_SINGLE:
         case ESP_ZB_ZCL_ATTR_TYPE_TIME_OF_DAY:
         case ESP_ZB_ZCL_ATTR_TYPE_DATE:
         case ESP_ZB_ZCL_ATTR_TYPE_UTC_TIME:
         case ESP_ZB_ZCL_ATTR_TYPE_BACNET_OID:
             return 4;
+
+        // 40-bit types
         case ESP_ZB_ZCL_ATTR_TYPE_40BIT:
         case ESP_ZB_ZCL_ATTR_TYPE_U40:
         case ESP_ZB_ZCL_ATTR_TYPE_S40:
             return 5;
+
+        // 48-bit types
         case ESP_ZB_ZCL_ATTR_TYPE_48BIT:
         case ESP_ZB_ZCL_ATTR_TYPE_U48:
         case ESP_ZB_ZCL_ATTR_TYPE_S48:
             return 6;
+
+        // 56-bit types
         case ESP_ZB_ZCL_ATTR_TYPE_56BIT:
         case ESP_ZB_ZCL_ATTR_TYPE_U56:
         case ESP_ZB_ZCL_ATTR_TYPE_S56:
             return 7;
+
+        // 64-bit types
         case ESP_ZB_ZCL_ATTR_TYPE_64BIT:
+        case ESP_ZB_ZCL_ATTR_TYPE_64BITMAP:
         case ESP_ZB_ZCL_ATTR_TYPE_U64:
         case ESP_ZB_ZCL_ATTR_TYPE_S64:
-        case ESP_ZB_ZCL_ATTR_TYPE_64BITMAP:
         case ESP_ZB_ZCL_ATTR_TYPE_DOUBLE:
         case ESP_ZB_ZCL_ATTR_TYPE_IEEE_ADDR:
             return 8;
+
+        // 128-bit key
         case ESP_ZB_ZCL_ATTR_TYPE_128_BIT_KEY:
             return 16;
+
+        // === Variable-length types — need special handling (return 0 to indicate variable) ===
+        case ESP_ZB_ZCL_ATTR_TYPE_OCTET_STRING:
+        case ESP_ZB_ZCL_ATTR_TYPE_CHAR_STRING:
+        case ESP_ZB_ZCL_ATTR_TYPE_LONG_OCTET_STRING:
+        case ESP_ZB_ZCL_ATTR_TYPE_LONG_CHAR_STRING:
+        case ESP_ZB_ZCL_ATTR_TYPE_ARRAY:
+        case ESP_ZB_ZCL_ATTR_TYPE_16BIT_ARRAY:
+        case ESP_ZB_ZCL_ATTR_TYPE_32BIT_ARRAY:
+        case ESP_ZB_ZCL_ATTR_TYPE_STRUCTURE:
+        case ESP_ZB_ZCL_ATTR_TYPE_SET:
+        case ESP_ZB_ZCL_ATTR_TYPE_BAG:
+            return 0; // Variable size — must be handled separately
+
         default:
-            return 1; // fallback
+            return 1; // Fallback for unknown types
     }
 }
 
@@ -550,7 +585,7 @@ esp_err_t zb_manager_reporting_config_req(esp_zb_zcl_config_report_cmd_t *cmd_re
         memcpy(ptr, &rec->max_interval, 2); ptr += 2;
 
         if (rec->reportable_change && rec->min_interval > 0) {
-            uint8_t rcv_len = zb_manager_get_zcl_attr_size(rec->attrType);
+            uint16_t rcv_len = zb_manager_get_zcl_attr_size(rec->attrType);
             memcpy(ptr, rec->reportable_change, rcv_len);
             ptr += rcv_len;
         }

@@ -131,7 +131,11 @@ typedef uint16_t (*zigbee_humidity_read_cb_t)(void *user_data);
  * @param value Pointer to the new attribute value
  * @return esp_err_t ESP_OK on success
  */
-esp_err_t zb_manager_humidity_meas_cluster_update_attribute(zb_manager_humidity_measurement_cluster_t* cluster, uint16_t attr_id, void* value);
+esp_err_t zb_manager_humidity_meas_cluster_update_attribute(zb_manager_humidity_measurement_cluster_t* cluster,uint16_t attr_id,uint8_t attr_type,void* value,uint16_t value_len);
 
 const char* zb_manager_get_humidity_measurement_cluster_attr_name(uint16_t attrID);
+
+esp_err_t zb_manager_humidity_meas_cluster_add_custom_attribute(zb_manager_humidity_measurement_cluster_t *cluster, uint16_t attr_id, uint8_t attr_type);
+
+attribute_custom_t *zb_manager_humidity_meas_cluster_find_custom_attr_obj(zb_manager_humidity_measurement_cluster_t *cluster, uint16_t attr_id);
 #endif // ZB_MANAGER_HUMIDITY_MEAS_CLUSTER_H

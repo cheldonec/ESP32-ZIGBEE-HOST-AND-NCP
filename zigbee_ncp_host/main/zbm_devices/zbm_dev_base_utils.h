@@ -56,6 +56,8 @@ bool str_to_ieee(const char* str, esp_zb_ieee_addr_t addr);
 
 int ieee_addr_compare(esp_zb_ieee_addr_t *a, esp_zb_ieee_addr_t *b);
 
+uint64_t hexstr_to_uint64(const char* hex_str);
+
 #endif
 
 

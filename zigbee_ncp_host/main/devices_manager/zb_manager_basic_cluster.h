@@ -129,7 +129,7 @@ typedef struct {
     .nostandart_attr_array = NULL, \
 }
 
-esp_err_t zb_manager_basic_cluster_update_attribute(zigbee_manager_basic_cluster_t* cluster, uint16_t attr_id, void* value);
+esp_err_t zb_manager_basic_cluster_update_attribute(zigbee_manager_basic_cluster_t* cluster,uint16_t attr_id,uint8_t attr_type,void* value,uint16_t value_len);
 /* Пример
 zigbee_manager_basic_cluster_t basic_info = ZIGBEE_BASIC_CLUSTER_DEFAULT_INIT();
 snprintf(basic_info.manufacturer_name, sizeof(basic_info.manufacturer_name), "MyCompany");
@@ -157,4 +157,8 @@ typedef enum {
  * @return The transaction sequence number
  */
 uint8_t zb_manager_basic_factory_reset_cmd_req(esp_zb_zcl_basic_fact_reset_cmd_t *cmd_req);
+
+esp_err_t zb_manager_basic_cluster_add_custom_attribute(zigbee_manager_basic_cluster_t *cluster, uint16_t attr_id, uint8_t attr_type);
+
+attribute_custom_t *zb_manager_basic_cluster_find_custom_attr_obj(zigbee_manager_basic_cluster_t *cluster, uint16_t attr_id);
 #endif

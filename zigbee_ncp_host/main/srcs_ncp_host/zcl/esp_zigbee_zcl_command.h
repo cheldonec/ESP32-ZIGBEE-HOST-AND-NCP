@@ -1096,6 +1096,17 @@ typedef struct {
 void zb_manager_free_custom_cluster_report_message(zb_manager_custom_cluster_report_message_t *msg);
 
 /************************* Discovery Attributes ****************/
+/** 
+ * @brief Структура для хранения параметров запроса на discovery_attr через event_post worker
+*/
+typedef struct {
+    uint16_t short_addr;
+    uint8_t endpoint;
+    uint16_t cluster_id;
+    uint16_t start_attr_id;                 /*!< The attribute identifier at which to begin the attribute discover */
+    uint8_t max_attr_number;                /*!< The maximum number of attribute identifiers that are to be returned in the resulting Discover Attributes Response command*/
+} delayed_discovery_attr_req_t;
+
 typedef struct esp_zb_zcl_disc_attr_cmd_s {
     esp_zb_zcl_basic_cmd_t zcl_basic_cmd;   /*!< Basic command info */
     esp_zb_zcl_address_mode_t address_mode; /*!< APS addressing mode constants refer to esp_zb_zcl_address_mode_t */

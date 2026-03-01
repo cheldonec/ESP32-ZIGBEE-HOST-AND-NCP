@@ -159,11 +159,15 @@ typedef struct {
 }
 
 // Функции
-esp_err_t zb_manager_power_config_cluster_update_attribute(zb_manager_power_config_cluster_t* cluster, uint16_t attr_id, void* value);
+esp_err_t zb_manager_power_config_cluster_update_attribute(zb_manager_power_config_cluster_t* cluster,uint16_t attr_id,uint8_t attr_type,void* value,uint16_t value_len);
 const char* zb_manager_get_power_config_attr_name(uint16_t attr_id);
 const char* get_battery_size_string(uint8_t size);
 const char* get_battery_voltage_string(uint8_t voltage_units);  // 30 → "3.0V"
 const char* get_battery_percentage_string(uint8_t percentage_units);  // 200 → "100%"
+
+esp_err_t zb_manager_power_config_cluster_add_custom_attribute(zb_manager_power_config_cluster_t *cluster, uint16_t attr_id, uint8_t attr_type);
+
+attribute_custom_t *zb_manager_power_config_cluster_find_custom_attr_obj(zb_manager_power_config_cluster_t *cluster, uint16_t attr_id);
 
 #ifdef __cplusplus
 }

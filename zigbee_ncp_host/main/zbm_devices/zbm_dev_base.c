@@ -9,6 +9,7 @@
 #include "esp_log.h"
 #include "zbm_dev_polling.h"
 #include "zbm_dev_append_sheduler.h"
+#include "esp_zigbee_zcl_command.h"
 
 //#include "zb_manager_clusters.h"
 
@@ -61,6 +62,8 @@ device_custom_t*    zbm_dev_base_find_device_by_long_safe(esp_zb_ieee_addr_t *ie
 
 static void         zbm_dev_base_free_no_standart_attribute_array(attribute_custom_t **attr_array, uint16_t count);
 static esp_err_t    zbm_dev_base_dev_delete(device_custom_t* dev_object);
+void                zbm_json_add_attribute_value(cJSON *attr_obj, attribute_custom_t *attr);
+void                zbm_json_load_attribute_value(attribute_custom_t *attr, cJSON *attr_obj);
 cJSON               *zbm_dev_base_device_to_json(device_custom_t* dev);
 cJSON               *zbm_dev_base_to_json_safe();
 cJSON               *zbm_base_dev_short_list_for_webserver(void);
@@ -69,6 +72,7 @@ static void         zbm_dev_get_filename_by_ieee(const uint8_t *ieee_addr, char 
 static esp_err_t    zbm_dev_base_load_device_from_json(device_custom_t *dev, cJSON *dev_json); //new
 static esp_err_t    zbm_dev_save_single_device(device_custom_t *dev);  // new
 static esp_err_t    zbm_dev_base_save_new(const char *index_filepath);  //new
+esp_err_t           zbm_dev_base_save_req_cmd(void);
 static esp_err_t    zbm_dev_base_save(const char *filepath);
 static esp_err_t    zbm_dev_base_load_new(const char *index_filepath); // new
 static esp_err_t    zbm_dev_base_load(const char *filepath);
@@ -168,7 +172,7 @@ esp_err_t zbm_dev_base_init(uint8_t core_id)
             xZB_SaveTaskHandle_link = xZB_SaveTaskHandle; // сохраняем указатель для управления
         }
 
-        //временная очистка
+        
         esp_err_t load_base = ESP_FAIL;
         ESP_LOGW(TAG, "before zbm_dev_base_load_new");
         load_base = zbm_dev_base_load_new(ZB_MANAGER_JSON_INDEX_FILE); // ← используем индекс
@@ -335,6 +339,52 @@ void zbm_dev_get_filename_by_ieee(const uint8_t *ieee_addr, char *buf, size_t bu
 //********************************************************************************************************************************
 
 //================================================================================================================================
+//======================================== ZBM_DEV_BASE_LOAD_DEV_FROM_JSON_LOAD_ATTR =============================================
+//================================================================================================================================
+void zbm_json_load_attribute_value(attribute_custom_t *attr, cJSON *attr_obj)
+{
+    if (!attr || !attr_obj || attr->size == 0) {
+        return;
+    }
+
+    // Выделяем память под значение
+    attr->p_value = calloc(1, attr->size);
+    if (!attr->p_value) {
+        ESP_LOGE(TAG, "Failed to allocate p_value for attr 0x%04x, size=%u", attr->id, attr->size);
+        return;
+    }
+
+    // Сначала пробуем прочитать как число (value)
+    cJSON *val_num = cJSON_GetObjectItem(attr_obj, "value");
+    if (val_num && cJSON_IsNumber(val_num)) {
+        uint64_t num_val = (uint64_t)val_num->valuedouble; // double безопасен до 2^53
+
+        // Копируем младшие байты в p_value (little-endian, как в Zigbee)
+        for (int i = 0; i < attr->size; i++) {
+            ((uint8_t*)attr->p_value)[i] = (num_val >> (i * 8)) & 0xFF;
+        }
+        return;
+    }
+
+    // Потом пробуем как hex-строку (value_hex)
+    cJSON *val_hex = cJSON_GetObjectItem(attr_obj, "value_hex");
+    if (val_hex && cJSON_IsString(val_hex) && val_hex->valuestring) {
+        uint64_t num_val = hexstr_to_uint64(val_hex->valuestring);
+
+        for (int i = 0; i < attr->size && i < 8; i++) {
+            ((uint8_t*)attr->p_value)[i] = (num_val >> (i * 8)) & 0xFF;
+        }
+        // Если больше 8 байт — не поддерживается этим способом
+        if (attr->size > 8) {
+            ESP_LOGW(TAG, "Cannot fully restore value_hex for size > 8: attr 0x%04x", attr->id);
+        }
+        return;
+    }
+
+    // Если нет ни value, ни value_hex — оставляем нули (calloc уже обнулил)
+    ESP_LOGD(TAG, "No value found for attr 0x%04x, initialized to zero", attr->id);
+}
+//================================================================================================================================
 //================================================== ZBM_DEV_BASE_LOAD_DEV_FROM_JSON =============================================
 //================================================================================================================================
 /**
@@ -432,6 +482,7 @@ esp_err_t zbm_dev_base_load_device_from_json(device_custom_t *dev, cJSON *dev_js
                             // p_value — пока NULL, можно загрузить позже по типу
                             attr->p_value = NULL;
 
+                            zbm_json_load_attribute_value(attr, attr_obj);
                             dev->server_BasicClusterObj->nostandart_attr_array[a] = attr;
                         }
                         if (alloc_failed) {
@@ -508,7 +559,7 @@ esp_err_t zbm_dev_base_load_device_from_json(device_custom_t *dev, cJSON *dev_js
 
                             // p_value — пока NULL, можно загрузить позже по типу
                             attr->p_value = NULL;
-
+                            zbm_json_load_attribute_value(attr, attr_obj);
                             dev->server_PowerConfigurationClusterObj->nostandart_attr_array[a] = attr;
                         }
                         if (alloc_failed) {
@@ -619,7 +670,7 @@ esp_err_t zbm_dev_base_load_device_from_json(device_custom_t *dev, cJSON *dev_js
 
                                         // p_value — пока NULL, можно загрузить позже по типу
                                         attr->p_value = NULL;
-
+                                        zbm_json_load_attribute_value(attr, attr_obj);
                                         ep->server_TemperatureMeasurementClusterObj->nostandart_attr_array[a] = attr;
                                     }
                                     if (alloc_failed) {
@@ -673,7 +724,7 @@ esp_err_t zbm_dev_base_load_device_from_json(device_custom_t *dev, cJSON *dev_js
 
                                         // p_value — пока NULL, можно загрузить позже по типу
                                         attr->p_value = NULL;
-
+                                        zbm_json_load_attribute_value(attr, attr_obj);
                                         ep->server_HumidityMeasurementClusterObj->nostandart_attr_array[a] = attr;
                                     }
                                     if (alloc_failed) {
@@ -725,7 +776,7 @@ esp_err_t zbm_dev_base_load_device_from_json(device_custom_t *dev, cJSON *dev_js
 
                                         // p_value — пока NULL, можно загрузить позже по типу
                                         attr->p_value = NULL;
-
+                                        zbm_json_load_attribute_value(attr, attr_obj);
                                         ep->server_OnOffClusterObj->nostandart_attr_array[a] = attr;
                                     }
                                     if (alloc_failed) {
@@ -806,7 +857,7 @@ esp_err_t zbm_dev_base_load_device_from_json(device_custom_t *dev, cJSON *dev_js
                                                 attr->manuf_code = cJSON_GetObjectItem(attr_obj, "manuf_code")->valueint;
                                                 attr->parent_cluster_id = cJSON_GetObjectItem(attr_obj, "parent_cluster_id")->valueint;
                                                 attr->p_value = NULL;
-
+                                                zbm_json_load_attribute_value(attr, attr_obj);
                                                 cl->attr_array[a] = attr;
                                             }
                                         }
@@ -901,7 +952,7 @@ esp_err_t zbm_dev_base_load_device_from_json(device_custom_t *dev, cJSON *dev_js
                                             attr->manuf_code = cJSON_GetObjectItem(attr_obj, "manuf_code")->valueint;
                                             attr->parent_cluster_id = cJSON_GetObjectItem(attr_obj, "parent_cluster_id")->valueint;
                                             attr->p_value = NULL;
-
+                                            zbm_json_load_attribute_value(attr, attr_obj);
                                             cl->attr_array[a] = attr;
                                         }
                                     }else alloc_failed = true;
@@ -1030,7 +1081,10 @@ static esp_err_t zbm_dev_base_save_new(const char *index_filepath)
     return save_failed ? ESP_ERR_NOT_FINISHED : ESP_OK;
 }
 
-
+esp_err_t  zbm_dev_base_save_req_cmd()
+{
+    return zbm_dev_base_save_new(ZB_MANAGER_JSON_INDEX_FILE);
+}
 //================================================================================================================================
 //========================================================= ZBM_DEV_BASE_SAVE ====================================================
 //================================================================================================================================
@@ -1157,6 +1211,141 @@ static esp_err_t zbm_dev_base_load_new(const char *index_filepath)
 //********************************************************************************************************************************
 
 //================================================================================================================================
+//=========================================== ZBM_DEV_BASE_DEVICE_TO_JSON_ADD_ATTR_VALUE =========================================
+//================================================================================================================================
+void zbm_json_add_attribute_value(cJSON *attr_obj, attribute_custom_t *attr)
+{
+    if (!attr_obj || !attr) {
+        return;
+    }
+
+    // Если p_value == NULL или size == 0 → null
+    if (attr->p_value == NULL || attr->size == 0) {
+        cJSON_AddNullToObject(attr_obj, "value");
+        return;
+    }
+
+    uint16_t expected_size = zb_manager_get_zcl_attr_size(attr->type);
+
+    // === Определяем, является ли тип строковым ===
+    if (attr->type == 0x48 || attr->type == 0x49 || attr->type == 0x4A || attr->type == 0x4B) {
+        cJSON_AddStringToObject(attr_obj, "value_type", "string_skipped");
+        return;
+    }
+
+    // === Обработка числовых типов ===
+    switch (attr->type) {
+        case 0x08:  // uint8
+        case 0x10:
+        case 0x20:  // bitmap8
+        case 0x30:  // enum8
+        case 0x00:  // no data
+        {
+            uint8_t val = 0;
+            memcpy(&val, attr->p_value, 1);
+            cJSON_AddNumberToObject(attr_obj, "value", val);
+            break;
+        }
+        case 0x09:  // int16
+        case 0x11:  // uint16
+        case 0x21:  // bitmap16
+        case 0x31:  // enum16
+        case 0x22:  // cluster_id
+        case 0x23:  // attr_id
+        {
+            uint16_t val = 0;
+            memcpy(&val, attr->p_value, 2);
+            cJSON_AddNumberToObject(attr_obj, "value", val);
+            break;
+        }
+        case 0x0A:  // int24
+        case 0x12:  // uint24
+        {
+            uint32_t val = 0;
+            memcpy(&val, attr->p_value, 3);
+            cJSON_AddNumberToObject(attr_obj, "value", val);
+            break;
+        }
+        case 0x0B:  // int32
+        case 0x13:  // uint32
+        case 0x24:  // bitmap32
+        case 0x41:  // single
+        case 0x44:  // UTC time
+        {
+            uint32_t val = 0;
+            memcpy(&val, attr->p_value, 4);
+            cJSON_AddNumberToObject(attr_obj, "value", val);
+            break;
+        }
+        case 0x0C:  // uint40
+        case 0x14:
+        {
+            uint64_t val = 0;
+            memcpy(&val, attr->p_value, 5);
+            char hex_str[13];
+            snprintf(hex_str, sizeof(hex_str), "0x%010llx", (unsigned long long)val);
+            cJSON_AddStringToObject(attr_obj, "value_hex", hex_str);
+            break;
+        }
+        case 0x0D:  // uint48
+        case 0x15:
+        {
+            uint64_t val = 0;
+            memcpy(&val, attr->p_value, 6);
+            char hex_str[15];
+            snprintf(hex_str, sizeof(hex_str), "0x%012llx", (unsigned long long)val);
+            cJSON_AddStringToObject(attr_obj, "value_hex", hex_str);
+            break;
+        }
+        case 0x0E:  // uint56
+        case 0x16:
+        {
+            uint64_t val = 0;
+            memcpy(&val, attr->p_value, 7);
+            char hex_str[17];
+            snprintf(hex_str, sizeof(hex_str), "0x%014llx", (unsigned long long)val);
+            cJSON_AddStringToObject(attr_obj, "value_hex", hex_str);
+            break;
+        }
+        case 0x0F:  // int64
+        case 0x17:  // uint64
+        case 0x25:  // bitmap64
+        case 0x55:  // IEEE addr
+        {
+            uint64_t val = 0;
+            memcpy(&val, attr->p_value, 8);
+            cJSON_AddNumberToObject(attr_obj, "value", (double)val); // double безопасен до 2^53
+            break;
+        }
+        case 0xF0:  // 128-bit key
+        {
+            char hex_str[33] = {0};
+            for (int i = 0; i < 16; i++) {
+                sprintf(&hex_str[i*2], "%02X", ((uint8_t*)attr->p_value)[i]);
+            }
+            cJSON_AddStringToObject(attr_obj, "value_hex", hex_str);
+            break;
+        }
+        default:
+        {
+            // Для неизвестных типов — выводим hex до 8 байт
+            if (attr->size <= 8) {
+                uint64_t val = 0;
+                memcpy(&val, attr->p_value, attr->size);
+                char hex_str[19];
+                snprintf(hex_str, sizeof(hex_str), "0x%016llx", (unsigned long long)val);
+                cJSON_AddStringToObject(attr_obj, "value_hex", hex_str);
+            } else {
+                cJSON_AddStringToObject(attr_obj, "value", "binary_large");
+            }
+            break;
+        }
+    }
+
+    // Дополнительно: можно добавить тип как строку
+    // cJSON_AddNumberToObject(attr_obj, "expected_size", expected_size);
+}
+//================================================================================================================================
 //========================================================== ZBM_DEV_BASE_DEVICE_TO_JSON =========================================
 //================================================================================================================================
 cJSON *zbm_dev_base_device_to_json(device_custom_t* dev)
@@ -1240,7 +1429,7 @@ if (!dev) {
 
                         // p_value — сложнее, зависит от типа. Пока пропустим или добавим как hex строку при необходимости
                         // Можно добавить опционально: если size > 0 && p_value != NULL
-
+                        zbm_json_add_attribute_value(attr_obj, attr);
                         cJSON_AddItemToArray(attrs, attr_obj);
                     }
                     cJSON_AddItemToObject(basic, "nostandart_attributes", attrs);
@@ -1305,7 +1494,7 @@ if (!dev) {
 
                         // p_value — сложнее, зависит от типа. Пока пропустим или добавим как hex строку при необходимости
                         // Можно добавить опционально: если size > 0 && p_value != NULL
-
+                        zbm_json_add_attribute_value(attr_obj, attr);
                         cJSON_AddItemToArray(attrs, attr_obj);
                     }
                     cJSON_AddItemToObject(power_config, "nostandart_attributes", attrs);
@@ -1398,7 +1587,7 @@ if (!dev) {
 
                                 // p_value — сложнее, зависит от типа. Пока пропустим или добавим как hex строку при необходимости
                                 // Можно добавить опционально: если size > 0 && p_value != NULL
-
+                                zbm_json_add_attribute_value(attr_obj, attr);
                                 cJSON_AddItemToArray(attrs, attr_obj);
                             }
                             cJSON_AddItemToObject(temp, "nostandart_attributes", attrs);
@@ -1441,7 +1630,7 @@ if (!dev) {
 
                                 // p_value — сложнее, зависит от типа. Пока пропустим или добавим как hex строку при необходимости
                                 // Можно добавить опционально: если size > 0 && p_value != NULL
-
+                                zbm_json_add_attribute_value(attr_obj, attr);
                                 cJSON_AddItemToArray(attrs, attr_obj);
                             }
                             cJSON_AddItemToObject(hum, "nostandart_attributes", attrs);
@@ -1482,7 +1671,7 @@ if (!dev) {
 
                                 // p_value — сложнее, зависит от типа. Пока пропустим или добавим как hex строку при необходимости
                                 // Можно добавить опционально: если size > 0 && p_value != NULL
-
+                                zbm_json_add_attribute_value(attr_obj, attr);
                                 cJSON_AddItemToArray(attrs, attr_obj);
                             }
                             cJSON_AddItemToObject(onoff, "nostandart_attributes", attrs);
@@ -1540,6 +1729,7 @@ if (!dev) {
                                 cJSON_AddNumberToObject(attr_obj, "is_void_pointer", attr->is_void_pointer);
                                 cJSON_AddNumberToObject(attr_obj, "manuf_code", attr->manuf_code);
                                 cJSON_AddNumberToObject(attr_obj, "parent_cluster_id", attr->parent_cluster_id);
+                                zbm_json_add_attribute_value(attr_obj, attr);
                                 cJSON_AddItemToArray(attrs, attr_obj);
                             }
                             cJSON_AddItemToObject(cl_obj, "attributes", attrs);
@@ -1610,6 +1800,7 @@ if (!dev) {
                                 cJSON_AddNumberToObject(attr_obj, "is_void_pointer", attr->is_void_pointer);
                                 cJSON_AddNumberToObject(attr_obj, "manuf_code", attr->manuf_code);
                                 cJSON_AddNumberToObject(attr_obj, "parent_cluster_id", attr->parent_cluster_id);
+                                zbm_json_add_attribute_value(attr_obj, attr);
                                 cJSON_AddItemToArray(attrs, attr_obj);
                             }
                             cJSON_AddItemToObject(cl_obj, "attributes", attrs);
@@ -2586,6 +2777,313 @@ esp_err_t zbm_dev_base_dev_update_from_report_notify_safe(zb_manager_cmd_report_
     return result;
 }
 
+//================================================================================================================================
+//============================================= ZBM_DEV_BASE_UPDATE_DEV_FROM_DISC_ATTR_RESP ======================================
+//================================================================================================================================
+// File: main/zbm_devices/zbm_dev_base.c
+
+esp_err_t zbm_dev_base_dev_update_from_discovery_attr_notify_safe(const uint8_t *data, uint16_t data_len)
+{
+    esp_err_t result = ESP_FAIL;
+    device_custom_t* dev = NULL;
+
+    esp_zb_zcl_cmd_info_t *info = (esp_zb_zcl_cmd_info_t *)data;
+    if (info->status != ESP_ZB_ZCL_STATUS_SUCCESS) {
+        ESP_LOGW(TAG, "Discover attributes failed: status=0x%02x", info->status);
+        return ESP_FAIL;
+    }
+
+    uint16_t src_addr = info->src_address.u.short_addr;
+    uint8_t ep = info->dst_endpoint;
+    uint16_t cluster_id = info->cluster;
+
+    uint8_t attr_count = data[sizeof(esp_zb_zcl_cmd_info_t)];
+    const uint8_t *ptr = data + sizeof(esp_zb_zcl_cmd_info_t) + 1;
+
+    ESP_LOGI(TAG, "Discovery result: short=0x%04x, ep=%d, cluster=0x%04x, count=%d", src_addr, ep, cluster_id, attr_count);
+
+    dev = zbm_dev_base_find_device_by_short_safe(src_addr);
+    if (!dev) {
+        ESP_LOGE(TAG, "Device not found for short address 0x%04x", src_addr);
+        return ESP_ERR_NOT_FOUND;
+    }
+
+    // 🔹 Блокировка
+    if (xSemaphoreTake(zbm_g_device_array_mutex, pdMS_TO_TICKS(ZBM_BASE_MUTEX_TIMEOUT_SHORT_MS)) != pdTRUE) {
+        ESP_LOGE(TAG, "Failed to take mutex in zbm_dev_base_dev_update_from_discovery_attr_notify_safe");
+        return ESP_ERR_TIMEOUT;
+    }
+
+    // Поиск endpoint'а
+    endpoint_custom_t *ep_obj = NULL;
+    for (int i = 0; i < dev->endpoints_count; i++) {
+        if (dev->endpoints_array[i] && dev->endpoints_array[i]->ep_id == ep) {
+            ep_obj = dev->endpoints_array[i];
+            break;
+        }
+    }
+    if (!ep_obj) {
+        ESP_LOGW(TAG, "Endpoint %d not found on device 0x%04x", ep, src_addr);
+        result = ESP_ERR_NOT_FOUND;
+        goto give_mutex;
+    }
+
+    // Обработка известных кластеров
+    if (cluster_id == 0x0000) {
+        if (dev->server_BasicClusterObj != NULL) {
+            for (int i = 0; i < attr_count; i++) {
+                uint16_t attr_id = (ptr[1] << 8) | ptr[0];
+                esp_zb_zcl_attr_type_t attr_type = ptr[2];
+                ESP_LOGI(TAG, "  Attr[0x%04x] Type=0x%02x → Basic Cluster", attr_id, attr_type);
+                ptr += 3;
+                result = zb_manager_basic_cluster_add_custom_attribute(dev->server_BasicClusterObj, attr_id, attr_type);
+            }
+        }
+    }
+    else if (cluster_id == 0x0001) {
+        if (dev->server_PowerConfigurationClusterObj != NULL) {
+            for (int i = 0; i < attr_count; i++) {
+                uint16_t attr_id = (ptr[1] << 8) | ptr[0];
+                esp_zb_zcl_attr_type_t attr_type = ptr[2];
+                ESP_LOGI(TAG, "  Attr[0x%04x] Type=0x%02x → Power Config Cluster", attr_id, attr_type);
+                ptr += 3;
+                result = zb_manager_power_config_cluster_add_custom_attribute(dev->server_PowerConfigurationClusterObj, attr_id, attr_type);
+            }
+        }
+    }
+    else if (cluster_id == ESP_ZB_ZCL_CLUSTER_ID_ON_OFF) {
+        if (ep_obj->is_use_on_off_cluster && ep_obj->server_OnOffClusterObj) {
+            for (int k = 0; k < attr_count; k++) {
+                uint16_t attr_id = (ptr[1] << 8) | ptr[0];
+                esp_zb_zcl_attr_type_t attr_type = ptr[2];
+                ESP_LOGI(TAG, "  Attr[0x%04x] Type=0x%02x → OnOff Cluster", attr_id, attr_type);
+                ptr += 3;
+                result = zb_manager_on_off_cluster_add_custom_attribute(ep_obj->server_OnOffClusterObj, attr_id, attr_type);
+            }
+        }
+    }
+    else if (cluster_id == ESP_ZB_ZCL_CLUSTER_ID_TEMP_MEASUREMENT) {
+        if (ep_obj->is_use_temperature_measurement_cluster && ep_obj->server_TemperatureMeasurementClusterObj) {
+            for (int k = 0; k < attr_count; k++) {
+                uint16_t attr_id = (ptr[1] << 8) | ptr[0];
+                esp_zb_zcl_attr_type_t attr_type = ptr[2];
+                ESP_LOGI(TAG, "  Attr[0x%04x] Type=0x%02x → Temperature Cluster", attr_id, attr_type);
+                ptr += 3;
+                result = zb_manager_temp_meas_cluster_add_custom_attribute(ep_obj->server_TemperatureMeasurementClusterObj, attr_id, attr_type);
+            }
+        }
+    }
+    else if (cluster_id == ESP_ZB_ZCL_CLUSTER_ID_REL_HUMIDITY_MEASUREMENT) {
+        if (ep_obj->is_use_humidity_measurement_cluster && ep_obj->server_HumidityMeasurementClusterObj) {
+            for (int k = 0; k < attr_count; k++) {
+                uint16_t attr_id = (ptr[1] << 8) | ptr[0];
+                esp_zb_zcl_attr_type_t attr_type = ptr[2];
+                ESP_LOGI(TAG, "  Attr[0x%04x] Type=0x%02x → Humidity Cluster", attr_id, attr_type);
+                ptr += 3;
+                result = zb_manager_humidity_meas_cluster_add_custom_attribute(ep_obj->server_HumidityMeasurementClusterObj, attr_id, attr_type);
+            }
+        }
+    }
+    else {
+        // === Обработка НЕИЗВЕСТНЫХ входных кластеров ===
+        cluster_custom_t *custom_cluster = NULL;
+
+        // Поиск существующего кластера
+        for (int i = 0; i < ep_obj->UnKnowninputClusterCount; i++) {
+            cluster_custom_t *c = ep_obj->UnKnowninputClusters_array[i];
+            if (c && c->id == cluster_id) {
+                custom_cluster = c;
+                break;
+            }
+        }
+
+        // Если не нашли — создаём новый
+        if (!custom_cluster) {
+            custom_cluster = calloc(1, sizeof(cluster_custom_t));
+            if (!custom_cluster) {
+                ESP_LOGE(TAG, "Failed to allocate memory for unknown input cluster 0x%04x", cluster_id);
+                result = ESP_ERR_NO_MEM;
+                goto give_mutex;
+            }
+
+            custom_cluster->id = cluster_id;
+            custom_cluster->role_mask = 0; // client role
+            custom_cluster->manuf_code = 0;
+            custom_cluster->is_use_on_device = 1;
+            custom_cluster->attr_count = 0;
+            custom_cluster->attr_array = NULL;
+            snprintf(custom_cluster->cluster_id_text, sizeof(custom_cluster->cluster_id_text), "UnknownIn_0x%04X", cluster_id);
+
+            // Реаллокируем массив
+            void *new_array = realloc(ep_obj->UnKnowninputClusters_array,
+                                      (ep_obj->UnKnowninputClusterCount + 1) * sizeof(cluster_custom_t*));
+            if (!new_array) {
+                free(custom_cluster);
+                ESP_LOGE(TAG, "Failed to realloc UnKnowninputClusters_array");
+                result = ESP_ERR_NO_MEM;
+                goto give_mutex;
+            }
+
+            ep_obj->UnKnowninputClusters_array = (cluster_custom_t**)new_array;
+            ep_obj->UnKnowninputClusters_array[ep_obj->UnKnowninputClusterCount] = custom_cluster;
+            ep_obj->UnKnowninputClusterCount++;
+
+            ESP_LOGI(TAG, "🆕 Created unknown input cluster 0x%04x on EP %d", cluster_id, ep);
+        }
+
+        // Добавляем атрибуты в найденный/новый кластер
+        for (int k = 0; k < attr_count; k++) {
+            uint16_t attr_id = (ptr[1] << 8) | ptr[0];
+            esp_zb_zcl_attr_type_t attr_type = ptr[2];
+            ESP_LOGI(TAG, "  ➕ Attr[0x%04x] Type=0x%02x → added to UnknownIn cluster", attr_id, attr_type);
+            ptr += 3;
+
+            result = zbm_cluster_add_custom_attribute(custom_cluster, attr_id, attr_type);
+            if (result != ESP_OK) {
+                ESP_LOGW(TAG, "Failed to add attr 0x%04x to UnknownIn cluster 0x%04x", attr_id, cluster_id);
+            }
+        }
+    }
+
+    result = ESP_OK;
+
+give_mutex:
+    xSemaphoreGive(zbm_g_device_array_mutex);
+    return result;
+}
+
+/*esp_err_t zbm_dev_base_dev_update_from_discovery_attr_notify_safe_temp(const uint8_t *data, uint16_t data_len)
+{
+    esp_err_t result = ESP_FAIL;
+    device_custom_t* dev = NULL;
+    
+    esp_zb_zcl_cmd_info_t *info = (esp_zb_zcl_cmd_info_t *)data;
+    if (info->status != ESP_ZB_ZCL_STATUS_SUCCESS) {
+        ESP_LOGW(TAG, "Discover attributes failed: status=0x%02x", info->status);
+        return ESP_FAIL;
+    }
+
+    uint16_t src_addr = info->src_address.u.short_addr;
+    uint8_t ep = info->dst_endpoint;
+    uint16_t cluster_id = info->cluster;
+
+    uint8_t attr_count = data[sizeof(esp_zb_zcl_cmd_info_t)];
+    const uint8_t *ptr = data + sizeof(esp_zb_zcl_cmd_info_t) + 1;
+
+    ESP_LOGI(TAG, "Discovery result: short=0x%04x, ep=%d, cluster=0x%04x, count=%d", src_addr, ep, cluster_id, attr_count);
+
+    dev = zbm_dev_base_find_device_by_short_safe(src_addr);
+    if (!dev)
+    {
+        ESP_LOGE(TAG,"zbm_dev_base_dev_update_from_discovery_attr_notify_safe dev == NULL");
+        return result;
+    }
+
+    // 🔹 Блокировка
+    if (xSemaphoreTake(zbm_g_device_array_mutex, pdMS_TO_TICKS(ZBM_BASE_MUTEX_TIMEOUT_SHORT_MS)) != pdTRUE) {
+        ESP_LOGE(TAG, "Failed to take device mutex in zbm_dev_base_dev_update_from_discovery_attr_notify_safe");
+        return result;
+    }
+    if (cluster_id == 0x0000)
+    {
+        if (dev->server_BasicClusterObj != NULL)
+        {
+            for (int i = 0; i < attr_count; i++) {
+                uint16_t attr_id = (ptr[1] << 8) | ptr[0];
+                esp_zb_zcl_attr_type_t attr_type = ptr[2];
+                ESP_LOGI(TAG, "  Attr[0x%04x] Type=0x%02x", attr_id, attr_type);
+                ptr += 3; // id (2) + type (1)
+                result = zb_manager_basic_cluster_add_custom_attribute(dev->server_BasicClusterObj, attr_id, attr_type);
+            }
+        }
+    }
+    else 
+    if (cluster_id == 0x0001)
+    {
+        if (dev->server_PowerConfigurationClusterObj != NULL)
+        {
+            for (int i = 0; i < attr_count; i++) {
+                uint16_t attr_id = (ptr[1] << 8) | ptr[0];
+                esp_zb_zcl_attr_type_t attr_type = ptr[2];
+                ESP_LOGI(TAG, "  Attr[0x%04x] Type=0x%02x", attr_id, attr_type);
+                ptr += 3; // id (2) + type (1)
+                result = zb_manager_power_config_cluster_add_custom_attribute(dev->server_PowerConfigurationClusterObj, attr_id, attr_type);
+            }
+        }       
+    }
+    else
+    {
+       // Ищем endpoint
+        endpoint_custom_t *ep_obj = NULL;
+        for (int i = 0; i < dev->endpoints_count; i++) {
+            if (dev->endpoints_array[i] && dev->endpoints_array[i]->ep_id == ep) {
+                ep_obj = dev->endpoints_array[i];
+                break;
+            }
+        }
+        if (!ep_obj) {
+            ESP_LOGW(TAG, "Endpoint %d not found on device 0x%04x", ep, src_addr);
+            result = ESP_FAIL;
+        } 
+        // проверяем поддерживаемые кластеры
+        if (cluster_id == ESP_ZB_ZCL_CLUSTER_ID_ON_OFF)
+        {
+           if (ep_obj->is_use_on_off_cluster && ep_obj->server_OnOffClusterObj)
+            {
+                //zb_manager_on_off_cluster_add_custom_attribute
+                for (int k = 0; k < attr_count; k++) {
+                    uint16_t attr_id = (ptr[1] << 8) | ptr[0];
+                    esp_zb_zcl_attr_type_t attr_type = ptr[2];
+                    ESP_LOGI(TAG, "  Attr[0x%04x] Type=0x%02x", attr_id, attr_type);
+                    ptr += 3; // id (2) + type (1)
+                    result = zb_manager_on_off_cluster_add_custom_attribute(ep_obj->server_OnOffClusterObj, attr_id, attr_type);
+                }
+            } 
+        }else
+        if (cluster_id == ESP_ZB_ZCL_CLUSTER_ID_TEMP_MEASUREMENT)
+        {
+            if (ep_obj->is_use_temperature_measurement_cluster && ep_obj->server_TemperatureMeasurementClusterObj)
+            {
+                //zb_manager_temp_meas_cluster_add_custom_attribute
+                for (int k = 0; k < attr_count; k++) {
+                    uint16_t attr_id = (ptr[1] << 8) | ptr[0];
+                    esp_zb_zcl_attr_type_t attr_type = ptr[2];
+                    ESP_LOGI(TAG, "  Attr[0x%04x] Type=0x%02x", attr_id, attr_type);
+                    ptr += 3; // id (2) + type (1)
+                    result = zb_manager_temp_meas_cluster_add_custom_attribute(ep_obj->is_use_temperature_measurement_cluster, attr_id, attr_type);
+                }
+            } 
+        }else
+        if (cluster_id == ESP_ZB_ZCL_CLUSTER_ID_REL_HUMIDITY_MEASUREMENT)
+        {
+            if (ep_obj->is_use_humidity_measurement_cluster && ep_obj->server_HumidityMeasurementClusterObj)
+            {
+                //zb_manager_humidity_meas_cluster_add_custom_attribute
+                for (int k = 0; k < attr_count; k++) {
+                    uint16_t attr_id = (ptr[1] << 8) | ptr[0];
+                    esp_zb_zcl_attr_type_t attr_type = ptr[2];
+                    ESP_LOGI(TAG, "  Attr[0x%04x] Type=0x%02x", attr_id, attr_type);
+                    ptr += 3; // id (2) + type (1)
+                    result = zb_manager_humidity_meas_cluster_add_custom_attribute(ep_obj->is_use_humidity_measurement_cluster, attr_id, attr_type);
+                }
+            } 
+        }
+        else{
+            //zbm_cluster_add_custom_attribute
+            for (int k = 0; k < attr_count; k++) {
+                    uint16_t attr_id = (ptr[1] << 8) | ptr[0];
+                    esp_zb_zcl_attr_type_t attr_type = ptr[2];
+                    ESP_LOGI(TAG, "  Attr[0x%04x] Type=0x%02x", attr_id, attr_type);
+                    ptr += 3; // id (2) + type (1)
+                    result = zbm_cluster_add_custom_attribute(ep_obj->UnKnowninputClusters_array, attr_id, attr_type);
+                }
+        }
+    }
+
+    xSemaphoreGive(zbm_g_device_array_mutex);
+    return result;
+
+}*/
 
 cJSON *zbm_base_dev_short_list_for_webserver(void)
 {

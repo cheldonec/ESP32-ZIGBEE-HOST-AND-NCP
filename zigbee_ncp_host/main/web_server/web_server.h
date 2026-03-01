@@ -50,6 +50,10 @@ cJSON* create_device_json(device_custom_t *dev);
 void ws_notify_device_update(uint16_t short_addr); // вызывать при обновлении атрибутов кластера
 void ws_notify_device_update_unlocked(device_custom_t *dev); // без мьютекса
 
+// отправка результата DiscoveryAttr на страницу
+void ws_notify_discovery_result(uint16_t short_addr, uint8_t endpoint, uint16_t cluster_id,
+                                const uint8_t *raw_data, uint16_t raw_len);
+
 
 
 void ws_notify_network_status(void); // вызывать при обновлении zigbee сети (открыта/закрыта)

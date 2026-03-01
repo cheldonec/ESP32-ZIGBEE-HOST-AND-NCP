@@ -2532,7 +2532,7 @@ static esp_err_t zb_manager_basic_reset_cmd_req_fn(const uint8_t *input, uint16_
 
 static esp_err_t zb_manager_disc_attr_req_fn(const uint8_t *input, uint16_t inlen, uint8_t **output, uint16_t *outlen)
 {
-     ESP_LOGI(TAG, "zb_manager_on_of_main_cmd_req_fn");
+     ESP_LOGI(TAG, "zb_manager_disc_attr_req_fn");
     typedef struct {
         esp_zb_zcl_basic_cmd_t zcl_basic_cmd;                   /*!< Basic command info */
         uint8_t  address_mode;                                  /*!< APS addressing mode constants refer to esp_zb_zcl_address_mode_t */
@@ -2569,7 +2569,7 @@ static esp_err_t zb_manager_disc_attr_req_fn(const uint8_t *input, uint16_t inle
     if (esp_zb_lock_acquire(500/portTICK_PERIOD_MS)) {
              sec_n = esp_zb_zcl_disc_attr_cmd_req(&cmd_req);
             esp_zb_lock_release();
-        }
+        }else ESP_LOGW(TAG, "zb_manager_disc_attr_req_fn sec_n = 0xff;");
 
          *outlen = sizeof(uint8_t);
     *output = calloc(1, *outlen);

@@ -264,6 +264,7 @@ static void zb_action_worker_task(void *pvParameters)
             // Копируем info
             esp_zb_zcl_cmd_info_t* cmd_info = (esp_zb_zcl_cmd_info_t*)input_copy;
             memcpy(&read_resp->info, cmd_info, sizeof(esp_zb_zcl_cmd_info_t));
+            ESP_LOGI(TAG, "ZB_ACTION_ATTR_READ_RESP sizeof(esp_zb_zcl_cmd_info_t) = %d",sizeof(esp_zb_zcl_cmd_info_t));
 
             // Читаем attr_count
             uint8_t attr_count = input_copy[sizeof(esp_zb_zcl_cmd_info_t)];
@@ -986,7 +987,79 @@ static void zb_action_worker_task(void *pvParameters)
                 break;
             }
 
+            case ZB_ACTION_DELAYED_DISCOVER_ATTR_REQ: {
+                ESP_LOGI(TAG, "✅ ZB_ACTION_DELAYED_DISCOVER_ATTR_REQ: processing");
+                delayed_discovery_attr_req_t *req = (delayed_discovery_attr_req_t *)msg.event_data;
+                device_custom_t *dev = zbm_dev_base_find_device_by_short_safe(req->short_addr);
+                if (!dev) {
+                    ESP_LOGW(TAG, "ZB_ACTION_DELAYED_DISCOVER_ATTR_REQ: device 0x%04x not found", req->short_addr);
+                    break;
+                }
+                esp_zb_zcl_disc_attr_cmd_t cmd_req;
+                cmd_req.address_mode = ESP_ZB_APS_ADDR_MODE_16_ENDP_PRESENT;
+                cmd_req.cluster_id = req->cluster_id;
+                cmd_req.direction = ESP_ZB_ZCL_CMD_DIRECTION_TO_SRV;
+                cmd_req.dis_defalut_resp = 0;
+                //cmd_req.manuf_code = dev->manufacturer_code;
+                //cmd_req.manuf_specific = 1;
 
+                cmd_req.max_attr_number = req->max_attr_number;
+                cmd_req.start_attr_id = req->start_attr_id;
+                cmd_req.zcl_basic_cmd.dst_addr_u.addr_short = req->short_addr;
+                cmd_req.zcl_basic_cmd.dst_endpoint = req->endpoint;
+                cmd_req.zcl_basic_cmd.src_endpoint = 1;
+                uint8_t tsn = 0xff;
+                tsn = zb_manager_disc_attr_cmd_req(&cmd_req);
+
+                break;
+            }
+            case ZB_ACTION_DISCOVER_ATTR_RESP: {
+                ESP_LOGI(TAG, "✅ ZB_ACTION_DISCOVER_ATTR_RESP: processing");
+                const uint8_t *data = (uint8_t *)msg.event_data;
+                uint16_t len = msg.data_size;
+
+                esp_err_t update_dev_data_result = ESP_FAIL;
+                
+                esp_zb_zcl_cmd_info_t *info = (esp_zb_zcl_cmd_info_t *)data;
+                if (info->status != ESP_ZB_ZCL_STATUS_SUCCESS) {
+                    ESP_LOGW(TAG, "Discover attributes failed: status=0x%02x", info->status);
+                    break;
+                }
+                update_dev_data_result = zbm_dev_base_dev_update_from_discovery_attr_notify_safe(data, len);
+
+                uint16_t src_addr = info->src_address.u.short_addr;
+                uint8_t ep = info->dst_endpoint;
+                uint16_t cluster_id = info->cluster;
+
+                /*uint8_t attr_count = data[sizeof(esp_zb_zcl_cmd_info_t)];
+                const uint8_t *ptr = data + sizeof(esp_zb_zcl_cmd_info_t) + 1;
+
+                ESP_LOGI(TAG, "Discovery result: short=0x%04x, ep=%d, cluster=0x%04x, count=%d",
+                        src_addr, ep, cluster_id, attr_count);
+
+                for (int i = 0; i < attr_count; i++) {
+                    uint16_t attr_id = (ptr[1] << 8) | ptr[0];
+                    esp_zb_zcl_attr_type_t attr_type = ptr[2];
+
+                    ESP_LOGI(TAG, "  Attr[0x%04x] Type=0x%02x", attr_id, attr_type);
+
+                    ptr += 3; // id (2) + type (1)
+                }*/
+
+                // Здесь можешь собрать в JSON и отправить через WebSocket в UI
+                if (update_dev_data_result == ESP_OK)
+                {
+                    
+                    ws_notify_device_update(src_addr);
+                    zbm_dev_base_save_req_cmd();
+                    //vTaskDelay( 
+                    //zbm_dev_base_queue_save_req_cmd();
+                    
+                }
+                
+                //ws_notify_discovery_result(src_addr, ep, cluster_id, data, len);
+                break;
+            }
             case ZB_ACTION_NETWORK_IS_OPEN: {
                 ESP_LOGI(TAG, "🌐 Zigbee network OPENED");
                 //isZigbeeNetworkOpened = true;

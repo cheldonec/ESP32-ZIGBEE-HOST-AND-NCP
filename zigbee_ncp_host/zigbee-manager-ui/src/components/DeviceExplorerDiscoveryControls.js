@@ -13,7 +13,7 @@ export const DiscoveryControls = ({ form, onChange, onDiscover }) => {
         <input
           type="number"
           placeholder="0"
-          defaultValue={form.start_attr}
+          value={form.start_attr}
           style={{ width: '70px', padding: '2px', fontSize: '12px' }}
           onChange={(e) =>
             onChange({
@@ -30,7 +30,7 @@ export const DiscoveryControls = ({ form, onChange, onDiscover }) => {
         <input
           type="number"
           placeholder="10"
-          defaultValue={form.max_attr_count}
+          value={form.max_attr_count}
           style={{ width: '70px', padding: '2px', fontSize: '12px' }}
           onChange={(e) =>
             onChange({
@@ -48,7 +48,7 @@ export const DiscoveryControls = ({ form, onChange, onDiscover }) => {
         style={{ padding: '4px 8px', fontSize: '12px', marginTop: '8px' }}
         onClick={(e) => {
           e.stopPropagation();
-          onDiscover();
+          onDiscover(form); // Передаём актуальный form!
         }}
       >
         🔍

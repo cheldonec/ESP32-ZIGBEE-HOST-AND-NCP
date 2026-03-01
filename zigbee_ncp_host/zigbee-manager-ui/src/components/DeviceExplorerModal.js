@@ -13,10 +13,10 @@ const DeviceExplorerModal = ({ show, onClose, devices }) => {
 
   if (!show) return null;
 
-  const handleDiscover = () => {
-    const { short_addr, endpoint, cluster, start_attr, max_attr_count } = discoveryForm;
-    if (!short_addr || !cluster) {
-      alert('Заполните адрес и кластер');
+  const handleDiscover = (form) => {
+    const { short_addr, endpoint, cluster, start_attr, max_attr_count } = form;
+    if (short_addr === '' || short_addr == null || cluster == null) {
+      alert('Ошибка приложения "Пустой адрес или кластер"');
       return;
     }
 
@@ -97,17 +97,18 @@ const DeviceExplorerModal = ({ show, onClose, devices }) => {
           <p>Нет доступных устройств.</p>
         ) : (
           <div>
-            {devices.map((dev) => (
-              <DeviceItem
-                key={dev.short}
-                dev={dev}
-                discoveryForm={discoveryForm}
-                setDiscoveryForm={setDiscoveryForm}
-                onDiscover={handleDiscover}
-                onReadAttribute={handleReadAttribute}
-                onWriteAttribute={handleWriteAttribute}
-              />
-            ))}
+           {devices.map((dev) => (
+            <DeviceItem
+              key={dev.short}
+              dev={dev}
+              fullDev={dev._full} // ← явно передаём
+              discoveryForm={discoveryForm}
+              setDiscoveryForm={setDiscoveryForm}
+              onDiscover={handleDiscover}
+              onReadAttribute={handleReadAttribute}
+              onWriteAttribute={handleWriteAttribute}
+            />
+          ))}
           </div>
         )}
 

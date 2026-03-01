@@ -14,7 +14,10 @@ const ZCL_ATTR_TYPES = {
   0x48: 'array', 0x4c: 'struct',
   0xe0: 'time of day', 0xe1: 'date', 0xe2: 'utc time',
   0xf0: 'IEEE addr', 0xf1: '128-bit key',
-  0xff: 'invalid'
+  0xff: 'invalid' ,
+  0x83: 's24',   // signed 24-bit integer
+  0x84: 's32',   // уже есть как 0x2b?
+  0x85: 'float', // 
 };
 
 export const getAttrTypeName = (type) => ZCL_ATTR_TYPES[type] || `0x${type.toString(16)}`;

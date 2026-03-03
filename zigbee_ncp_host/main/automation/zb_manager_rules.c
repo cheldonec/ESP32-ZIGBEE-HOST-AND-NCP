@@ -16,10 +16,17 @@ static const char* TAG = "ZB_RULE";
 //zb_rule_t rules[ZB_RULE_MAX_COUNT];
 uint8_t rules_count = 0;
 zb_rule_t** rules_array = NULL;
+delayed_action_t delayed_actions[8] = {0};
+uint8_t delayed_count = 0;
 // Внутренние функции
 static bool rule_matches_trigger(const zb_rule_t* rule, cJSON* event);
 static void execute_rule_actions(const zb_rule_t* rule);
 static void rules_task(void* pvParameters);
+
+void check_time_triggers(void);
+
+void schedule_delayed_action(const char* rule_id, uint32_t delay_sec);
+void process_delayed_actions(void);
 
 // ===================================================================
 //                         Инициализация
@@ -44,44 +51,78 @@ void zb_rule_engine_init(void)
     xTaskCreate(rules_task, "zb_rules_task", 4096, NULL, 5, NULL);
 }
 
-/**
- * @brief Проверить, срабатывает ли правило на событие
- */
+
 static bool rule_matches_trigger(const zb_rule_t* rule, cJSON* event) {
-    // Пример: событие {"event":"state_update","short":12345,"clusters":[{"type":"illuminance","value":40}]}
     cJSON* short_addr_obj = cJSON_GetObjectItem(event, "short");
     if (!short_addr_obj) return false;
     uint16_t short_addr = short_addr_obj->valueint;
 
     cJSON* clusters = cJSON_GetObjectItem(event, "clusters");
-    if (!clusters) return false;
+    cJSON* event_type = cJSON_GetObjectItem(event, "event");
+    if (!event_type || !cJSON_IsString(event_type)) return false;
+
+    bool any_match = false;
+    bool all_match = true;
 
     for (int i = 0; i < rule->trigger_count; i++) {
         const zb_rule_trigger_t* t = &rule->triggers[i];
-        if (t->type != ZB_RULE_TRIGGER_DEVICE_STATE) continue;
+        bool match = false;
 
-        if (t->data.device_state.short_addr != short_addr) continue;
+        // === Триггер: state_update (устройство прислало данные) ===
+        if (t->type == ZB_RULE_TRIGGER_DEVICE_STATE && strcmp(event_type->valuestring, "state_update") == 0) {
+            if (t->data.device_state.short_addr != short_addr) continue;
 
-        cJSON* cl_item = NULL;
-        cJSON_ArrayForEach(cl_item, clusters) {
-            cJSON* type = cJSON_GetObjectItem(cl_item, "type");
-            cJSON* value = cJSON_GetObjectItem(cl_item, "value");
-            if (!type || !value) continue;
+            if (!clusters) continue;
 
-            if (strcmp(type->valuestring, t->data.device_state.cluster_type) == 0) {
-                double val = value->valuedouble;
-                switch (t->data.device_state.cond) {
-                    case ZB_RULE_COND_EQ: return val == t->data.device_state.value;
-                    case ZB_RULE_COND_NE: return val != t->data.device_state.value;
-                    case ZB_RULE_COND_GT: return val > t->data.device_state.value;
-                    case ZB_RULE_COND_LT: return val < t->data.device_state.value;
-                    case ZB_RULE_COND_GTE: return val >= t->data.device_state.value;
-                    case ZB_RULE_COND_LTE: return val <= t->data.device_state.value;
+            cJSON* cl_item = NULL;
+            cJSON_ArrayForEach(cl_item, clusters) {
+                cJSON* type = cJSON_GetObjectItem(cl_item, "type");
+                cJSON* value = cJSON_GetObjectItem(cl_item, "value");
+                if (!type || !value) continue;
+
+                if (strcmp(type->valuestring, t->data.device_state.cluster_type) == 0) {
+                    double val = value->valuedouble;
+
+                    switch (t->data.device_state.cond) {
+                        case ZB_RULE_COND_EQ: match = (val == t->data.device_state.value); break;
+                        case ZB_RULE_COND_NE: match = (val != t->data.device_state.value); break;
+                        case ZB_RULE_COND_GT: match = (val > t->data.device_state.value); break;
+                        case ZB_RULE_COND_LT: match = (val < t->data.device_state.value); break;
+                        case ZB_RULE_COND_GTE: match = (val >= t->data.device_state.value); break;
+                        case ZB_RULE_COND_LTE: match = (val <= t->data.device_state.value); break;
+                        default: match = false; break;
+                    }
+
+                    if (match) break; // достаточно одного совпадения кластера
                 }
             }
         }
+
+        // === Триггер: device_unavailable ===
+        else if (t->type == ZB_RULE_TRIGGER_DEVICE_UNAVAILABLE && strcmp(event_type->valuestring, "device_unavailable") == 0) {
+            cJSON* cluster_obj = cJSON_GetObjectItem(event, "cluster");
+            if (!cluster_obj || !cJSON_IsString(cluster_obj)) {
+                continue;
+            }
+
+            if (t->data.device_unavailable.short_addr == short_addr &&
+                strcmp(t->data.device_unavailable.cluster_type, cluster_obj->valuestring) == 0) {
+                match = true;
+            }
+        }
+
+        // === Триггер: time_range — НЕ обрабатываем здесь! Только по таймеру
+        // Пропускаем — он проверяется в check_time_triggers()
+
+        // Обновляем результаты
+        if (match) {
+            any_match = true;
+        } else {
+            all_match = false;
+        }
     }
-    return false;
+
+    return rule->trigger_logic == ZB_RULE_TRIGGER_LOGIC_ANY ? any_match : all_match;
 }
 
 /**
@@ -102,11 +143,23 @@ static void execute_rule_actions(const zb_rule_t* rule) {
 }
 
 /**
- * @brief Задача для фоновой обработки (если нужна очередь)
+ * @brief Задача для фоновой обработки
  */
 static void rules_task(void* pvParameters) {
     while (1) {
-        vTaskDelay(pdMS_TO_TICKS(100));
+        vTaskDelay(pdMS_TO_TICKS(10000)); // каждые 10 сек
+
+        process_delayed_actions(); // проверяем задержки
+
+        // Каждую минуту — проверяем время
+        static int last_min = -1;
+        time_t now = time(NULL);
+        struct tm timeinfo;
+        localtime_r(&now, &timeinfo);
+        if (timeinfo.tm_min != last_min) {
+            last_min = timeinfo.tm_min;
+            check_time_triggers();
+        }
     }
 }
 
@@ -359,6 +412,7 @@ bool zb_rule_engine_add_rule(const zb_rule_t* rule_template)
         ESP_LOGI(TAG, "🆔 Сгенерирован ID: %s", new_rule->id);
     }
 
+    new_rule->trigger_logic = ZB_RULE_TRIGGER_LOGIC_ANY;
     // Сохраняем
     rules_array[rules_count] = new_rule;
     ESP_LOGI(TAG, "✅ Добавлено правило '%s' на индекс %d", new_rule->name, rules_count);
@@ -532,7 +586,19 @@ cJSON* rule_to_json(const zb_rule_t* rule) {
                 cJSON_AddStringToObject(trig, "condition", cond_str);
                 cJSON_AddNumberToObject(trig, "value", t->data.device_state.value);
                 break;
-
+            case ZB_RULE_TRIGGER_DEVICE_UNAVAILABLE:
+                cJSON_AddStringToObject(trig, "type", "device_unavailable");
+                cJSON_AddNumberToObject(trig, "short", t->data.device_unavailable.short_addr);
+                cJSON_AddStringToObject(trig, "cluster_type", t->data.device_unavailable.cluster_type);
+                cJSON_AddNumberToObject(trig, "timeout_ms", t->data.device_unavailable.timeout_ms);
+                break;
+            case ZB_RULE_TRIGGER_TIME_RANGE:
+                cJSON_AddStringToObject(trig, "type", "time_range");
+                cJSON_AddStringToObject(trig, "from", t->data.time_range.from);
+                cJSON_AddStringToObject(trig, "to", t->data.time_range.to);
+                cJSON_AddNumberToObject(trig, "days_of_week", t->data.time_range.days_of_week);
+                cJSON_AddNumberToObject(trig, "delay_sec", t->data.time_range.delay_sec);
+                break;
             default:
                 ESP_LOGW("RULE_JSON", "⚠️ Неизвестный тип триггера: %d", t->type);
                 cJSON_AddStringToObject(trig, "type", "unknown");
@@ -589,113 +655,297 @@ void zb_rule_trigger_state_update_double(uint16_t short_addr, const char* cluste
     cJSON_Delete(event);
 }
 
-void zb_rule_trigger_state_update(
-    uint16_t short_addr,
-    esp_zb_zcl_cluster_id_t cluster_id,
-    uint16_t attr_id,
-    void* data,
-    uint8_t data_len,
-    esp_zb_zcl_attr_type_t attr_type)
+void zb_rule_trigger_state_update(uint16_t short_addr,esp_zb_zcl_cluster_id_t cluster_id,uint16_t attr_id,void* data,uint8_t data_len,esp_zb_zcl_attr_type_t attr_type)
 {
-    if (!data || data_len == 0) {
-        ESP_LOGW(TAG, "No data to trigger rule");
-        return;
-    }
-
-    // Определяем строковый тип кластера для JSON
+    // Определяем строковый тип кластера
     const char* cluster_type_str = NULL;
-    bool is_state_attr = false; // Только атрибуты состояния (не команды)
+    bool is_tracked_attr = false;
 
-    // Сначала проверим, интересует ли нас этот атрибут
     if (cluster_id == ESP_ZB_ZCL_CLUSTER_ID_ON_OFF && attr_id == ESP_ZB_ZCL_ATTR_ON_OFF_ON_OFF_ID) {
         cluster_type_str = "on_off";
-        is_state_attr = true;
+        is_tracked_attr = true;
     }
     else if (cluster_id == ESP_ZB_ZCL_CLUSTER_ID_TEMP_MEASUREMENT && attr_id == ATTR_TEMP_MEASUREMENT_VALUE_ID) {
         cluster_type_str = "temperature";
-        is_state_attr = true;
+        is_tracked_attr = true;
     }
     else if (cluster_id == ESP_ZB_ZCL_CLUSTER_ID_REL_HUMIDITY_MEASUREMENT && attr_id == ATTR_REL_HUMIDITY_MEASUREMENT_VALUE_ID) {
         cluster_type_str = "humidity";
-        is_state_attr = true;
+        is_tracked_attr = true;
     }
-    /*else if (cluster_id == ESP_ZB_ZCL_CLUSTER_ID_ILLUMINANCE_MEASUREMENT && attr_id == ESP_ZB_ZCL_ATTR_ILLUMINANCE_MEASURED_VALUE_ID) {
-        cluster_type_str = "illuminance";
-        is_state_attr = true;
-    }*/
     else if (cluster_id == ESP_ZB_ZCL_CLUSTER_ID_POWER_CONFIG && attr_id == ESP_ZB_ZCL_ATTR_POWER_CONFIG_BATTERY_PERCENTAGE_REMAINING_ID) {
         cluster_type_str = "battery";
-        is_state_attr = true;
+        is_tracked_attr = true;
     }
-    // Добавь другие при необходимости: occupancy, voltage и т.д.
 
-    if (!is_state_attr) {
+    // Если атрибут не отслеживается — выходим
+    if (!is_tracked_attr) {
         ESP_LOGD(TAG, "Attribute not tracked for rules: cluster=0x%04x, attr=0x%04x", cluster_id, attr_id);
         return;
     }
 
-    // Теперь извлекаем значение в double (универсальный формат для сравнения)
-    double numeric_value = 0.0;
-    bool parsed = false;
-
-    if (attr_type == ESP_ZB_ZCL_ATTR_TYPE_BOOL && data_len >= 1) {
-        numeric_value = *(uint8_t*)data ? 1.0 : 0.0;
-        parsed = true;
-    }
-    else if (attr_type == ESP_ZB_ZCL_ATTR_TYPE_U8 && data_len >= 1) {
-        numeric_value = *(uint8_t*)data;
-        parsed = true;
-    }
-    else if (attr_type == ESP_ZB_ZCL_ATTR_TYPE_S8 && data_len >= 1) {
-        numeric_value = *(int8_t*)data;
-        parsed = true;
-    }
-    else if (attr_type == ESP_ZB_ZCL_ATTR_TYPE_U16 && data_len >= 2) {
-        numeric_value = *(uint16_t*)data;
-        parsed = true;
-    }
-    else if (attr_type == ESP_ZB_ZCL_ATTR_TYPE_S16 && data_len >= 2) {
-        numeric_value = *(int16_t*)data;
-        parsed = true;
-    }
-    else if (attr_type == ESP_ZB_ZCL_ATTR_TYPE_SINGLE && data_len >= 4) {
-        numeric_value = (double)*(float*)data;
-        parsed = true;
-    }
-    // Можно добавить другие типы по мере необходимости
-
-    if (!parsed) {
-        ESP_LOGW(TAG, "Unsupported attr type 0x%02x or invalid length %d", attr_type, data_len);
-        return;
-    }
-
-    // Для некоторых значений — масштабирование
-    if (cluster_id == ESP_ZB_ZCL_CLUSTER_ID_TEMP_MEASUREMENT) {
-        numeric_value /= 100.0;  // Convert from centi-degrees
-    }
-    else if (cluster_id == ESP_ZB_ZCL_CLUSTER_ID_POWER_CONFIG && attr_id == ESP_ZB_ZCL_ATTR_POWER_CONFIG_BATTERY_PERCENTAGE_REMAINING_ID) {
-        numeric_value /= 2.0;  // 0..200 → 0..100%
-    }
-
-    ESP_LOGI(TAG, "🔄 Rule trigger: %s = %.3f (dev=0x%04x)", cluster_type_str, numeric_value, short_addr);
-
-    // Формируем JSON событие
     cJSON* event = cJSON_CreateObject();
     if (!event) return;
 
-    cJSON_AddStringToObject(event, "event", "state_update");
-    cJSON_AddNumberToObject(event, "short", short_addr);
+    // === СЛУЧАЙ 1: Данные есть → state_update ===
+    if (data && data_len > 0) {
+        cJSON_AddStringToObject(event, "event", "state_update");
+        cJSON_AddNumberToObject(event, "short", short_addr);
 
-    cJSON* clusters = cJSON_CreateArray();
-    cJSON* cl = cJSON_CreateObject();
-    cJSON_AddStringToObject(cl, "type", cluster_type_str);
-    cJSON_AddNumberToObject(cl, "value", numeric_value);
-    cJSON_AddItemToArray(clusters, cl);
-    cJSON_AddItemToObject(event, "clusters", clusters);
+        cJSON* clusters = cJSON_CreateArray();
+        cJSON* cl = cJSON_CreateObject();
 
-    // Отправляем в движок
+        cJSON_AddStringToObject(cl, "type", cluster_type_str);
+
+        // Парсим значение в double
+        double numeric_value = 0.0;
+        bool parsed = false;
+
+        if (attr_type == ESP_ZB_ZCL_ATTR_TYPE_BOOL && data_len >= 1) {
+            numeric_value = *(uint8_t*)data ? 1.0 : 0.0;
+            parsed = true;
+        }
+        else if (attr_type == ESP_ZB_ZCL_ATTR_TYPE_U8 && data_len >= 1) {
+            numeric_value = *(uint8_t*)data;
+            parsed = true;
+        }
+        else if (attr_type == ESP_ZB_ZCL_ATTR_TYPE_S8 && data_len >= 1) {
+            numeric_value = *(int8_t*)data;
+            parsed = true;
+        }
+        else if (attr_type == ESP_ZB_ZCL_ATTR_TYPE_U16 && data_len >= 2) {
+            numeric_value = *(uint16_t*)data;
+            parsed = true;
+        }
+        else if (attr_type == ESP_ZB_ZCL_ATTR_TYPE_S16 && data_len >= 2) {
+            numeric_value = *(int16_t*)data;
+            parsed = true;
+        }
+        else if (attr_type == ESP_ZB_ZCL_ATTR_TYPE_SINGLE && data_len >= 4) {
+            numeric_value = (double)*(float*)data;
+            parsed = true;
+        }
+
+        if (!parsed) {
+            ESP_LOGW(TAG, "Unsupported attr type 0x%02x or invalid length %d", attr_type, data_len);
+            cJSON_Delete(event);
+            return;
+        }
+
+        // Масштабирование
+        if (cluster_id == ESP_ZB_ZCL_CLUSTER_ID_TEMP_MEASUREMENT) {
+            numeric_value /= 100.0;  // centi-degrees → °C
+        }
+        else if (cluster_id == ESP_ZB_ZCL_CLUSTER_ID_POWER_CONFIG && attr_id == ESP_ZB_ZCL_ATTR_POWER_CONFIG_BATTERY_PERCENTAGE_REMAINING_ID) {
+            numeric_value /= 2.0;  // 0..200 → 0..100%
+        }
+
+        cJSON_AddNumberToObject(cl, "value", numeric_value);
+        cJSON_AddItemToArray(clusters, cl);
+        cJSON_AddItemToObject(event, "clusters", clusters);
+
+        ESP_LOGI(TAG, "🔄 Rule trigger: %s = %.3f (dev=0x%04x)", cluster_type_str, numeric_value, short_addr);
+    }
+    // === СЛУЧАЙ 2: Данных нет → device_unavailable ===
+    else {
+        cJSON_AddStringToObject(event, "event", "device_unavailable");
+        cJSON_AddNumberToObject(event, "short", short_addr);
+        cJSON_AddStringToObject(event, "cluster", cluster_type_str);
+        cJSON_AddNumberToObject(event, "attr_id", attr_id);
+
+        ESP_LOGW(TAG, "🚨 Rule trigger: device 0x%04x cluster '%s' is unavailable", short_addr, cluster_type_str);
+    }
+
+    // Отправляем в движок правил
     zb_rule_engine_process_event(event);
 
     // Очищаем
     cJSON_Delete(event);
+}
+
+ // zb_manager_rules.c
+void check_time_triggers_old(void) {
+    time_t now = time(NULL);
+    struct tm timeinfo;
+    localtime_r(&now, &timeinfo);
+
+    char current_time[6];
+    snprintf(current_time, sizeof(current_time), "%02d:%02d", timeinfo.tm_hour, timeinfo.tm_min);
+
+    // Бит номер дня: Пн=0, Вт=1, ..., Вс=6
+    uint8_t current_day_bit = 1 << (timeinfo.tm_wday == 0 ? 6 : timeinfo.tm_wday - 1); // переворот: воскресенье = 0 → 6
+
+    for (int i = 0; i < rules_count; i++) {
+        zb_rule_t* rule = rules_array[i];
+        if (!rule || !rule->enabled) continue;
+
+        for (int j = 0; j < rule->trigger_count; j++) {
+            zb_rule_trigger_t* t = &rule->triggers[j];
+            if (t->type != ZB_RULE_TRIGGER_TIME_RANGE) continue;
+
+            // Проверка дня недели
+            if (!(t->data.time_range.days_of_week & current_day_bit)) {
+                continue;
+            }
+
+            // Проверка времени
+            bool in_interval =
+                strcmp(current_time, t->data.time_range.from) >= 0 &&
+                strcmp(current_time, t->data.time_range.to) <= 0;
+
+            if (in_interval) {
+                // Если задержка = 0 → сразу
+                if (t->data.time_range.delay_sec == 0) {
+                    execute_rule_actions(rule);
+                } else {
+                    // TODO: реализовать отложенное выполнение (см. ниже)
+                    schedule_delayed_action(rule->id, t->data.time_range.delay_sec);
+                }
+                break;
+            }
+        }
+    }
+}
+
+void check_time_triggers(void) {
+    time_t now = time(NULL);
+    struct tm timeinfo;
+    localtime_r(&now, &timeinfo);
+
+    char current_time[6];
+    snprintf(current_time, sizeof(current_time), "%02d:%02d", timeinfo.tm_hour, timeinfo.tm_min);
+
+    // Бит номер дня: Пн=0, Вт=1, ..., Вс=6
+    uint8_t current_day_bit = 1 << (timeinfo.tm_wday == 0 ? 6 : timeinfo.tm_wday - 1); // воскресенье → 6
+
+    ESP_LOGI(TAG, "⏰ ПРОВЕРКА ВРЕМЕННЫХ ТРИГГЕРОВ");
+    ESP_LOGI(TAG, "🕒 Текущее время: %s, день недели: %d (бит: 0x%02x)", 
+             current_time, timeinfo.tm_wday, current_day_bit);
+
+    for (int i = 0; i < rules_count; i++) {
+        zb_rule_t* rule = rules_array[i];
+        if (!rule) {
+            ESP_LOGW(TAG, "⚠️ rules_array[%d] == NULL", i);
+            continue;
+        }
+
+        if (!rule->enabled) {
+            ESP_LOGD(TAG, "⏭️ Правило '%s' выключено — пропускаем", rule->name);
+            continue;
+        }
+
+        ESP_LOGD(TAG, "🔍 Проверяем правило: '%s' (ID: %s)", rule->name, rule->id);
+
+        bool triggered = false;
+        for (int j = 0; j < rule->trigger_count; j++) {
+            zb_rule_trigger_t* t = &rule->triggers[j];
+
+            if (t->type != ZB_RULE_TRIGGER_TIME_RANGE) {
+                ESP_LOGD(TAG, "   → Триггер %d: не time_range (тип=%d)", j, t->type);
+                continue;
+            }
+
+            ESP_LOGI(TAG, "🎯 Найден временной триггер:");
+            ESP_LOGI(TAG, "   from='%s', to='%s', delay_sec=%u", 
+                     t->data.time_range.from, t->data.time_range.to, t->data.time_range.delay_sec);
+            ESP_LOGI(TAG, "   days_of_week=0x%02x, current_day_bit=0x%02x", 
+                     t->data.time_range.days_of_week, current_day_bit);
+
+            // Проверка дня недели
+            if (!(t->data.time_range.days_of_week & current_day_bit)) {
+                ESP_LOGW(TAG, "❌ Не совпадение дня недели: требуется 0x%02x, сегодня 0x%02x",
+                         t->data.time_range.days_of_week, current_day_bit);
+                continue;
+            } else {
+                ESP_LOGI(TAG, "✅ Совпадение дня недели!");
+            }
+
+            // Проверка времени
+            int cmp_from = strcmp(current_time, t->data.time_range.from);
+            int cmp_to = strcmp(current_time, t->data.time_range.to);
+
+            ESP_LOGI(TAG, "⏰ Сравнение времени:");
+            ESP_LOGI(TAG, "   '%s' >= '%s' ? %s", current_time, t->data.time_range.from, cmp_from >= 0 ? "да" : "нет");
+            ESP_LOGI(TAG, "   '%s' <= '%s' ? %s", current_time, t->data.time_range.to, cmp_to <= 0 ? "да" : "нет");
+
+            bool in_interval = (cmp_from >= 0) && (cmp_to <= 0);
+
+            if (in_interval) {
+                ESP_LOGI(TAG, "🔥 ВРЕМЯ В ИНТЕРВАЛЕ! Правило сработает.");
+                triggered = true;
+
+                if (t->data.time_range.delay_sec == 0) {
+                    ESP_LOGI(TAG, "⚡ Выполняем действия немедленно...");
+                    execute_rule_actions(rule);
+                } else {
+                    ESP_LOGI(TAG, "⏳ Запланирована задержка: %u сек", t->data.time_range.delay_sec);
+                    schedule_delayed_action(rule->id, t->data.time_range.delay_sec);
+                }
+                break; // один сработавший триггер — достаточно
+            } else {
+                ESP_LOGW(TAG, "❌ Время НЕ в интервале!");
+            }
+        }
+
+        if (!triggered) {
+            ESP_LOGD(TAG, "❌ Правило '%s' не сработало ни по одному триггеру", rule->name);
+        }
+    }
+}
+
+void schedule_delayed_action(const char* rule_id, uint32_t delay_sec) {
+    if (delayed_count >= 8) return;
+
+    time_t fire_at = time(NULL) + delay_sec;
+
+    // Проверим, нет ли уже такой задержки
+    for (int i = 0; i < delayed_count; i++) {
+        if (strcmp(delayed_actions[i].rule_id, rule_id) == 0) {
+            delayed_actions[i].fire_at = fire_at;
+            return;
+        }
+    }
+
+    strncpy(delayed_actions[delayed_count].rule_id, rule_id, 31);
+    delayed_actions[delayed_count].fire_at = fire_at;
+    delayed_count++;
+}
+
+void process_delayed_actions(void) {
+    time_t now = time(NULL);
+    struct tm now_tm;
+    localtime_r(&now, &now_tm);
+    char now_str[6];
+    snprintf(now_str, sizeof(now_str), "%02d:%02d", now_tm.tm_hour, now_tm.tm_min);
+
+    ESP_LOGD(TAG, "⏳ Проверка отложенных действий... текущее время: %s", now_str);
+
+    for (int i = 0; i < delayed_count; i++) {
+        struct tm fire_tm;
+        localtime_r(&delayed_actions[i].fire_at, &fire_tm);
+        char fire_str[6];
+        snprintf(fire_str, sizeof(fire_str), "%02d:%02d", fire_tm.tm_hour, fire_tm.tm_min);
+
+        ESP_LOGD(TAG, "   → Отложенное действие: ID=%s, запланировано на %s, прошло=%ds",
+                 delayed_actions[i].rule_id,
+                 fire_str,
+                 (int)(now - delayed_actions[i].fire_at));
+
+        if (delayed_actions[i].fire_at <= now) {
+            const zb_rule_t* rule = zb_rule_engine_get_rule(delayed_actions[i].rule_id);
+            if (rule && rule->enabled) {
+                ESP_LOGI(TAG, "🔥 ВЫПОЛНЕНИЕ ОТЛОЖЕННОГО ПРАВИЛА: '%s'", rule->name);
+                execute_rule_actions(rule);
+            } else {
+                ESP_LOGW(TAG, "⚠️ Правило для отложенного действия не найдено или выключено: %s",
+                         delayed_actions[i].rule_id);
+            }
+
+            // Удаление
+            memmove(&delayed_actions[i], &delayed_actions[i+1],
+                    (delayed_count - i - 1) * sizeof(delayed_action_t));
+            delayed_count--;
+            i--;
+        }
+    }
 }

@@ -8,6 +8,7 @@
 #include "esp_err.h"
 #include "esp_zigbee_zcl_common.h"
 #include "zb_manager_clusters.h"
+#include <time.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -24,6 +25,7 @@ extern "C" {
 #define ZB_RULE_MAX_TRIGGERS 4
 #define ZB_RULE_MAX_ACTIONS  4
 
+
 /**
  * @brief Типы триггеров
  */
@@ -34,6 +36,7 @@ typedef enum {
     ZB_RULE_TRIGGER_MOTION,
     ZB_RULE_TRIGGER_SUNRISE_SUNSET,
     ZB_RULE_TRIGGER_BUTTON_PRESS,
+    ZB_RULE_TRIGGER_DEVICE_UNAVAILABLE,
 } zb_rule_trigger_type_t;
 
 /**
@@ -96,27 +99,48 @@ typedef struct {
             zb_rule_condition_t cond;
             double value;              // порог (для сравнения)
         } device_state;
+
         struct {
-            char from[6];  // "19:00"
-            char to[6];    // "23:00"
+            char from[6];           // "08:00"
+            char to[6];             // "09:00"
+            uint8_t days_of_week;   // битовая маска: 0b00101010 = Пн, Ср, Пт
+            uint32_t delay_sec;     // задержка в секундах после входа в интервал
         } time_range;
+
         struct {
             uint16_t short_addr;
             uint8_t endpoint_id;
             uint16_t threshold; // in lux
             zb_rule_condition_t cond;
         } illuminance;
+
         struct {
             uint16_t short_addr;
             uint8_t endpoint_id;
             uint16_t timeout_sec;
         } motion;
+
         struct {
             char event[16]; // "sunrise", "sunset"
             int offset_min; // ± minutes
         } sun_event;
+
+        /**
+         * @brief Триггер: устройство недоступно
+         */
+        struct {
+            uint16_t short_addr;      // адрес устройства (0x1234)
+            char cluster_type[32];    // тип кластера: "temperature", "on_off", и т.д.
+            uint16_t timeout_ms;      // порог времени без ответа в миллисекундах (опционально)
+        } device_unavailable;
+
     } data;
 } zb_rule_trigger_t;
+
+typedef enum {
+    ZB_RULE_TRIGGER_LOGIC_ANY,  // any = OR
+    ZB_RULE_TRIGGER_LOGIC_ALL   // all = AND
+} zb_rule_trigger_logic_t;
 
 /**
  * @brief Полное правило автоматизации
@@ -127,17 +151,29 @@ typedef struct {
     char module[32];       // логическая группа: "light", "security", etc.
     uint8_t priority;      // приоритет: 1 (высший) ... 5 (низший)
     bool enabled;          // включено ли правило
-
-    zb_rule_trigger_t triggers[8];   // максимум 8 триггеров
+    zb_rule_trigger_logic_t trigger_logic;
+    zb_rule_trigger_t triggers[ZB_RULE_MAX_TRIGGERS];   // максимум 8 триггеров
     uint8_t trigger_count;           // текущее количество
 
-    zb_rule_action_t actions[4];     // максимум 4 действия
+    zb_rule_action_t actions[ZB_RULE_MAX_ACTIONS];     // максимум 4 действия
     uint8_t action_count;            // текущее количество
 } zb_rule_t;
 
 extern uint8_t rules_count;
 //extern zb_rule_t rules[ZB_RULE_MAX_COUNT];
 extern zb_rule_t** rules_array ;
+
+typedef struct {
+    char rule_id[32];
+    time_t fire_at;
+} delayed_action_t;
+
+extern delayed_action_t delayed_actions[8];
+extern uint8_t delayed_count;
+
+void schedule_delayed_action(const char* rule_id, uint32_t delay_sec);
+void process_delayed_actions(void);
+
 /**
  * @brief Инициализация движка правил: загружает из SPIFFS
  */
@@ -210,6 +246,10 @@ void zb_rule_trigger_state_update(uint16_t short_addr, esp_zb_zcl_cluster_id_t c
 );
 
 cJSON* rule_to_json(const zb_rule_t* rule);
+
+// проверка правил с триггерами вынесена в общую видимость для запуска при старте SNTP
+void check_time_triggers(void);
+
 #ifdef __cplusplus
 }
 #endif

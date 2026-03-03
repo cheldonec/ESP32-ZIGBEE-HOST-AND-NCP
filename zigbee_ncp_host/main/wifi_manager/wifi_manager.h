@@ -16,6 +16,7 @@
 #include "lwip/inet.h"
 #include "lwip/netdb.h"
 #include "lwip/sockets.h"
+#include "sntp_time.h"
 #if IP_NAPT
 #include "lwip/lwip_napt.h"
 #endif

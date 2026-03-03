@@ -25,7 +25,7 @@
     "*.new": "c",
     "gptimer.h": "c"
   },
-  "idf.portWin": "COM3",
+  "idf.portWin": "COM5",
   "idf.flashType": "UART",
   "idf.currentSetup": "c:\\Espressif\\frameworks\\v5.5.2\\esp-idf"
 }

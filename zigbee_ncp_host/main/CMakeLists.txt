@@ -16,13 +16,14 @@ file(GLOB_RECURSE SRCS_dir
     "${CMAKE_CURRENT_LIST_DIR}/system_config/*.c"
     "${CMAKE_CURRENT_LIST_DIR}/automation/*.c"
     "${CMAKE_CURRENT_LIST_DIR}/zbm_devices/*.c"
+    "${CMAKE_CURRENT_LIST_DIR}/SNTP_TIME/*.c"
 )
 
 list(APPEND SRCS_var ${SRCS_dir})
 
 set(INC_DIR_var
     "." "spiffs_manager" "srcs_ncp_host" "srcs_ncp_host/zcl"
-    "devices_manager" "wifi_manager" "web_server" "zb_quirks" "ha_integration" "system_config" "automation" "zbm_devices"
+    "devices_manager" "wifi_manager" "web_server" "zb_quirks" "ha_integration" "system_config" "automation" "zbm_devices" "SNTP_TIME"
 )
 
 # =============================================================== Сборка образов SPIFFS =====================================================

@@ -681,3 +681,35 @@ h1 {
     padding: 16px;
   }
 }
+
+/* === Универсальная кнопка удаления === */
+.delete-btn {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  background: var(--bg-delete, #ffebee);
+  color: var(--text-delete, #c62828);
+  border: 1px solid var(--border-delete, #ef9a9a);
+  border-radius: 6px;
+  padding: 0 8px;
+  font-size: 12px;
+  font-weight: bold;
+  line-height: 16px;
+  height: 20px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+}
+
+.delete-btn:hover {
+  background: #ffcdd2;
+  border-color: #ef5350;
+  color: #b71c1c;
+}
+
+.delete-btn:focus {
+  outline: none;
+}

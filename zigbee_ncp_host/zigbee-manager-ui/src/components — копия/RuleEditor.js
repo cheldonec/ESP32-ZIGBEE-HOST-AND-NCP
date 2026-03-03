@@ -1,8 +1,6 @@
 // src/components/RuleEditor.js
 import React, { useState } from 'react';
 
-
-
 // Полифил для генерации UUID v4
 const generateUUID = () => {
   if (typeof crypto !== 'undefined' && crypto.randomUUID) {
@@ -22,15 +20,12 @@ const RuleEditor = ({ rule, devices, onSave, onCancel }) => {
   const [enabled, setEnabled] = useState(rule?.enabled !== false);
   const [triggers, setTriggers] = useState(rule?.triggers || []);
   const [actions, setActions] = useState(rule?.actions || []);
-  const [triggerLogic, setTriggerLogic] = useState(rule?.trigger_logic || 'any');
+
   const modules = [
     { id: 'light', name: 'Свет' },
     { id: 'relay', name: 'Реле' },
     { id: 'security', name: 'Безопасность' },
-    { id: 'climate', name: 'Климат' },
   ];
-
-  // --- Триггеры ---
 
   const handleAddTrigger = () => {
     setTriggers([
@@ -43,23 +38,8 @@ const RuleEditor = ({ rule, devices, onSave, onCancel }) => {
         condition: 'eq',
         value: 1,
       },
-      /*{
-        type: 'time_range',
-        from: '08:00',
-        to: '09:00',
-        days_of_week: 0b00101010, // Пн, Ср, Пт по умолчанию
-        delay_sec: 0,
-      },*/
     ]);
   };
-
-  const removeTrigger = (index) => {
-    const newTriggers = [...triggers];
-    newTriggers.splice(index, 1);
-    setTriggers(newTriggers);
-  };
-
-  // --- Действия ---
 
   const handleAddAction = () => {
     setActions([
@@ -73,12 +53,6 @@ const RuleEditor = ({ rule, devices, onSave, onCancel }) => {
     ]);
   };
 
-  const removeAction = (index) => {
-    const newActions = [...actions];
-    newActions.splice(index, 1);
-    setActions(newActions);
-  };
-
   const saveRule = () => {
     const newRule = {
       id: rule?.id || generateUUID(),
@@ -86,7 +60,6 @@ const RuleEditor = ({ rule, devices, onSave, onCancel }) => {
       module,
       priority,
       enabled,
-      trigger_logic: triggerLogic,
       triggers: JSON.parse(JSON.stringify(triggers)),
       actions: JSON.parse(JSON.stringify(actions)),
     };
@@ -99,6 +72,7 @@ const RuleEditor = ({ rule, devices, onSave, onCancel }) => {
 
       {/* Прокручиваемая область */}
       <div style={{ maxHeight: 'calc(70vh - 120px)', overflowY: 'auto', paddingRight: '8px' }}>
+        {/* Стиль скролла (опционально) */}
         <style jsx>{`
           div[style*='overflowY']::-webkit-scrollbar {
             width: 6px;
@@ -187,17 +161,8 @@ const RuleEditor = ({ rule, devices, onSave, onCancel }) => {
                   padding: '12px',
                   background: 'var(--bg-primary)',
                   borderRadius: '8px',
-                  position: 'relative',
                 }}
               >
-                <button
-                  onClick={() => removeTrigger(idx)}
-                  className="delete-btn"
-                  title="Удалить триггер"
-                >
-                  ×
-                </button>
-
                 <div style={{ marginBottom: '8px' }}>
                   <select
                     value={t.type}
@@ -209,7 +174,6 @@ const RuleEditor = ({ rule, devices, onSave, onCancel }) => {
                     className="form-select"
                   >
                     <option value="device_state">Состояние устройства</option>
-                    <option value="device_unavailable">Устройство недоступно</option>
                     <option value="time_range">Временной интервал</option>
                   </select>
                 </div>
@@ -251,8 +215,6 @@ const RuleEditor = ({ rule, devices, onSave, onCancel }) => {
                           <option value="on_off">On/Off</option>
                           <option value="illuminance">Освещённость</option>
                           <option value="temperature">Температура</option>
-                          <option value="humidity">Влажность</option>
-                          <option value="battery">Батарея</option>
                         </select>
                       </div>
                       <div style={{ flex: 1 }}>
@@ -292,161 +254,9 @@ const RuleEditor = ({ rule, devices, onSave, onCancel }) => {
                     </div>
                   </>
                 )}
-                {t.type === 'time_range' && (
-                  <>
-                    {/* Время: с ... до ... */}
-                    <div style={{ display: 'flex', gap: '8px', marginBottom: '12px' }}>
-                      <div style={{ flex: 1 }}>
-                        <label>С</label>
-                        <input
-                          type="time"
-                          value={t.from || '08:00'}
-                          onChange={(e) => {
-                            const newTriggers = [...triggers];
-                            newTriggers[idx].from = e.target.value;
-                            setTriggers(newTriggers);
-                          }}
-                          className="form-input"
-                        />
-                      </div>
-                      <div style={{ flex: 1 }}>
-                        <label>До</label>
-                        <input
-                          type="time"
-                          value={t.to || '20:00'}
-                          onChange={(e) => {
-                            const newTriggers = [...triggers];
-                            newTriggers[idx].to = e.target.value;
-                            setTriggers(newTriggers);
-                          }}
-                          className="form-input"
-                        />
-                      </div>
-                    </div>
-
-                    {/* Дни недели */}
-                    <div style={{ marginBottom: '12px' }}>
-                      <label>Дни недели</label>
-                      <div style={{
-                        display: 'grid',
-                        gridTemplateColumns: 'repeat(7, 1fr)',
-                        gap: '4px',
-                        marginTop: '6px',
-                        fontSize: '14px'
-                      }}>
-                        {['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'].map((day, i) => (
-                          <label key={i} style={{
-                            textAlign: 'center',
-                            padding: '4px',
-                            background: (t.days_of_week & (1 << i)) ? 'var(--accent-color)' : 'var(--bg-secondary)',
-                            color: (t.days_of_week & (1 << i)) ? 'white' : 'var(--text-primary)',
-                            borderRadius: '4px',
-                            cursor: 'pointer'
-                          }}>
-                            <input
-                              type="checkbox"
-                              checked={!!(t.days_of_week & (1 << i))}
-                              onChange={(e) => {
-                                const newTriggers = [...triggers];
-                                if (e.target.checked) {
-                                  newTriggers[idx].days_of_week |= (1 << i);
-                                } else {
-                                  newTriggers[idx].days_of_week &= ~(1 << i);
-                                }
-                                setTriggers(newTriggers);
-                              }}
-                              style={{ display: 'none' }}
-                            />
-                            {day}
-                          </label>
-                        ))}
-                      </div>
-                    </div>
-
-                    {/* Задержка */}
-                    <div>
-                      <label>Задержка (сек)</label>
-                      <input
-                        type="number"
-                        min="0"
-                        max="3600"
-                        step="15"
-                        value={t.delay_sec || 0}
-                        onChange={(e) => {
-                          const newTriggers = [...triggers];
-                          newTriggers[idx].delay_sec = Number(e.target.value);
-                          setTriggers(newTriggers);
-                        }}
-                        placeholder="0"
-                        className="form-input"
-                        style={{ width: '100%' }}
-                      />
-                      <p style={{ fontSize: '12px', color: '#666', marginTop: '4px' }}>
-                        Например: 300 = 5 минут задержки после начала интервала
-                      </p>
-                    </div>
-                  </>
-                )}
-                {t.type === 'device_unavailable' && (
-                  <>
-                    <div style={{ marginBottom: '8px' }}>
-                      <label>Устройство</label>
-                      <select
-                        value={t.short || ''}
-                        onChange={(e) => {
-                          const newTriggers = [...triggers];
-                          newTriggers[idx].short = Number(e.target.value);
-                          setTriggers(newTriggers);
-                        }}
-                        className="form-select"
-                      >
-                        <option value="">Выберите устройство...</option>
-                        {devices.map((d) => (
-                          <option key={d.short} value={d.short}>
-                            {d.name} (0x{d.short.toString(16).padStart(4, '0').toUpperCase()})
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-
-                    <div style={{ marginBottom: '8px' }}>
-                      <label>Кластер</label>
-                      <select
-                        value={t.cluster_type || 'temperature'}
-                        onChange={(e) => {
-                          const newTriggers = [...triggers];
-                          newTriggers[idx].cluster_type = e.target.value;
-                          setTriggers(newTriggers);
-                        }}
-                        className="form-select"
-                      >
-                        <option value="temperature">Температура</option>
-                        <option value="humidity">Влажность</option>
-                        <option value="on_off">Свет</option>
-                        <option value="illuminance">Освещённость</option>
-                        <option value="battery">Батарея</option>
-                      </select>
-                    </div>
-                  </>
-                )}
               </div>
             ))
           )}
-          {/* Логика объединения триггеров */}
-          <div className="form-group" style={{ marginTop: '16px', marginBottom: '16px' }}>
-            <label>Логика триггеров</label>
-            <select
-              value={triggerLogic}
-              onChange={(e) => setTriggerLogic(e.target.value)}
-              className="form-select"
-            >
-              <option value="any">Любой (ИЛИ) — сработает при любом условии</option>
-              <option value="all">Все (И) — сработает только при всех условиях</option>
-            </select>
-            <p style={{ fontSize: '12px', color: '#666', marginTop: '4px' }}>
-              Например: «время 20:00 И освещённость &lt; 10»
-            </p>
-          </div>
           <button
             onClick={handleAddTrigger}
             className="btn-primary"
@@ -471,17 +281,8 @@ const RuleEditor = ({ rule, devices, onSave, onCancel }) => {
                   padding: '12px',
                   background: 'var(--bg-primary)',
                   borderRadius: '8px',
-                  position: 'relative',
                 }}
               >
-                <button
-                  onClick={() => removeTrigger(idx)}
-                  className="delete-btn"
-                  title="Удалить триггер"
-                >
-                  ×
-                </button>
-
                 <div style={{ marginBottom: '8px' }}>
                   <select
                     value={a.type}
@@ -493,7 +294,6 @@ const RuleEditor = ({ rule, devices, onSave, onCancel }) => {
                     className="form-select"
                   >
                     <option value="device_command">Команда устройству</option>
-                    <option value="http_request">Отправить уведомление (Telegram)</option>
                   </select>
                 </div>
 
@@ -553,31 +353,6 @@ const RuleEditor = ({ rule, devices, onSave, onCancel }) => {
                     </div>
                   </>
                 )}
-
-                {a.type === 'http_request' && (
-                  <div>
-                    <p style={{ color: '#888', fontSize: '13px', margin: '8px 0' }}>
-                      Отправит сообщение в Telegram. API ключ настраивается в разделе «Настройки».
-                    </p>
-                    <div>
-                      <label>Сообщение</label>
-                      <textarea
-                        value={a.body || 'Сработало правило: {{name}}'}
-                        onChange={(e) => {
-                          const newActions = [...actions];
-                          newActions[idx].body = e.target.value;
-                          setActions(newActions);
-                        }}
-                        className="form-input"
-                        rows="2"
-                        placeholder="Текст уведомления"
-                      />
-                    </div>
-                    <div style={{ marginTop: '8px', fontSize: '12px', color: '#666' }}>
-                      Поддерживается подстановка: <code>{{name}}</code>, <code>{'{{time}}'}</code>
-                    </div>
-                  </div>
-                )}
               </div>
             ))
           )}
@@ -591,7 +366,7 @@ const RuleEditor = ({ rule, devices, onSave, onCancel }) => {
         </div>
       </div>
 
-      {/* Кнопки сохранения */}
+      {/* Кнопки сохранения — фиксированы внизу */}
       <div className="modal-buttons" style={{ marginTop: '16px', paddingTop: '8px', borderTop: '1px solid var(--border-color)' }}>
         <button onClick={saveRule} className="btn-primary">💾 Сохранить</button>
         <button onClick={onCancel} className="btn-danger">❌ Отмена</button>

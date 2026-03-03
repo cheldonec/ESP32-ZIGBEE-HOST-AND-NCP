@@ -347,6 +347,7 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
         ip_event_got_ip_t *event = (ip_event_got_ip_t *) event_data;
         ESP_LOGI(TAG_STA, "Got IP:" IPSTR, IP2STR(&event->ip_info.ip));
         s_is_in_ap_only_mode = false;
+        
         //s_retry_num = 0;
         //xEventGroupSetBits(s_wifi_event_group, WIFI_CONNECTED_BIT);
         softap_set_dns_addr(esp_netif_ap,esp_netif_sta);
@@ -364,6 +365,9 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
         vTaskDelay(pdMS_TO_TICKS(100)); // Wait before retrying
         //update_ip_from_event_extern_call_and_send_notify(event->ip_info.ip.addr);
         ha_integration_init();
+
+        // Получаем время из интернета
+        sntp_initialize();
         
         //start_webserver();
         

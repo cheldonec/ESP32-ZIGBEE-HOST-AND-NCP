@@ -125,6 +125,21 @@ esp_err_t api_post_rule_handler(httpd_req_t *req)
             }
             t->data.device_state.value = value ? value->valuedouble : 0;
         }
+        else if (strcmp(type->valuestring, "time_range") == 0) {
+            t->type = ZB_RULE_TRIGGER_TIME_RANGE;
+            cJSON* from = cJSON_GetObjectItem(trig_item, "from");
+            cJSON* to = cJSON_GetObjectItem(trig_item, "to");
+            cJSON* days = cJSON_GetObjectItem(trig_item, "days_of_week");
+            cJSON* delay = cJSON_GetObjectItem(trig_item, "delay_sec");
+
+            if (from) strncpy(t->data.time_range.from, from->valuestring, 5);
+            if (to) strncpy(t->data.time_range.to, to->valuestring, 5);
+            t->data.time_range.from[5] = '\0';
+            t->data.time_range.to[5] = '\0';
+
+            t->data.time_range.days_of_week = days ? days->valueint : 0xFF; // все дни
+            t->data.time_range.delay_sec = delay ? delay->valueint : 0;
+        }
         new_rule.trigger_count++;
     }
 
@@ -257,6 +272,21 @@ esp_err_t api_put_rule_handler(httpd_req_t *req)
                     else if (strcmp(cond->valuestring, "lte") == 0) t->data.device_state.cond = ZB_RULE_COND_LTE;
                 }
                 t->data.device_state.value = value ? value->valuedouble : 0;
+            }
+            else if (strcmp(type->valuestring, "time_range") == 0) {
+                t->type = ZB_RULE_TRIGGER_TIME_RANGE;
+                cJSON* from = cJSON_GetObjectItem(trig_item, "from");
+                cJSON* to = cJSON_GetObjectItem(trig_item, "to");
+                cJSON* days = cJSON_GetObjectItem(trig_item, "days_of_week");
+                cJSON* delay = cJSON_GetObjectItem(trig_item, "delay_sec");
+
+                if (from) strncpy(t->data.time_range.from, from->valuestring, 5);
+                if (to) strncpy(t->data.time_range.to, to->valuestring, 5);
+                t->data.time_range.from[5] = '\0';
+                t->data.time_range.to[5] = '\0';
+
+                t->data.time_range.days_of_week = days ? days->valueint : 0xFF; // все дни
+                t->data.time_range.delay_sec = delay ? delay->valueint : 0;
             }
             new_rule.trigger_count++;
         }

@@ -1,5 +1,5 @@
 ﻿set(PRIV_REQ_var
-    spiffs vfs esp_wifi nvs_flash driver esp_event esp_timer esp_http_server mqtt
+    spiffs vfs esp_wifi nvs_flash driver esp_event esp_timer esp_http_server mqtt esp_psram
 )
 
 set(SRCS_var main.c)
@@ -17,13 +17,14 @@ file(GLOB_RECURSE SRCS_dir
     "${CMAKE_CURRENT_LIST_DIR}/automation/*.c"
     "${CMAKE_CURRENT_LIST_DIR}/zbm_devices/*.c"
     "${CMAKE_CURRENT_LIST_DIR}/SNTP_TIME/*.c"
+    "${CMAKE_CURRENT_LIST_DIR}/switch_gpio_driver/*.c"
 )
 
 list(APPEND SRCS_var ${SRCS_dir})
 
 set(INC_DIR_var
     "." "spiffs_manager" "srcs_ncp_host" "srcs_ncp_host/zcl"
-    "devices_manager" "wifi_manager" "web_server" "zb_quirks" "ha_integration" "system_config" "automation" "zbm_devices" "SNTP_TIME"
+    "devices_manager" "wifi_manager" "web_server" "zb_quirks" "ha_integration" "system_config" "automation" "zbm_devices" "SNTP_TIME" "switch_gpio_driver"
 )
 
 # =============================================================== Сборка образов SPIFFS =====================================================

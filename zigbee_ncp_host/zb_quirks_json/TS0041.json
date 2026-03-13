@@ -1,0 +1,97 @@
+{
+  "friendly_name": "TS0041 Remote",
+  "short_addr": 0,
+  "endpointscount": 1,
+  "is_in_build_status": 2,
+  "capability": 0,
+  "lqi": 0,
+  "device_timeout_ms": 900000,
+  "manufacturer_code": 0,
+  
+  "device_basic_cluster": {
+    "cluster_id": 0,
+    "zcl_version": 3,
+    "app_version": 68,
+    "stack_version": 0,
+    "hw_version": 0,
+    "power_source": 3,
+    "power_source_text": "Battery",
+    "enabled": true,
+    "nostandart_attributes": [
+      {
+        "id": 65534,
+        "attr_id_text": "Custom_0xFFFE",
+        "type": 48,
+        "acces": 0,
+        "size": 1,
+        "is_void_pointer": 0,
+        "manuf_code": 0,
+        "parent_cluster_id": 0,
+        "value": 0
+      }
+    ]
+  },
+  "device_power_config_cluster": {
+    "cluster_id": 1,
+    "battery_voltage_min_th": 0,
+    "battery_percentage_min_th": 0,
+    "mains_voltage_min_th": 0,
+    "mains_voltage_max_th": 65535
+  },
+  "endpoints": [
+    {
+      "ep_id": 1,
+      "is_use_on_device": 1,
+      "device_type": "on_off_switch",
+      "onoff": {
+        "cluster_id": 6,
+        "start_up": 255,
+        "custom_commands": [
+          {
+            "cmd_id": 253,
+            "cmd_friendly_name": "Кнопка",
+            "cmd_payload_hex": "00",
+            "cmd_payload_len": 1
+          }
+        ]
+      },
+      "unkinpclcount": 1,
+      "unknown_input_clusters": [
+        {
+          "id": 57344,
+          "cluster_id_text": "Unknown Cluster",
+          "role_mask": 1,
+          "manuf_code": 0,
+          "is_use_on_device": 1,
+          "attributes": [
+            {
+              "id": 0,
+              "attr_id_text": "Custom_0x0000",
+              "type": 16,
+              "acces": 0,
+              "size": 1,
+              "is_void_pointer": 0,
+              "manuf_code": 0,
+              "parent_cluster_id": 57344,
+              "value": 0
+            },
+            {
+              "id": 1,
+              "attr_id_text": "Custom_0x0001",
+              "type": 16,
+              "acces": 0,
+              "size": 1,
+              "is_void_pointer": 0,
+              "manuf_code": 0,
+              "parent_cluster_id": 57344,
+              "value": 0
+            }
+          ]
+        }
+      ],
+      "outpclcount": 2,
+      "output_clusters": [25, 10],
+      "unkoutpclcount": 0
+    }
+  ]
+}

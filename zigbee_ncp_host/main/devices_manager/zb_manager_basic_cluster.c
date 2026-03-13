@@ -234,7 +234,7 @@ esp_err_t zb_manager_basic_cluster_update_attribute(zigbee_manager_basic_cluster
                     memcpy(custom_attr->p_value, value, value_len);
                     custom_attr->size = value_len;
                     //custom_attr->last_update_ms = esp_log_timestamp();
-                    return ESP_OK;
+                    return 0xff;
                 }
                 return ESP_ERR_NOT_FOUND;
             }
@@ -482,4 +482,181 @@ attribute_custom_t *zb_manager_basic_cluster_find_custom_attr_obj(zigbee_manager
     }
 
     return NULL; // не найден
+}
+
+// File: zb_manager_basic_cluster.c
+
+/**
+ * @brief Converts zigbee_manager_basic_cluster_t to cJSON object
+ * @param cluster Pointer to the Basic cluster structure
+ * @return cJSON* - newly allocated JSON object, or NULL on failure
+ */
+cJSON* zbm_basic_cluster_obj_to_json(zigbee_manager_basic_cluster_t *cluster)
+{
+    if (!cluster) {
+        ESP_LOGW(TAG, "zbm_basic_cluster_obj_to_json: cluster is NULL");
+        return NULL;
+    }
+
+    cJSON *basic = cJSON_CreateObject();
+    if (!basic) {
+        ESP_LOGE(TAG, "Failed to create basic cluster JSON object");
+        return NULL;
+    }
+
+    // === Standard Attributes ===
+    cJSON_AddNumberToObject(basic, "cluster_id", 0x0000);
+    cJSON_AddNumberToObject(basic, "zcl_version", cluster->zcl_version);
+    cJSON_AddNumberToObject(basic, "app_version", cluster->application_version);
+    cJSON_AddNumberToObject(basic, "stack_version", cluster->stack_version);
+    cJSON_AddNumberToObject(basic, "hw_version", cluster->hw_version);
+
+    cJSON_AddStringToObject(basic, "manufacturer_name", cluster->manufacturer_name);
+    cJSON_AddStringToObject(basic, "model_id", cluster->model_identifier);
+    cJSON_AddStringToObject(basic, "date_code", cluster->date_code);
+    cJSON_AddStringToObject(basic, "product_code", cluster->product_code);
+    cJSON_AddStringToObject(basic, "product_url", cluster->product_url);
+    cJSON_AddStringToObject(basic, "manufacturer_version_details", cluster->manufacturer_version_details);
+    cJSON_AddStringToObject(basic, "serial_number", cluster->serial_number);
+    cJSON_AddStringToObject(basic, "product_label", cluster->product_label);
+    cJSON_AddStringToObject(basic, "location", cluster->location_description);
+    cJSON_AddNumberToObject(basic, "env", cluster->physical_environment);
+
+    cJSON_AddNumberToObject(basic, "power_source", cluster->power_source);
+    const char *ps_text = get_power_source_string(cluster->power_source);
+    cJSON_AddStringToObject(basic, "power_source_text", ps_text);
+
+    cJSON_AddBoolToObject(basic, "enabled", cluster->device_enabled);
+    cJSON_AddNumberToObject(basic, "alarm_mask", cluster->alarm_mask);
+    cJSON_AddNumberToObject(basic, "disable_local_config", cluster->disable_local_config);
+    cJSON_AddStringToObject(basic, "sw_build_id", cluster->sw_build_id);
+    cJSON_AddNumberToObject(basic, "last_update_ms", cluster->last_update_ms);
+
+    // === Custom Attributes (nostandart_attributes) ===
+    if (cluster->nostandart_attr_count > 0 && cluster->nostandart_attr_array) {
+        cJSON *attrs = NULL;
+        attrs = cJSON_CreateArray();
+        if (attrs) {
+            for (int i = 0; i < cluster->nostandart_attr_count; i++) {
+                attribute_custom_t *attr = NULL;
+                attr = cluster->nostandart_attr_array[i];
+                if (!attr) continue;
+
+                cJSON *attr_obj = NULL;
+                attr_obj = cJSON_CreateObject();
+                if (!attr_obj) continue;
+
+                cJSON_AddNumberToObject(attr_obj, "id", attr->id);
+                cJSON_AddStringToObject(attr_obj, "attr_id_text", attr->attr_id_text);
+                cJSON_AddNumberToObject(attr_obj, "type", attr->type);
+                cJSON_AddNumberToObject(attr_obj, "acces", attr->acces);
+                cJSON_AddNumberToObject(attr_obj, "size", attr->size);
+                cJSON_AddNumberToObject(attr_obj, "is_void_pointer", attr->is_void_pointer);
+                cJSON_AddNumberToObject(attr_obj, "manuf_code", attr->manuf_code);
+                cJSON_AddNumberToObject(attr_obj, "parent_cluster_id", attr->parent_cluster_id);
+
+                // Добавляем значение атрибута (через общую функцию)
+                zbm_json_add_attribute_value(attr_obj, attr);
+
+                cJSON_AddItemToArray(attrs, attr_obj);
+            }
+            cJSON_AddItemToObject(basic, "nostandart_attributes", attrs);
+        }
+    }
+
+    return basic;
+}
+
+esp_err_t zbm_basic_cluster_load_from_json(zigbee_manager_basic_cluster_t *cluster, cJSON *json_obj)
+{
+    if (!cluster || !json_obj) return ESP_ERR_INVALID_ARG;
+
+    // Инициализируем базовые значения
+    *cluster = (zigbee_manager_basic_cluster_t)ZIGBEE_BASIC_CLUSTER_DEFAULT_INIT();
+    cluster->last_update_ms = esp_log_timestamp();
+
+    // === Standard Attributes ===
+    LOAD_NUMBER(json_obj, "zcl_version", cluster->zcl_version);
+    LOAD_NUMBER(json_obj, "app_version", cluster->application_version);
+    LOAD_NUMBER(json_obj, "stack_version", cluster->stack_version);
+    LOAD_NUMBER(json_obj, "hw_version", cluster->hw_version);
+
+    LOAD_STRING(json_obj, "manufacturer_name", cluster->manufacturer_name);
+    LOAD_STRING(json_obj, "model_id", cluster->model_identifier);
+    LOAD_STRING(json_obj, "date_code", cluster->date_code);
+    LOAD_STRING(json_obj, "product_code", cluster->product_code);
+    LOAD_STRING(json_obj, "product_url", cluster->product_url);
+    LOAD_STRING(json_obj, "manufacturer_version_details", cluster->manufacturer_version_details);
+    LOAD_STRING(json_obj, "serial_number", cluster->serial_number);
+    LOAD_STRING(json_obj, "product_label", cluster->product_label);
+    LOAD_STRING(json_obj, "location", cluster->location_description);
+
+    cJSON *ps_item = cJSON_GetObjectItem(json_obj, "power_source");
+    if (ps_item && cJSON_IsNumber(ps_item)) {
+        cluster->power_source = (uint8_t)ps_item->valueint;
+        const char *ps_text = get_power_source_string(cluster->power_source);
+        strlcpy(cluster->power_source_text, ps_text, sizeof(cluster->power_source_text));
+    }
+
+    LOAD_NUMBER(json_obj, "env", cluster->physical_environment);
+    cJSON *enabled_item = cJSON_GetObjectItem(json_obj, "enabled");
+    if (enabled_item) {
+        cluster->device_enabled = cJSON_IsTrue(enabled_item);
+    }
+    LOAD_NUMBER(json_obj, "alarm_mask", cluster->alarm_mask);
+    LOAD_NUMBER(json_obj, "disable_local_config", cluster->disable_local_config);
+    LOAD_STRING(json_obj, "sw_build_id", cluster->sw_build_id);
+
+    cJSON *last_update_item = cJSON_GetObjectItem(json_obj, "last_update_ms");
+    if (last_update_item && cJSON_IsNumber(last_update_item)) {
+        cluster->last_update_ms = last_update_item->valueint;
+    }
+
+    // === Custom Attributes через add_custom_attribute ===
+    cJSON *nostandart_attrs = cJSON_GetObjectItem(json_obj, "nostandart_attributes");
+    if (nostandart_attrs && cJSON_IsArray(nostandart_attrs)) {
+        int count = cJSON_GetArraySize(nostandart_attrs);
+        ESP_LOGD(TAG, "Loading %d nostandart attributes for Basic cluster", count);
+
+        for (int i = 0; i < count; i++) {
+            cJSON *attr_obj = cJSON_GetArrayItem(nostandart_attrs, i);
+            if (!attr_obj) continue;
+
+            cJSON *id_item = cJSON_GetObjectItem(attr_obj, "id");
+            cJSON *type_item = cJSON_GetObjectItem(attr_obj, "type");
+            if (!id_item || !cJSON_IsNumber(id_item) || !type_item || !cJSON_IsNumber(type_item)) {
+                ESP_LOGW(TAG, "Invalid attribute format at index %d", i);
+                continue;
+            }
+
+            uint16_t attr_id = id_item->valueint;
+            uint8_t attr_type = type_item->valueint;
+
+            // Добавляем через стандартный метод → гарантируем согласованность
+            esp_err_t err = zb_manager_basic_cluster_add_custom_attribute(cluster, attr_id, attr_type);
+            if (err != ESP_OK) {
+                ESP_LOGE(TAG, "Failed to add custom attr 0x%04x: %s", attr_id, esp_err_to_name(err));
+                continue;
+            }
+
+            // Находим только что добавленный атрибут
+            attribute_custom_t *attr = zb_manager_basic_cluster_find_custom_attr_obj(cluster, attr_id);
+            if (!attr) {
+                ESP_LOGE(TAG, "Added attr 0x%04x but failed to find it", attr_id);
+                continue;
+            }
+
+            // Загружаем значение
+            attr->p_value = NULL;
+            zbm_json_load_attribute_value(attr, attr_obj);
+
+            // Копируем метаданные (необязательно, но для полноты)
+            LOAD_STRING(attr_obj, "attr_id_text", attr->attr_id_text);
+            LOAD_NUMBER(attr_obj, "acces", attr->acces);
+            LOAD_NUMBER(attr_obj, "manuf_code", attr->manuf_code);
+            // size и is_void_pointer уже установлены в add_custom_attribute
+        }
+    }
+
+    return ESP_OK;
 }

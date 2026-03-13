@@ -13,6 +13,7 @@
 #include "esp_check.h"
 #include "zbm_dev_base.h"
 #include "zbm_dev_base_utils.h"
+#include "quirks_storage.h"
 #include "zbm_dev_polling.h"
 #include "zbm_dev_append_sheduler.h"
 
@@ -102,6 +103,153 @@ static void StartUpdateDevices(device_appending_sheduler_t* shedule)
             }
     }
 }
+
+// === ИЗМЕНЁННАЯ ФУНКЦИЯ zbm_dev_create_from_quirk_and_data ===
+static device_custom_t* zbm_dev_create_from_quirk_and_data(
+    const char* model_id,
+    const char* manufacturer_name,
+    zb_manager_cmd_read_attr_resp_message_t* read_resp)
+{
+    if (!model_id || !read_resp) {
+        ESP_LOGE(TAG, "❌ model_id or read_resp is NULL");
+        return NULL;
+    }
+
+    ESP_LOGI(TAG, "Creating device from quirk: %s / %s", model_id, manufacturer_name ? manufacturer_name : "unknown");
+
+    // 1. Получаем шаблон из quirks
+    cJSON *quirk_template = quirks_get_device_template(model_id, manufacturer_name);
+    if (!quirk_template) {
+        ESP_LOGW(TAG, "No quirk template found for %s/%s", model_id, manufacturer_name ? manufacturer_name : "unknown");
+        return NULL;
+    }
+
+    // 2. Создаём пустой JSON для устройства
+    cJSON *dev_json = cJSON_CreateObject();
+    if (!dev_json) {
+        cJSON_Delete(quirk_template);
+        return NULL;
+    }
+    /*
+    // === Основные поля устройства ===
+    char ieee_str[24] = {0};
+    ieee_to_str(ieee_str, dev->ieee_addr);
+    cJSON_AddStringToObject(dev_obj, "ieee_addr", ieee_str);
+    */
+    
+
+    // 3. Устанавливаем обязательные поля
+    uint16_t short_addr = read_resp->info.src_address.u.short_addr;
+    cJSON_AddNumberToObject(dev_json, "short_addr", short_addr);
+    cJSON_AddNumberToObject(dev_json, "is_in_build_status", 2);
+    cJSON_AddNumberToObject(dev_json, "last_seen_ms", esp_log_timestamp());
+    cJSON_AddBoolToObject(dev_json, "is_online", true);
+
+    // 4. Применяем шаблон — он заполнит все поля: endpoints, clusters, commands
+    esp_err_t apply_res = quirks_apply_template_to_device(dev_json, quirk_template);
+    cJSON_Delete(quirk_template);  // больше не нужен
+    if (apply_res != ESP_OK) {
+        cJSON_Delete(dev_json);
+        return NULL;
+    }
+
+    // 5. Обновляем Basic Cluster из read_resp
+    cJSON *basic = cJSON_GetObjectItem(dev_json, "device_basic_cluster");
+    if (!basic) {
+        basic = cJSON_CreateObject();
+        cJSON_AddItemToObject(dev_json, "device_basic_cluster", basic);
+    }
+
+    for (int i = 0; i < read_resp->attr_count; i++) {
+        zb_manager_read_resp_attr_t *attr = &read_resp->attr_arr[i];
+        if (attr->status != ESP_ZB_ZCL_STATUS_SUCCESS) continue;
+
+        const char *key = NULL;
+        switch (attr->attr_id) {
+            case ESP_ZB_ZCL_ATTR_BASIC_MANUFACTURER_NAME_ID:
+                key = "manufacturer_name";
+                if (attr->attr_value && attr->attr_len > 0) {
+                    char *str = strndup((char*)attr->attr_value, attr->attr_len);
+                    cJSON_ReplaceItemInObject(basic, key, cJSON_CreateString(str));
+                    free(str);
+                }
+                break;
+
+            case ESP_ZB_ZCL_ATTR_BASIC_MODEL_IDENTIFIER_ID:
+                key = "model_id";
+                if (attr->attr_value && attr->attr_len > 0) {
+                    char *str = strndup((char*)attr->attr_value, attr->attr_len);
+                    cJSON_ReplaceItemInObject(basic, key, cJSON_CreateString(str));
+                    free(str);
+                }
+                break;
+
+            case ESP_ZB_ZCL_ATTR_BASIC_POWER_SOURCE_ID:
+                key = "power_source";
+                if (attr->attr_value) {
+                    cJSON_ReplaceItemInObject(basic, key, cJSON_CreateNumber(*(uint8_t*)attr->attr_value));
+                }
+                break;
+
+            case ESP_ZB_ZCL_ATTR_BASIC_APPLICATION_VERSION_ID:
+                key = "app_version";
+                if (attr->attr_value) {
+                    cJSON_ReplaceItemInObject(basic, key, cJSON_CreateNumber(*(uint8_t*)attr->attr_value));
+                }
+                break;
+
+            case ESP_ZB_ZCL_ATTR_BASIC_ZCL_VERSION_ID:
+                key = "zcl_version";
+                if (attr->attr_value) {
+                    cJSON_ReplaceItemInObject(basic, key, cJSON_CreateNumber(*(uint8_t*)attr->attr_value));
+                }
+                break;
+
+            default:
+                ESP_LOGD(TAG, "Unhandled Basic attr 0x%04x", attr->attr_id);
+                break;
+        }
+    }
+
+    // 6. Генерируем friendly_name, если нет
+    if (!cJSON_GetObjectItem(dev_json, "friendly_name")) {
+        char fn[32];
+        snprintf(fn, sizeof(fn), "%s_%04x", model_id, short_addr);
+        cJSON_AddStringToObject(dev_json, "friendly_name", fn);
+        ESP_LOGI(TAG, "Generated friendly_name: %s", fn);
+    }
+
+    // 7. Создаём новое устройство
+    device_custom_t *new_device = calloc(1, sizeof(device_custom_t));
+    if (!new_device) {
+        ESP_LOGE(TAG, "Failed to allocate memory for new_device");
+        cJSON_Delete(dev_json);
+        return NULL;
+    }
+
+    // 8. Загружаем данные из JSON
+    esp_err_t load_res = zbm_dev_base_load_device_from_json(new_device, dev_json);
+    cJSON_Delete(dev_json);
+
+    if (load_res != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to load device from generated JSON");
+        free(new_device);
+        return NULL;
+    }
+
+    // 9. Убедимся, что статус построения установлен
+    new_device->is_in_build_status = 2;
+
+    // 10. Настройка таймаута и фиксапов
+    zbm_dev_configure_device_timeout(new_device);
+    zb_manager_apply_device_fixups(new_device);
+
+    ESP_LOGI(TAG, "✅ Device successfully created from quirk: %s (short: 0x%04x)", 
+             new_device->friendly_name, new_device->short_addr);
+
+    return new_device;
+}
+
 
 static void zb_pairing_worker_task(void *pvParameters)
 {
@@ -429,6 +577,54 @@ static void zb_pairing_worker_task(void *pvParameters)
                         }
                 }
                 sheduler->tuya_magic_status = 2;
+                // Проверка квирков
+                // === 🔍 ПРОВЕРКА КВИРКОВ ===
+                const char *model_id = device->server_BasicClusterObj->model_identifier;
+                const char *manufacturer_name = device->server_BasicClusterObj->manufacturer_name;
+
+                cJSON *quirk_template = quirks_get_device_template(model_id, manufacturer_name);
+                if (quirk_template != NULL) {
+                    ESP_LOGI(TAG, "✅ Quirk template found for %s/%s", model_id, manufacturer_name);
+
+                    // Создаём временный JSON для нового устройства
+                    device_custom_t *new_device = zbm_dev_create_from_quirk_and_data(model_id, manufacturer_name, read_resp);
+                    if (new_device) {
+                        
+                        // добавляем ieee и short
+                        memcpy(new_device->ieee_addr, device->ieee_addr, 8);
+                        new_device->short_addr = device->short_addr;
+                        //zbm_dev_configure_device_timeout(new_device);
+                        //zb_manager_apply_device_fixups(new_device);
+
+                        if (zbm_dev_base_dev_obj_append_safe(new_device) == ESP_OK) {
+                            ESP_LOGI(TAG, "✅ Device from quirk template appended: 0x%04x", new_device->short_addr);
+                            ws_notify_device_update(new_device->short_addr);
+                            zbm_dev_base_queue_save_req_cmd();
+
+                            // Удаляем временный шедулер
+                            zbm_dev_delete_appending_sheduler(sheduler);
+                            new_device->is_in_build_status = 2;
+                            // Освобождаем read_resp и выходим
+                            zb_manager_free_read_attr_resp_attr_array(read_resp);
+                            read_resp = NULL;
+                            break;
+
+                        } else {
+                            ESP_LOGE(TAG, "❌ Failed to append device from quirk");
+                            free(new_device);
+                        }
+                               
+                        // Завершаем процесс — квирк обработан, стандартное обнаружение не нужно
+                        zb_manager_free_read_attr_resp_attr_array(read_resp);
+                        read_resp = NULL;
+                        break;
+                    } else {
+                        ESP_LOGE(TAG, "❌ Failed to create device from quirk");
+                    }
+                }
+                // === 🚫 Квирка нет — продолжаем стандартное добавление ===
+
+                // конец квирков
                 sheduler->active_ep_req_status = 1;
                 sheduler->active_ep_req.addr_of_interest = device->short_addr;
                 // Отправляем ActiveEp

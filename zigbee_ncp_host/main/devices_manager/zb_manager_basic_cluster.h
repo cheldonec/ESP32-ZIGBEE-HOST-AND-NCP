@@ -5,6 +5,7 @@
 #include "esp_err.h"
 #include "zbm_clusters.h"
 #include "esp_zigbee_zcl_command.h"
+#include "cJSON.h"
 
 
 
@@ -161,4 +162,19 @@ uint8_t zb_manager_basic_factory_reset_cmd_req(esp_zb_zcl_basic_fact_reset_cmd_t
 esp_err_t zb_manager_basic_cluster_add_custom_attribute(zigbee_manager_basic_cluster_t *cluster, uint16_t attr_id, uint8_t attr_type);
 
 attribute_custom_t *zb_manager_basic_cluster_find_custom_attr_obj(zigbee_manager_basic_cluster_t *cluster, uint16_t attr_id);
+
+/**
+ * @brief Convert Basic Cluster object to cJSON
+ * @param cluster Pointer to the cluster
+ * @return cJSON* - new JSON object, or NULL
+ */
+cJSON* zbm_basic_cluster_obj_to_json(zigbee_manager_basic_cluster_t *cluster);
+
+/**
+ * @brief Load Basic cluster from JSON
+ * @param cluster Pointer to cluster struct (must be allocated or zeroed)
+ * @param json_obj cJSON object
+ * @return ESP_OK on success
+ */
+esp_err_t zbm_basic_cluster_load_from_json(zigbee_manager_basic_cluster_t *cluster, cJSON *json_obj);
 #endif

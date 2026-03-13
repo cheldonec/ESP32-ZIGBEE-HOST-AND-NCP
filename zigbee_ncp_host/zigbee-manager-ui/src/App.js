@@ -10,6 +10,7 @@ import RuleList from './components/RuleList';
 import RuleEditor from './components/RuleEditor';
 import DeviceExplorerModal from './components/DeviceExplorerModal';
 import DeviceCard from './components/DeviceCard';
+import MemoryMonitor from './components/MemoryMonitor';
 
 function App() {
   const [showSettings, setShowSettings] = useState(false);
@@ -57,7 +58,7 @@ function App() {
   const [theme, setTheme] = useState('dark');
   const [wifiSSID, setWifiSSID] = useState('...');
   const [isNetworkOpen, setIsNetworkOpen] = useState(false);
-
+  const [virtualVars, setVirtualVars] = useState(Array(32).fill(0)); // начальное значение
   // === Модальные окна ===
   const [showBindModal, setShowBindModal] = useState(false);
   const [bindForm, setBindForm] = useState({
@@ -94,104 +95,102 @@ function App() {
 
   // === Конвертация полного JSON → в формат DeviceCard ===
   const convertToDeviceCardFormat = (fullDev) => {
-    if (!fullDev) return null;
+  if (!fullDev) return null;
 
-    const short = fullDev.short_addr;
-    const name = fullDev.friendly_name || 'unknown';
-    const online = fullDev.is_online;
+  const short = fullDev.short_addr;
+  const name = fullDev.friendly_name || 'unknown';
+  const online = fullDev.is_online;
 
-    let battery = null;
-    if (online && fullDev.device_power_config_cluster) {
-      const pc = fullDev.device_power_config_cluster;
-      const voltageRaw = pc.battery_voltage;
-      if (voltageRaw !== 0xFF) {
-        const voltage = voltageRaw * 0.1;
-        const percentageRaw = pc.battery_percentage;
-        const percentage = percentageRaw !== 0xFF ? Math.round(percentageRaw / 2) : -1;
+  let battery = null;
+  if (online && fullDev.device_power_config_cluster) {
+    const pc = fullDev.device_power_config_cluster;
+    const voltageRaw = pc.battery_voltage;
+    if (voltageRaw !== 0xFF) {
+      const voltage = voltageRaw * 0.1;
+      const percentageRaw = pc.battery_percentage;
+      const percentage = percentageRaw !== 0xFF ? Math.round(percentageRaw / 2) : -1;
 
-        battery = {
-          voltage,
-          percent: percentage >= 0 && percentage <= 100 ? percentage : undefined,
-          display: `${voltage.toFixed(1)} В`,
-          percent_display: percentage >= 0 && percentage <= 100 ? `${percentage}%` : undefined,
-        };
-      }
+      battery = {
+        voltage,
+        percent: percentage >= 0 && percentage <= 100 ? percentage : undefined,
+        display: `${voltage.toFixed(1)} В`,
+        percent_display: percentage >= 0 && percentage <= 100 ? `${percentage}%` : undefined,
+      };
     }
+  }
 
-    const clusters = [];
+  const clusters = [];
 
-    if (fullDev.endpoints && Array.isArray(fullDev.endpoints)) {
-      for (const ep of fullDev.endpoints) {
-        const epId = ep.ep_id;
-        const epName = ep.friendly_name || `[0x${short.toString(16)}] [0x${epId.toString(16)}]`;
+  if (fullDev.endpoints && Array.isArray(fullDev.endpoints)) {
+    for (const ep of fullDev.endpoints) {
+      const epId = ep.ep_id;
+      const epName = ep.friendly_name || `[0x${short.toString(16)}] [0x${epId.toString(16)}]`;
 
-        // On/Off Cluster
-        if (ep.onoff) {
+      if (ep.onoff) {
+        clusters.push({
+          type: 'on_off',
+          endpoint_id: epId,
+          endpoint_name: epName,
+          value: ep.onoff.on_off,
+          display: ep.onoff.on_off ? 'ON' : 'OFF',
+          unit: '',
+        });
+      }
+
+      if (ep.temperature) {
+        const raw = ep.temperature.measured_value;
+        if (raw !== undefined && raw !== -32768) {
+          const temp = raw / 100.0;
           clusters.push({
-            type: 'on_off',
+            type: 'temperature',
             endpoint_id: epId,
             endpoint_name: epName,
-            value: ep.onoff.on,
-            display: ep.onoff.on ? 'ON' : 'OFF',
-            unit: '',
+            value: temp,
+            display: `${temp.toFixed(1)} °C`,
+            unit: '°C',
           });
         }
+      }
 
-        // Temperature Cluster
-        if (ep.temperature) {
-          const raw = ep.temperature.measured_value;
-          if (raw !== undefined && raw !== -32768) {
-            const temp = raw / 100.0;
-            clusters.push({
-              type: 'temperature',
-              endpoint_id: epId,
-              endpoint_name: epName,
-              value: temp,
-              display: `${temp.toFixed(1)} °C`,
-              unit: '°C',
-            });
-          }
-        }
-
-        // Humidity Cluster
-        if (ep.humidity) {
-          const raw = ep.humidity.measured_value;
-          if (raw !== undefined && raw !== 0xffff) {
-            const hum = raw / 100.0;
-            clusters.push({
-              type: 'humidity',
-              endpoint_id: epId,
-              endpoint_name: epName,
-              value: hum,
-              display: `${hum.toFixed(1)} %`,
-              unit: '%',
-            });
-          }
+      if (ep.humidity) {
+        const raw = ep.humidity.measured_value;
+        if (raw !== undefined && raw !== 0xffff) {
+          const hum = raw / 100.0;
+          clusters.push({
+            type: 'humidity',
+            endpoint_id: epId,
+            endpoint_name: epName,
+            value: hum,
+            display: `${hum.toFixed(1)} %`,
+            unit: '%',
+          });
         }
       }
     }
+  }
 
-    if (clusters.length === 0) {
-      clusters.push({
-        type: 'unknown',
-        display: 'No data',
-        unit: '',
-        endpoint_id: 0,
-        endpoint_name: 'Unknown',
-      });
-    }
+  if (clusters.length === 0) {
+    clusters.push({
+      type: 'unknown',
+      display: 'No data',
+      unit: '',
+      endpoint_id: 0,
+      endpoint_name: 'Unknown',
+    });
+  }
 
-    return {
-      short,
-      name,
-      online,
-      clusters,
-      ...(battery && { battery }),
-      model_id: fullDev.device_basic_cluster?.model_id,
-      manufacturer_name: fullDev.device_basic_cluster?.manufacturer_name,
-      _full: fullDev, // для отладки/расширения
-    };
+  // ✅ Сохраняем ОРИГИНАЛЬНЫЙ fullDev, включая output_clusters
+  return {
+    short,
+    name,
+    online,
+    clusters,
+    ...(battery && { battery }),
+    model_id: fullDev.device_basic_cluster?.model_id,
+    manufacturer_name: fullDev.device_basic_cluster?.manufacturer_name,
+    _full: fullDev, // ← теперь здесь полный, неурезанный объект
   };
+};
 
   // === Формирование bindingTargets из уже загруженных devices ===
   /*const getBindingTargets = () => {
@@ -277,26 +276,46 @@ function App() {
 
     return targets;
   };
-  // Загрузка настроек и правил
-  useEffect(() => {
-    fetch('/api/config')
-      .then((r) => r.json())
-      .then((data) => {
-        setSettings(data);
-        setTheme(data.web.theme);
-        document.documentElement.setAttribute('class', data.web.theme);
-        localStorage.setItem('zigbee-ui-theme', data.web.theme);
-      })
-      .catch((err) => console.warn('Не удалось загрузить настройки:', err));
+  // === Загрузка настроек, правил и виртуальных переменных ===
+useEffect(() => {
+  // Параллельная загрузка всех данных
+  Promise.all([
+    fetch('/api/config').then(r => r.json()),
+    fetch('/api/rules/load').then(r => r.json()),
+    fetch('/api/rules/vars').then(r => r.json()), // ← новая загрузка
+  ])
+    .then(([configData, rulesData, varsData]) => {
+      // Настройки
+      if (configData) {
+        setSettings(configData);
+        setTheme(configData.web.theme);
+        document.documentElement.setAttribute('class', configData.web.theme);
+        localStorage.setItem('zigbee-ui-theme', configData.web.theme);
+      }
 
-    fetch('/api/rules/load')
-      .then((r) => r.json())
-      .then((data) => setRules(Array.isArray(data) ? data : []))
-      .catch((err) => {
-        console.warn('Не удалось загрузить правила:', err);
+      // Правила
+      if (Array.isArray(rulesData)) {
+        setRules(rulesData);
+      } else {
+        console.warn('Некорректный формат правил:', rulesData);
         setRules([]);
-      });
-  }, []);
+      }
+
+      // Виртуальные переменные
+      if (Array.isArray(varsData)) {
+        setVirtualVars([...varsData]); // ← сохраняем в состояние
+        console.log('📦 Инициализация: загружены виртуальные переменные', varsData);
+      } else {
+        console.warn('Некорректный формат /api/rules/vars:', varsData);
+        setVirtualVars(Array(32).fill(0)); // fallback
+      }
+    })
+    .catch(err => {
+      console.error('Ошибка при инициализации:', err);
+      // Можно оставить fallback
+      setVirtualVars(Array(32).fill(0));
+    });
+}, []);
 
   // Переключение темы
   const toggleTheme = () => {
@@ -530,6 +549,12 @@ function App() {
             .then((r) => r.json())
             .then((newRules) => Array.isArray(newRules) && setRules(newRules))
             .catch((err) => console.error('Ошибка при обновлении правил:', err));
+        }
+
+        // 8. Обновление виртуальных переменных
+        else if (data.event === 'vars_updated' && Array.isArray(data.vars)) {
+          setVirtualVars([...data.vars]); // ← Сохраняем в состояние
+          console.log('📦 Получены обновлённые переменные:', data.vars);
         }
       } catch (err) {
         console.error('Не удалось распарсить JSON:', event.data);
@@ -1096,7 +1121,10 @@ function App() {
         show={showDeviceExplorer}
         onClose={() => setShowDeviceExplorer(false)}
         devices={devices}
+        virtualVars={virtualVars}
       />
+      {/* === Монитор памяти (в футере) === */}
+    <MemoryMonitor />
     </div>
   );
 }

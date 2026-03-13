@@ -8,6 +8,7 @@
 #include "esp_log.h"
 #include "esp_zigbee_type.h"
 #include "esp_zigbee_zcl_command.h"
+#include "zbm_dev_base_utils.h"
 
 static const char *TAG = "ZB_PWR_CFG_CL";
 
@@ -424,4 +425,185 @@ attribute_custom_t *zb_manager_power_config_cluster_find_custom_attr_obj(zb_mana
     }
 
     return NULL; // not found
+}
+
+// File: zb_manager_power_config_cluster.c
+
+/**
+ * @brief Convert Power Configuration Cluster object to cJSON
+ * @param cluster Pointer to the cluster
+ * @return cJSON* - new JSON object, or NULL on failure
+ */
+cJSON* zbm_power_config_cluster_to_json(zb_manager_power_config_cluster_t *cluster)
+{
+    if (!cluster) {
+        ESP_LOGW(TAG, "zbm_power_config_cluster_to_json: cluster is NULL");
+        return NULL;
+    }
+
+    cJSON *power_config = cJSON_CreateObject();
+    if (!power_config) {
+        ESP_LOGE(TAG, "Failed to create power config JSON object");
+        return NULL;
+    }
+
+    // === Standard Attributes ===
+    cJSON_AddNumberToObject(power_config, "cluster_id", 0x0001);
+
+    // Mains Power
+    cJSON_AddNumberToObject(power_config, "mains_voltage", cluster->mains_voltage);
+    cJSON_AddNumberToObject(power_config, "mains_frequency", cluster->mains_frequency);
+    cJSON_AddNumberToObject(power_config, "mains_alarm_mask", cluster->mains_alarm_mask);
+    cJSON_AddNumberToObject(power_config, "mains_voltage_min_th", cluster->mains_voltage_min_th);
+    cJSON_AddNumberToObject(power_config, "mains_voltage_max_th", cluster->mains_voltage_max_th);
+    cJSON_AddNumberToObject(power_config, "mains_dwell_trip_point", cluster->mains_dwell_trip_point);
+
+    // Battery 1
+    cJSON_AddNumberToObject(power_config, "battery_voltage", cluster->battery_voltage);
+    cJSON_AddStringToObject(power_config, "battery_voltage_str", get_battery_voltage_string(cluster->battery_voltage));
+    cJSON_AddNumberToObject(power_config, "battery_percentage", cluster->battery_percentage);
+    cJSON_AddStringToObject(power_config, "battery_percentage_str", get_battery_percentage_string(cluster->battery_percentage));
+
+    cJSON_AddStringToObject(power_config, "battery_manufacturer", cluster->battery_manufacturer);
+    cJSON_AddNumberToObject(power_config, "battery_size", cluster->battery_size);
+    cJSON_AddStringToObject(power_config, "battery_size_str", get_battery_size_string(cluster->battery_size));
+    cJSON_AddNumberToObject(power_config, "battery_a_hr_rating", cluster->battery_a_hr_rating);
+    cJSON_AddNumberToObject(power_config, "battery_quantity", cluster->battery_quantity);
+    cJSON_AddNumberToObject(power_config, "battery_rated_voltage", cluster->battery_rated_voltage);
+    cJSON_AddNumberToObject(power_config, "battery_alarm_mask", cluster->battery_alarm_mask);
+    cJSON_AddNumberToObject(power_config, "battery_voltage_min_th", cluster->battery_voltage_min_th);
+    cJSON_AddNumberToObject(power_config, "battery_voltage_th1", cluster->battery_voltage_th1);
+    cJSON_AddNumberToObject(power_config, "battery_voltage_th2", cluster->battery_voltage_th2);
+    cJSON_AddNumberToObject(power_config, "battery_voltage_th3", cluster->battery_voltage_th3);
+    cJSON_AddNumberToObject(power_config, "battery_percentage_min_th", cluster->battery_percentage_min_th);
+    cJSON_AddNumberToObject(power_config, "battery_percentage_th1", cluster->battery_percentage_th1);
+    cJSON_AddNumberToObject(power_config, "battery_percentage_th2", cluster->battery_percentage_th2);
+    cJSON_AddNumberToObject(power_config, "battery_percentage_th3", cluster->battery_percentage_th3);
+    cJSON_AddNumberToObject(power_config, "battery_alarm_state", cluster->battery_alarm_state);
+
+    cJSON_AddNumberToObject(power_config, "last_update_ms", cluster->last_update_ms);
+
+    // === Custom Attributes (nostandart_attributes) ===
+    if (cluster->nostandart_attr_count > 0 && cluster->nostandart_attr_array) {
+        cJSON *attrs = cJSON_CreateArray();
+        if (attrs) {
+            for (int i = 0; i < cluster->nostandart_attr_count; i++) {
+                attribute_custom_t *attr = cluster->nostandart_attr_array[i];
+                if (!attr) continue;
+
+                cJSON *attr_obj = cJSON_CreateObject();
+                if (!attr_obj) continue;
+
+                cJSON_AddNumberToObject(attr_obj, "id", attr->id);
+                cJSON_AddStringToObject(attr_obj, "attr_id_text", attr->attr_id_text);
+                cJSON_AddNumberToObject(attr_obj, "type", attr->type);
+                cJSON_AddNumberToObject(attr_obj, "acces", attr->acces);
+                cJSON_AddNumberToObject(attr_obj, "size", attr->size);
+                cJSON_AddNumberToObject(attr_obj, "is_void_pointer", attr->is_void_pointer);
+                cJSON_AddNumberToObject(attr_obj, "manuf_code", attr->manuf_code);
+                cJSON_AddNumberToObject(attr_obj, "parent_cluster_id", attr->parent_cluster_id);
+
+                // Добавляем значение атрибута
+                zbm_json_add_attribute_value(attr_obj, attr);
+
+                cJSON_AddItemToArray(attrs, attr_obj);
+            }
+            cJSON_AddItemToObject(power_config, "nostandart_attributes", attrs);
+        }
+    }
+
+    return power_config;
+}
+
+/**
+ * @brief Load Power Configuration cluster from cJSON object
+ * @param cluster Pointer to allocated or zeroed zb_manager_power_config_cluster_t
+ * @param json_obj cJSON object representing the cluster
+ * @return ESP_OK on success
+ */
+esp_err_t zbm_power_config_cluster_load_from_json(zb_manager_power_config_cluster_t *cluster, cJSON *json_obj)
+{
+    if (!cluster || !json_obj) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    // Инициализируем структуру
+    *cluster = (zb_manager_power_config_cluster_t)ZIGBEE_POWER_CONFIG_CLUSTER_DEFAULT_INIT();
+    cluster->last_update_ms = esp_log_timestamp();
+
+    // === Mains Power ===
+    LOAD_NUMBER(json_obj, "mains_voltage", cluster->mains_voltage);
+    LOAD_NUMBER(json_obj, "mains_frequency", cluster->mains_frequency);
+    LOAD_NUMBER(json_obj, "mains_alarm_mask", cluster->mains_alarm_mask);
+    LOAD_NUMBER(json_obj, "mains_voltage_min_th", cluster->mains_voltage_min_th);
+    LOAD_NUMBER(json_obj, "mains_voltage_max_th", cluster->mains_voltage_max_th);
+    LOAD_NUMBER(json_obj, "mains_dwell_trip_point", cluster->mains_dwell_trip_point);
+
+    // === Battery 1 ===
+    LOAD_NUMBER(json_obj, "battery_voltage", cluster->battery_voltage);
+    LOAD_NUMBER(json_obj, "battery_percentage", cluster->battery_percentage);
+
+    LOAD_STRING(json_obj, "battery_manufacturer", cluster->battery_manufacturer);
+    LOAD_NUMBER(json_obj, "battery_size", cluster->battery_size);
+    LOAD_NUMBER(json_obj, "battery_a_hr_rating", cluster->battery_a_hr_rating);
+    LOAD_NUMBER(json_obj, "battery_quantity", cluster->battery_quantity);
+    LOAD_NUMBER(json_obj, "battery_rated_voltage", cluster->battery_rated_voltage);
+    LOAD_NUMBER(json_obj, "battery_alarm_mask", cluster->battery_alarm_mask);
+    LOAD_NUMBER(json_obj, "battery_voltage_min_th", cluster->battery_voltage_min_th);
+    LOAD_NUMBER(json_obj, "battery_voltage_th1", cluster->battery_voltage_th1);
+    LOAD_NUMBER(json_obj, "battery_voltage_th2", cluster->battery_voltage_th2);
+    LOAD_NUMBER(json_obj, "battery_voltage_th3", cluster->battery_voltage_th3);
+    LOAD_NUMBER(json_obj, "battery_percentage_min_th", cluster->battery_percentage_min_th);
+    LOAD_NUMBER(json_obj, "battery_percentage_th1", cluster->battery_percentage_th1);
+    LOAD_NUMBER(json_obj, "battery_percentage_th2", cluster->battery_percentage_th2);
+    LOAD_NUMBER(json_obj, "battery_percentage_th3", cluster->battery_percentage_th3);
+    LOAD_NUMBER(json_obj, "battery_alarm_state", cluster->battery_alarm_state);
+
+    // last_update_ms
+    cJSON *last_update_item = cJSON_GetObjectItem(json_obj, "last_update_ms");
+    if (last_update_item && cJSON_IsNumber(last_update_item)) {
+        cluster->last_update_ms = last_update_item->valueint;
+    }
+
+    // === Custom Attributes (nostandart_attributes) ===
+    cJSON *attrs_json = cJSON_GetObjectItem(json_obj, "nostandart_attributes");
+    if (attrs_json && cJSON_IsArray(attrs_json)) {
+        int count = cJSON_GetArraySize(attrs_json);
+        cluster->nostandart_attr_count = count;
+        cluster->nostandart_attr_array = calloc(count, sizeof(attribute_custom_t*));
+        if (!cluster->nostandart_attr_array) {
+            return ESP_ERR_NO_MEM;
+        }
+
+        bool alloc_failed = false;
+        for (int i = 0; i < count; i++) {
+            cJSON *attr_json = cJSON_GetArrayItem(attrs_json, i);
+            if (!attr_json) continue;
+
+            attribute_custom_t *attr = calloc(1, sizeof(attribute_custom_t));
+            if (!attr) {
+                alloc_failed = true;
+                continue;
+            }
+
+            attr->id = cJSON_GetObjectItem(attr_json, "id")->valueint;
+            LOAD_STRING(attr_json, "attr_id_text", attr->attr_id_text);
+            attr->type = cJSON_GetObjectItem(attr_json, "type")->valueint;
+            attr->acces = cJSON_GetObjectItem(attr_json, "acces")->valueint;
+            attr->size = cJSON_GetObjectItem(attr_json, "size")->valueint;
+            attr->is_void_pointer = cJSON_GetObjectItem(attr_json, "is_void_pointer")->valueint;
+            attr->manuf_code = cJSON_GetObjectItem(attr_json, "manuf_code")->valueint;
+            attr->parent_cluster_id = cJSON_GetObjectItem(attr_json, "parent_cluster_id")->valueint;
+
+            attr->p_value = NULL;
+            zbm_json_load_attribute_value(attr, attr_json);
+
+            cluster->nostandart_attr_array[i] = attr;
+        }
+        if (alloc_failed) {
+            ESP_LOGW(TAG, "Partial failure loading custom attributes for Power Config cluster");
+        }
+    }
+
+    return ESP_OK;
 }

@@ -14,6 +14,25 @@ typedef struct {
     const char *name;         // Имя производителя
 } ieee_manuf_entry_t;
 
+//=== МАКРОСЫ ДЛЯ JSON ===
+// === Утилиты для загрузки из JSON ===
+#define LOAD_NUMBER(json_obj, key, dst)                 \
+    do {                                                \
+        cJSON *item = cJSON_GetObjectItem(json_obj, key); \
+        if (item && cJSON_IsNumber(item)) {             \
+            dst = (typeof(dst))item->valueint;          \
+        }                                               \
+    } while(0)
+
+#define LOAD_STRING(json_obj, key, dst)                 \
+    do {                                                \
+        cJSON *item = cJSON_GetObjectItem(json_obj, key); \
+        if (item && cJSON_IsString(item) && item->valuestring) { \
+            strncpy(dst, item->valuestring, sizeof(dst) - 1); \
+            dst[sizeof(dst) - 1] = '\0';                \
+        }                                               \
+    } while(0)
+    
 /**
  * @brief Глобальная таблица OUI → manuf_code
  */

@@ -6,7 +6,9 @@
 #include <stdbool.h>
 #include "esp_err.h"
 #include "zbm_clusters.h"
+#include "zbm_custom_commands.h"
 #include "esp_zigbee_zcl_command.h"
+#include "cJSON.h"
 
 /**
  * @brief Structure representing the Zigbee On/Off Cluster
@@ -76,7 +78,8 @@ typedef struct {
 
     uint16_t                    nostandart_attr_count;
     attribute_custom_t**        nostandart_attr_array;
-
+    uint8_t                     custom_cmd_count;
+    cluster_custom_command_t**  custom_commands_array;  // Массив указателей на команды
 } zb_manager_on_off_cluster_t;
 
 /**
@@ -185,5 +188,28 @@ esp_err_t zb_manager_configure_reporting_onoff_ext(uint16_t short_addr, uint8_t 
 
 esp_err_t zb_manager_on_off_cluster_add_custom_attribute(zb_manager_on_off_cluster_t *cluster, uint16_t attr_id, uint8_t attr_type);
 
+esp_err_t zb_manager_on_off_cluster_register_custom_command(zb_manager_on_off_cluster_t *cluster,uint8_t cmd_id);
+
 attribute_custom_t *zb_manager_on_off_cluster_find_custom_attr_obj(zb_manager_on_off_cluster_t *cluster, uint16_t attr_id);
+
+/**
+ * @brief Поиск зарегистрированной кастомной команды
+ */
+cluster_custom_command_t *zb_manager_on_off_cluster_find_custom_command(zb_manager_on_off_cluster_t *cluster,uint8_t cmd_id);
+
+/**
+ * @brief Convert On/Off Cluster object to cJSON
+ * @param cluster Pointer to the cluster
+ * @return cJSON* - new JSON object, or NULL
+ */
+cJSON* zbm_onoff_cluster_to_json(zb_manager_on_off_cluster_t *cluster);
+
+/**
+ * @brief Load On/Off Cluster from JSON
+ * @param cluster Pointer to cluster struct (must be allocated or zeroed)
+ * @param json_obj cJSON object
+ * @return ESP_OK on success
+ */
+esp_err_t zbm_onoff_cluster_load_from_json(zb_manager_on_off_cluster_t *cluster, cJSON *json_obj);
+
 #endif // ZB_MANAGER_ON_OFF_CLUSTER_H

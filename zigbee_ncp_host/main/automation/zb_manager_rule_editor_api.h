@@ -24,5 +24,7 @@ esp_err_t api_delete_all_rules_handler(httpd_req_t *req);
 // === POST /api/rules/run/:id ===
 // тестовый запуск правила в ручном режиме из браузера, условия не учитываются, просто выполнение для проверки
 esp_err_t api_run_rule_handler(httpd_req_t *req);
+
+esp_err_t api_rules_vars_handler(httpd_req_t *req);
   
 #endif

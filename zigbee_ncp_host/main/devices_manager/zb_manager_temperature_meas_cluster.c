@@ -7,6 +7,7 @@
 #include "esp_log.h"
 #include "esp_zigbee_type.h"
 #include "esp_zigbee_zcl_command.h"
+#include "zbm_dev_base_utils.h"
 
 static const char* TAG = "zb_manager_temperature_meas_cluster";
 /// @brief [zb_manager_temperature_meas_cluster.c] Обновляет значение атрибута в Temperature Measurement-кластере Zigbee
@@ -236,3 +237,215 @@ attribute_custom_t *zb_manager_temp_meas_cluster_find_custom_attr_obj(zb_manager
     return NULL;
 }
 
+
+/**
+ * @brief Convert Temperature Measurement Cluster object to cJSON
+ * @param cluster Pointer to the cluster
+ * @return cJSON* - new JSON object, or NULL on failure
+ */
+cJSON* zbm_temperature_cluster_to_json(zb_manager_temperature_measurement_cluster_t *cluster)
+{
+    if (!cluster) {
+        ESP_LOGW(TAG, "zbm_temperature_cluster_to_json: cluster is NULL");
+        return NULL;
+    }
+
+    cJSON *temp = cJSON_CreateObject();
+    if (!temp) {
+        ESP_LOGE(TAG, "Failed to create temperature cluster JSON object");
+        return NULL;
+    }
+
+    // === Standard Attributes ===
+    cJSON_AddNumberToObject(temp, "cluster_id", 0x0402);
+
+    // Measured Value
+    if (cluster->measured_value == 0x8000) {
+        cJSON_AddNullToObject(temp, "measured_value");
+        cJSON_AddStringToObject(temp, "measured_value_str", "Unknown");
+    } else {
+        cJSON_AddNumberToObject(temp, "measured_value", cluster->measured_value);
+        cJSON_AddNumberToObject(temp, "measured_value_c", TEMP_INT_TO_FLOAT(cluster->measured_value));
+        char temp_str[16];
+        snprintf(temp_str, sizeof(temp_str), "%.2f°C", TEMP_INT_TO_FLOAT(cluster->measured_value));
+        cJSON_AddStringToObject(temp, "measured_value_str", temp_str);
+    }
+
+    // Min Measured Value
+    if (cluster->min_measured_value == 0x8000) {
+        cJSON_AddNullToObject(temp, "min_measured_value");
+        cJSON_AddStringToObject(temp, "min_measured_value_str", "Unknown");
+    } else {
+        cJSON_AddNumberToObject(temp, "min_measured_value", cluster->min_measured_value);
+        cJSON_AddNumberToObject(temp, "min_measured_value_c", TEMP_INT_TO_FLOAT(cluster->min_measured_value));
+        char temp_str[16];
+        snprintf(temp_str, sizeof(temp_str), "%.2f°C", TEMP_INT_TO_FLOAT(cluster->min_measured_value));
+        cJSON_AddStringToObject(temp, "min_measured_value_str", temp_str);
+    }
+
+    // Max Measured Value
+    if (cluster->max_measured_value == 0x8000) {
+        cJSON_AddNullToObject(temp, "max_measured_value");
+        cJSON_AddStringToObject(temp, "max_measured_value_str", "Unknown");
+    } else {
+        cJSON_AddNumberToObject(temp, "max_measured_value", cluster->max_measured_value);
+        cJSON_AddNumberToObject(temp, "max_measured_value_c", TEMP_INT_TO_FLOAT(cluster->max_measured_value));
+        char temp_str[16];
+        snprintf(temp_str, sizeof(temp_str), "%.2f°C", TEMP_INT_TO_FLOAT(cluster->max_measured_value));
+        cJSON_AddStringToObject(temp, "max_measured_value_str", temp_str);
+    }
+
+    // Tolerance
+    cJSON_AddNumberToObject(temp, "tolerance", cluster->tolerance);
+    cJSON_AddNumberToObject(temp, "tolerance_c", TEMP_INT_TO_FLOAT(cluster->tolerance));
+    char tol_str[16];
+    snprintf(tol_str, sizeof(tol_str), "%.2f°C", TEMP_INT_TO_FLOAT(cluster->tolerance));
+    cJSON_AddStringToObject(temp, "tolerance_str", tol_str);
+
+    // Last update
+    cJSON_AddNumberToObject(temp, "last_update_ms", cluster->last_update_ms);
+
+    // Read error flag
+    cJSON_AddBoolToObject(temp, "read_error", cluster->read_error);
+
+    // Optional: human-readable state
+    if (cluster->read_error) {
+        cJSON_AddStringToObject(temp, "state", "Error");
+    } else if (cluster->measured_value == 0x8000) {
+        cJSON_AddStringToObject(temp, "state", "Unknown");
+    } else {
+        cJSON_AddStringToObject(temp, "state", "OK");
+    }
+
+    // === Custom Attributes (nostandart_attributes) ===
+    if (cluster->nostandart_attr_count > 0 && cluster->nostandart_attr_array) {
+        cJSON *attrs = cJSON_CreateArray();
+        if (attrs) {
+            for (int i = 0; i < cluster->nostandart_attr_count; i++) {
+                attribute_custom_t *attr = cluster->nostandart_attr_array[i];
+                if (!attr) continue;
+
+                cJSON *attr_obj = cJSON_CreateObject();
+                if (!attr_obj) continue;
+
+                cJSON_AddNumberToObject(attr_obj, "id", attr->id);
+                cJSON_AddStringToObject(attr_obj, "attr_id_text", attr->attr_id_text);
+                cJSON_AddNumberToObject(attr_obj, "type", attr->type);
+                cJSON_AddNumberToObject(attr_obj, "acces", attr->acces);
+                cJSON_AddNumberToObject(attr_obj, "size", attr->size);
+                cJSON_AddNumberToObject(attr_obj, "is_void_pointer", attr->is_void_pointer);
+                cJSON_AddNumberToObject(attr_obj, "manuf_code", attr->manuf_code);
+                cJSON_AddNumberToObject(attr_obj, "parent_cluster_id", attr->parent_cluster_id);
+
+                // Добавляем значение атрибута
+                zbm_json_add_attribute_value(attr_obj, attr);
+
+                cJSON_AddItemToArray(attrs, attr_obj);
+            }
+            cJSON_AddItemToObject(temp, "nostandart_attributes", attrs);
+        }
+    }
+
+    return temp;
+}
+
+/**
+ * @brief Load Temperature Measurement Cluster from cJSON object
+ * @param cluster Pointer to allocated or zeroed zb_manager_temperature_measurement_cluster_t
+ * @param json_obj cJSON object representing the cluster
+ * @return ESP_OK on success
+ */
+esp_err_t zbm_temperature_cluster_load_from_json(zb_manager_temperature_measurement_cluster_t *cluster, cJSON *json_obj)
+{
+    if (!cluster || !json_obj) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    // Инициализируем структуру
+    *cluster = (zb_manager_temperature_measurement_cluster_t)ZIGBEE_TEMP_MEASUREMENT_CLUSTER_DEFAULT_INIT();
+
+    // === Standard Attributes ===
+    cJSON *measured_value_item = cJSON_GetObjectItem(json_obj, "measured_value");
+    if (measured_value_item) {
+        if (cJSON_IsNumber(measured_value_item)) {
+            cluster->measured_value = (int16_t)measured_value_item->valueint;
+        } else if (cJSON_IsNull(measured_value_item)) {
+            cluster->measured_value = 0x8000; // Unknown
+        }
+    }
+
+    cJSON *min_measured_value_item = cJSON_GetObjectItem(json_obj, "min_measured_value");
+    if (min_measured_value_item) {
+        if (cJSON_IsNumber(min_measured_value_item)) {
+            cluster->min_measured_value = (int16_t)min_measured_value_item->valueint;
+        } else if (cJSON_IsNull(min_measured_value_item)) {
+            cluster->min_measured_value = 0x8000;
+        }
+    }
+
+    cJSON *max_measured_value_item = cJSON_GetObjectItem(json_obj, "max_measured_value");
+    if (max_measured_value_item) {
+        if (cJSON_IsNumber(max_measured_value_item)) {
+            cluster->max_measured_value = (int16_t)max_measured_value_item->valueint;
+        } else if (cJSON_IsNull(max_measured_value_item)) {
+            cluster->max_measured_value = 0x8000;
+        }
+    }
+
+    LOAD_NUMBER(json_obj, "tolerance", cluster->tolerance);
+
+    // === Last Update & Error State ===
+    cJSON *last_update_item = cJSON_GetObjectItem(json_obj, "last_update_ms");
+    if (last_update_item && cJSON_IsNumber(last_update_item)) {
+        cluster->last_update_ms = last_update_item->valueint;
+    } else {
+        cluster->last_update_ms = esp_log_timestamp();
+    }
+
+    cJSON *read_error_item = cJSON_GetObjectItem(json_obj, "read_error");
+    if (read_error_item) {
+        cluster->read_error = cJSON_IsTrue(read_error_item);
+    }
+
+    // === Custom Attributes (nostandart_attributes) ===
+    cJSON *attrs_json = cJSON_GetObjectItem(json_obj, "nostandart_attributes");
+    if (attrs_json && cJSON_IsArray(attrs_json)) {
+        int count = cJSON_GetArraySize(attrs_json);
+        cluster->nostandart_attr_count = count;
+        cluster->nostandart_attr_array = calloc(count, sizeof(attribute_custom_t*));
+        if (!cluster->nostandart_attr_array) {
+            return ESP_ERR_NO_MEM;
+        }
+
+        bool alloc_failed = false;
+        for (int i = 0; i < count; i++) {
+            cJSON *attr_json = cJSON_GetArrayItem(attrs_json, i);
+            if (!attr_json) continue;
+
+            attribute_custom_t *attr = calloc(1, sizeof(attribute_custom_t));
+            if (!attr) {
+                alloc_failed = true;
+                continue;
+            }
+
+            attr->id = cJSON_GetObjectItem(attr_json, "id")->valueint;
+            LOAD_STRING(attr_json, "attr_id_text", attr->attr_id_text);
+            attr->type = cJSON_GetObjectItem(attr_json, "type")->valueint;
+            attr->acces = cJSON_GetObjectItem(attr_json, "acces")->valueint;
+            attr->size = cJSON_GetObjectItem(attr_json, "size")->valueint;
+            attr->is_void_pointer = cJSON_GetObjectItem(attr_json, "is_void_pointer")->valueint;
+            attr->manuf_code = cJSON_GetObjectItem(attr_json, "manuf_code")->valueint;
+            attr->parent_cluster_id = cJSON_GetObjectItem(attr_json, "parent_cluster_id")->valueint;
+
+            attr->p_value = NULL;
+            zbm_json_load_attribute_value(attr, attr_json);
+
+            cluster->nostandart_attr_array[i] = attr;
+        }
+        if (alloc_failed) {
+            ESP_LOGW(TAG, "Partial failure loading custom attributes for Temperature cluster");
+        }
+    }
+
+    return ESP_OK;
+}

@@ -149,7 +149,7 @@ static esp_err_t write_embedded_quirks_to_flash(void)
 esp_vfs_spiffs_conf_t zb_manager_spiff_conf = {
     .base_path = SPIFFS_CFG_MOUNT_POINT,
     .partition_label = "spiffs_config",
-    .max_files = 20,
+    .max_files = 2,
     .format_if_mount_failed = true
 };
 
@@ -157,7 +157,7 @@ esp_vfs_spiffs_conf_t zb_manager_spiff_conf = {
 esp_vfs_spiffs_conf_t zb_manager_spiff_UI_conf = {
     .base_path = SPIFFS_UI_MOUNT_POINT,
     .partition_label = "spiffs_ui",
-    .max_files = 20,
+    .max_files = 2,
     .format_if_mount_failed = true
 };
 
@@ -165,7 +165,7 @@ esp_vfs_spiffs_conf_t zb_manager_spiff_UI_conf = {
 esp_vfs_spiffs_conf_t zb_manager_spiff_quirks_conf = {
     .base_path = SPIFFS_QUIRKS_MOUNT_POINT,
     .partition_label = "quirks",
-    .max_files = 5,
+    .max_files = 2,
     .format_if_mount_failed = true
 };
 
@@ -173,7 +173,7 @@ esp_vfs_spiffs_conf_t zb_manager_spiff_quirks_conf = {
 esp_vfs_spiffs_conf_t zb_manager_spiff_certs_conf = {
     .base_path = SPIFFS_CERTS_MOUNT_POINT,
     .partition_label = "certs",
-    .max_files = 5,
+    .max_files = 2,
     .format_if_mount_failed = true
 };
 

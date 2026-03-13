@@ -102,7 +102,7 @@ export const EndpointItem = ({
           {unknownInputClusters.length > 0 &&
             unknownInputClusters.map((cl) => {
               const clusterName = cl.cluster_id_text || 'Unknown Input Cluster';
-              const clusterId = cl.id;
+              const clusterId = cl.cluster_id;
               const icon = [0x0000, 0x0001, 0x0003, 0x0004, 0x0005, 0x0006, 0x0402, 0x0405, 0x0702, 0x0b04].includes(clusterId)
                 ? '🔗'
                 : '❓';

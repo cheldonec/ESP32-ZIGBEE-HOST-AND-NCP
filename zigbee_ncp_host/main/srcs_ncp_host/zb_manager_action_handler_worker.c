@@ -95,118 +95,6 @@ static void report_attr_pool_put(zb_manager_cmd_report_attr_resp_message_t* msg)
 }
 
 
-void zb_manager_process_custom_cluster_command(zb_action_msg_t *msg)
-{
-    zb_manager_custom_cluster_report_message_t *rep = 
-        (zb_manager_custom_cluster_report_message_t *)msg->event_data;
-
-    ESP_LOGI(TAG, "🔧 Processing custom cluster: short=0x%04x, cluster=0x%04x, cmd=0x%02x",
-             rep->short_addr, rep->cluster_id, rep->command_id);
-
-    // === 🔄 Проверяем: это TUYA-like кластер? ===
-    /*if (rep->cluster_id != 0xEF00) {
-        ESP_LOGD(TAG, "❌ Not 0xEF00 cluster → ignoring");
-        return;
-    }*/
-
-    // === 🔍 Находим устройство ===
-    device_custom_t *dev = zb_manager_find_device_by_short(rep->short_addr);
-    if (!dev) {
-        ESP_LOGW(TAG, "❌ Device 0x%04x not found", rep->short_addr);
-        return;
-    }
-
-    // === 📦 Получаем model_id из Basic Cluster ===
-    zigbee_manager_basic_cluster_t *basic = dev->server_BasicClusterObj;
-    if (!basic) {
-        ESP_LOGW(TAG, "❌ No Basic Cluster for 0x%04x", rep->short_addr);
-        return;
-    }
-
-    const char *model_id = basic->model_identifier;
-    if (!model_id || strlen(model_id) == 0) {
-        ESP_LOGW(TAG, "❌ Empty model_id for 0x%04x", rep->short_addr);
-        return;
-    }
-
-    ESP_LOGI(TAG, "🔍 Model ID: '%s'", model_id);
-
-    // === 🧩 Ищем квирк ===
-    cJSON *quirk = quirks_get_quirk_by_model(model_id);
-    if (!quirk) {
-        ESP_LOGW(TAG, "❌ No quirk for model_id='%s' → treating as raw", model_id);
-        // Можно сохранить сырые данные
-        return;
-    }
-
-    ESP_LOGI(TAG, "✅ Quirk found for '%s' → parsing DP", model_id);
-
-    uint8_t *data = rep->data;
-    uint16_t len = rep->data_len;
-
-    ESP_LOG_BUFFER_HEX_LEVEL("DATA in zb_manager_process_custom_cluster_command", rep->data, rep->data_len, ESP_LOG_INFO);
-
-    if (len < 4) {
-        ESP_LOGW(TAG, "❌ Data too short: %u", len);
-        return;
-    }
-
-    uint8_t dp_count = data[0];
-    uint16_t offset = 1;
-
-    for (int i = 0; i < dp_count && offset + 3 < len; i++) {
-        uint8_t dp_id = data[offset + 0];
-        uint8_t dp_type = data[offset + 1];
-        uint16_t dp_len = data[offset + 2] | (data[offset + 3] << 8);
-        offset += 4;
-
-        if (offset + dp_len > len) {
-            ESP_LOGW(TAG, "❌ DP %d: not enough data", dp_id);
-            break;
-        }
-
-        uint8_t *dp_value = &data[offset];
-        offset += dp_len;
-
-        ESP_LOGI(TAG, "📄 DP[%d]: type=%d, len=%u", dp_id, dp_type, dp_len);
-        ESP_LOG_BUFFER_HEX_LEVEL("DP Value", dp_value, dp_len, ESP_LOG_INFO);
-
-        // === 🔎 Есть ли описание DP в квирке? ===
-        cJSON *dp_info = quirks_get_dp_info(quirk, dp_id);
-        if (!dp_info) {
-            ESP_LOGW(TAG, "⚠️ No definition for DP %d", dp_id);
-            continue;
-        }
-
-        const char *role = cJSON_GetStringValue(cJSON_GetObjectItem(dp_info, "role"));
-        double scale = cJSON_GetNumberValue(cJSON_GetObjectItem(dp_info, "scale"));
-
-        if (!role) continue;
-
-        // === 🌡️ Температура (тип 0x02, 4 байта) ===
-        if (strcmp(role, "temperature") == 0 && dp_type == 0x02 && dp_len == 4) {
-            int32_t raw = dp_value[0] | (dp_value[1] << 8) | (dp_value[2] << 16) | (dp_value[3] << 24);
-            float temp = (float)raw * scale;
-            ESP_LOGI(TAG, "🌡️ Temperature: %.2f °C", temp);
-            // Здесь можно: dev->temperature = temp;
-        }
-        // === 💧 Влажность ===
-        else if (strcmp(role, "humidity") == 0 && dp_type == 0x02 && dp_len == 4) {
-            int32_t raw = dp_value[0] | (dp_value[1] << 8) | (dp_value[2] << 16) | (dp_value[3] << 24);
-            float hum = (float)raw * scale;
-            ESP_LOGI(TAG, "💧 Humidity: %.2f %%", hum);
-            // dev->humidity = hum;
-        }
-        // === 🔄 Другие роли можно добавить: switch, brightness, mode и т.д. ===
-        else {
-            ESP_LOGW(TAG, "⚠️ Unsupported role='%s' for DP %d", role, dp_id);
-        }
-    }
-
-    // === 🌐 Уведомляем веб-интерфейс ===
-    //ws_notify_device_update(dev->short_addr);
-}
-
 
 //ram control
 static int report_count = 0;
@@ -520,7 +408,28 @@ static void zb_action_worker_task(void *pvParameters)
             break;
         }
 
+            case ZB_ACTION_NOSTANDART_CLUSTER_CMD_RESP: {
+                zb_manager_cmd_nostandart_cluster_resp_message_t *rep = (zb_manager_cmd_nostandart_cluster_resp_message_t *)msg.event_data;
+                if (!rep) break;
 
+                ESP_LOGI(TAG, "📩 NOSTANDART CMD: cluster=0x%04x, cmd=0x%02x, len=%u",
+                        rep->cluster, rep->cmd_id, rep->cmd_payload_len);
+
+                if (rep->cmd_payload_len > 0) {
+                    ESP_LOG_BUFFER_HEX_LEVEL("Payload", rep->cmd_payload, rep->cmd_payload_len, ESP_LOG_INFO);
+                }
+
+                // Передаём на обработку
+                esp_err_t result = zbm_dev_base_dev_update_from_nostandart_cluster_cmd_safe(rep);
+                if (result == ESP_OK) {
+                    ESP_LOGI(TAG, "✅ Custom cluster cmd processed");
+                    ws_notify_device_update(rep->src_address.u.short_addr); // оповестить UI
+                } else {
+                    ESP_LOGW(TAG, "⚠️ Custom cluster cmd processing failed: %s", esp_err_to_name(result));
+                }
+
+                break;
+            }
             case ZB_ACTION_DELAYED_NODE_DESC_REQ: {
                 ESP_LOGI(TAG, "✅ DELAYED_NODE_DESC_REQ_LOCAL: processing node_desc");
                 uint16_t short_addr; // = *(uint16_t *)msg.event_data;

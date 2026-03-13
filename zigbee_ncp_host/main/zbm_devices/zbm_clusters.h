@@ -3,6 +3,7 @@
 #define ZBM_CLUSTERS_H
 #include "stdint.h"
 #include "esp_err.h"
+#include "cJSON.h"
 
 typedef struct attribute_custom_s{
     uint16_t                    id;
@@ -37,5 +38,16 @@ void zbm_cluster_free_all_attributes(cluster_custom_t *cluster);
 void zbm_update_custom_attribute_value(attribute_custom_t *attr, const uint8_t *new_value, uint16_t value_len);
 
 attribute_custom_t* zbm_cluster_find_custom_attribute(cluster_custom_t *cluster, uint16_t attr_id);
+
+void  zbm_json_add_attribute_value(cJSON *attr_obj, attribute_custom_t *attr);
+
+void  zbm_json_load_attribute_value(attribute_custom_t *attr, cJSON *attr_obj);
+
+/**
+ * @brief Convert unknown/custom cluster to cJSON
+ * @param cluster Pointer to cluster_custom_t
+ * @return cJSON* - new JSON object, or NULL
+ */
+cJSON* zbm_unknown_cluster_to_json(cluster_custom_t *cluster);
 
 #endif // ZBM_CLUSTERS_H

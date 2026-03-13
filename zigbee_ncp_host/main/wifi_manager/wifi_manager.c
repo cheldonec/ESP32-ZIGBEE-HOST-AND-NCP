@@ -516,3 +516,50 @@ esp_err_t wifi_manager_deinit_sta_for_setup(void)
     }
     return ESP_OK;
 }
+
+/**
+ * @brief Переключает устройство в режим только AP (для настройки Wi-Fi)
+ */
+// запуск из wifi_manager_switch_to_ap_mode_task
+void wifi_manager_switch_to_ap_mode(void)
+{
+    ESP_LOGI(TAG, "Switching to AP-only mode...");
+
+    // 1. Останавливаем подключение к роутеру
+    if (esp_netif_sta != NULL) {
+        esp_wifi_disconnect();
+        vTaskDelay(pdMS_TO_TICKS(500));
+        esp_wifi_set_mode(WIFI_MODE_AP);
+        ESP_LOGI(TAG, "Wi-Fi mode switched to AP only");
+    }
+
+    // 2. Останавливаем сервисы, зависящие от подключения к роутеру
+    stop_mdns_service();
+    stop_webserver();
+    stop_ssdp_server();
+    //ha_integration_deinit(); // если есть
+    //sntp_stop();             // останавливаем NTP
+
+    // 3. Меняем default netif на AP
+    esp_netif_set_default_netif(esp_netif_ap);
+    s_is_in_ap_only_mode = true;
+
+    // 4. Запускаем веб-сервер и DNS-перехват
+    start_webserver();
+    init_dns_hijack(); // чтобы все запросы вели на captive portal
+
+    ESP_LOGI(TAG, "Device is now in AP-only mode. Ready for Wi-Fi setup.");
+}
+
+void wifi_manager_switch_to_ap_mode_task(void *pvParameters)
+{
+    vTaskDelay(pdMS_TO_TICKS(100)); // дадим завершиться ISR
+    wifi_manager_switch_to_ap_mode();
+    vTaskDelay(pdMS_TO_TICKS(100));
+    vTaskDelete(NULL); // завершаем задачу
+}
+
+void wifi_manager_switch_to_ap_mode_safe(void)
+{
+    xTaskCreate(wifi_manager_switch_to_ap_mode_task, "wifi_ap_mode_task", 4096, NULL, 10, NULL);
+}

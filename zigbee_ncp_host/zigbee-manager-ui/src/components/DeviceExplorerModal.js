@@ -1,8 +1,9 @@
 // src/components/DeviceExplorerModal.js
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { DeviceItem } from './DeviceExplorerDeviceItem';
+import { GlobalVariablesSection } from './GlobalVariablesSection';
 
-const DeviceExplorerModal = ({ show, onClose, devices }) => {
+const DeviceExplorerModal = ({ show, onClose, devices, virtualVars  }) => {
   const [discoveryForm, setDiscoveryForm] = useState({
     short_addr: '',
     endpoint: '',
@@ -93,24 +94,28 @@ const DeviceExplorerModal = ({ show, onClose, devices }) => {
           Просмотр структуры устройств и атрибутов.
         </p>
 
-        {devices.length === 0 ? (
-          <p>Нет доступных устройств.</p>
-        ) : (
-          <div>
-           {devices.map((dev) => (
-            <DeviceItem
-              key={dev.short}
-              dev={dev}
-              fullDev={dev._full} // ← явно передаём
-              discoveryForm={discoveryForm}
-              setDiscoveryForm={setDiscoveryForm}
-              onDiscover={handleDiscover}
-              onReadAttribute={handleReadAttribute}
-              onWriteAttribute={handleWriteAttribute}
-            />
-          ))}
-          </div>
-        )}
+        <div>
+          {/* Глобальные переменные */}
+          <GlobalVariablesSection variables={virtualVars} />
+
+          {/* Список устройств */}
+          {devices.length === 0 ? (
+            <p>Нет доступных устройств.</p>
+          ) : (
+            devices.map((dev) => (
+              <DeviceItem
+                key={dev.short}
+                dev={dev}
+                fullDev={dev._full}
+                discoveryForm={discoveryForm}
+                setDiscoveryForm={setDiscoveryForm}
+                onDiscover={handleDiscover}
+                onReadAttribute={handleReadAttribute}
+                onWriteAttribute={handleWriteAttribute}
+              />
+            ))
+          )}
+        </div>
 
         <div className="modal-buttons">
           <button onClick={onClose} className="btn-danger">

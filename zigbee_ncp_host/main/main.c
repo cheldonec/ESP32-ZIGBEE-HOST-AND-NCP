@@ -38,11 +38,40 @@
 #include "ha_mqtt_publisher.h"
 #include "zb_manager_rules.h"
 #include "zbm_dev_base.h"
+#include "switch_driver.h"
+#include "esp_check.h"
 static const char *TAG = "main";
+
+static switch_func_pair_t button_func_pair[] = {
+    {GPIO_BOOT_BUTTON_IO, SWITCH_ONOFF_TOGGLE_CONTROL}
+};
+
+static void gpio_buttons_handler(switch_func_pair_t *button_func_pair)
+{
+    switch (button_func_pair->func) {
+    case SWITCH_ONOFF_TOGGLE_CONTROL:{
+        if (button_func_pair->pin == GPIO_BOOT_BUTTON_IO)
+        {
+            ESP_LOGI(TAG, "GPIO_BOOT_BUTTON_IO TOGGLE EVENT");
+            wifi_manager_switch_to_ap_mode_safe();
+        }
+        break;
+    }
+    default:
+        break;
+    }
+} 
+
 void app_main(void)
 {
     
    ESP_ERROR_CHECK(esp_event_loop_create_default());
+
+   // кнопка BOOT
+   if (switch_driver_init(button_func_pair, PAIR_SIZE(button_func_pair),gpio_buttons_handler) == false)
+   {
+        ESP_LOGW( TAG, "Failed to initialize switch driver");
+   }
 
    esp_err_t ret = init_spiffs();
     if (ret != ESP_OK) {
@@ -101,7 +130,7 @@ void app_main(void)
     //ESP_LOGW("MAIN", "⚠️ Удаляем все правила для восстановления состояния");
     //zb_rule_engine_remove_all_rules();
 
-   ret = quirks_load_tuya_database();
+   ret = quirks_init();
 
    ret = zm_FastStartZigbee(&host_endpoint1, NULL, NULL, NULL);
 

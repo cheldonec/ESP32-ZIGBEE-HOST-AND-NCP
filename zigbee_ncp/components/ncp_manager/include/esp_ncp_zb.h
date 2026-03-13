@@ -147,6 +147,7 @@ typedef struct {
 #define ZB_MANAGER_TUYA_DP_REPORT                   0x5570  // кастомное событие
 #define ZB_MANAGER_DISCOVERY_ATTR_CMD               0x5571
 #define ZB_MANAGER_DISCOVERY_ATTR_RESP              0x5572
+#define ZB_MANAGER_NOSTANDART_CLUSTER_CMD_REPORT    0x5573
 
 #define ZB_MANAGER_DEV_ASSOCIATED_EVENT               0x7001
 #define ZB_MANAGER_DEV_UPDATE_EVENT                   0x7002

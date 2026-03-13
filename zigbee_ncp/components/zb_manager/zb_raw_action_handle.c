@@ -6,6 +6,7 @@
 #include "esp_zigbee_core.h"
 #include "zcl/esp_zigbee_zcl_common.h"
 #include "zb_manager_lqi_rssi_cache.h"
+#include "esp_random.h"
 
 static const char *TAG = "ZB_RAW_ACTION_HANDLER_MODULE";
 
@@ -140,8 +141,67 @@ void send_read_attr_response(zb_uint8_t param)
     //return true;
 }
 
-/********************* */
 bool raw_command_handler(uint8_t bufid)
+{
+    zb_bufid_t zb_buf = bufid;
+    zb_zcl_parsed_hdr_t *cmd_info = ZB_BUF_GET_PARAM(zb_buf, zb_zcl_parsed_hdr_t);
+
+    // Получаем payload и его длину
+    uint8_t *payload = zb_buf_begin(zb_buf);
+    uint16_t payload_len = zb_buf_len(zb_buf); // Уже только данные!
+
+    // Проверка: не больше 64 байт
+    if (payload_len > 64) {
+        ESP_LOGW(TAG, "Payload too long (%u > 64), truncating", payload_len);
+        payload_len = 64;
+    }
+
+    // Фильтр: только vendor-specific команды
+    if (cmd_info->is_common_command == false) {
+        ESP_LOGI(TAG, "📨 Intercepted non-standard cluster command: cluster=0x%04x, cmd=0x%02x, payload_len=%u",
+                 cmd_info->cluster_id, cmd_info->cmd_id, payload_len);
+
+        // Логируем payload — вы уже это делаете
+        ESP_LOG_BUFFER_HEX_LEVEL(TAG, payload, payload_len, ESP_LOG_INFO);
+
+        // Подготавливаем структуру
+        zb_manager_cmd_nostandart_cluster_resp_packed_message_t report = {0};
+
+        report.status = ESP_ZB_ZCL_STATUS_SUCCESS;
+        report.src_address.u.short_addr = cmd_info->addr_data.common_data.source.u.short_addr;
+        report.src_endpoint = cmd_info->addr_data.common_data.src_endpoint;
+        report.dst_endpoint = cmd_info->addr_data.common_data.dst_endpoint;
+        report.cluster = cmd_info->cluster_id;
+        report.cmd_id = cmd_info->cmd_id;
+        report.cmd_payload_len = (uint8_t)payload_len;
+        memcpy(report.cmd_payload, payload, payload_len);
+
+        // NCP заголовок
+        esp_ncp_header_t ncp_header = {
+            .sn = esp_random() % 0xFF,
+            .id = ZB_MANAGER_NOSTANDART_CLUSTER_CMD_REPORT,
+        };
+
+        // Отправляем на хост
+        esp_ncp_noti_input(&ncp_header, &report, sizeof(report));
+
+        ESP_LOGI(TAG, "✅ Sent to host: src_short=0x%04x, ep=%d, cluster=0x%04x, cmd=0x%02x, payload_len=%u",
+                 report.src_address.u.short_addr,
+                 report.src_endpoint,
+                 report.cluster,
+                 report.cmd_id,
+                 report.cmd_payload_len);
+
+        //zb_buf_free(zb_buf);
+        //return true; // ⛔ Блокируем стандартную обработку
+    }
+
+    //zb_buf_free(zb_buf);
+    return false;
+}
+
+/********************* */
+bool raw_command_handler_temp_working(uint8_t bufid)
 {
     zb_bufid_t zb_buf = bufid;
     uint16_t data_len = zb_buf_len(zb_buf);

@@ -14,12 +14,12 @@ zb_manager_app_main_config_t g_app_config;
 
 static void set_default_config() {
     // HA
-    g_app_config.ha_config.ha_enabled = true;
+    g_app_config.ha_config.ha_enabled = false;
     strcpy(g_app_config.ha_config.mqtt.broker, "core-mosquitto");
     g_app_config.ha_config.mqtt.port = 1883;
-    g_app_config.ha_config.mqtt.mqtt_enabled = true;
-    g_app_config.ha_config.mqtt.discovery = true;
-    g_app_config.ha_config.mqtt.availability = true;
+    g_app_config.ha_config.mqtt.mqtt_enabled = false;
+    g_app_config.ha_config.mqtt.discovery = false;
+    g_app_config.ha_config.mqtt.availability = false;
     strcpy(g_app_config.ha_config.mqtt.username, "");
     strcpy(g_app_config.ha_config.mqtt.password, "");
     strcpy(g_app_config.ha_config.language, "ru");

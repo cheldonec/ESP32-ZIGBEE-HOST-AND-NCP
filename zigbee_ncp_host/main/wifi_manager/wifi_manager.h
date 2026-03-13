@@ -45,4 +45,7 @@ esp_err_t load_wifi_config_from_nvs(void);
 
 esp_err_t save_wifi_config_to_nvs(const char *ssid, const char *password);
 
+// для перевода в режим по нажаьтии кнопки
+void wifi_manager_switch_to_ap_mode_safe(void);
+
 #endif

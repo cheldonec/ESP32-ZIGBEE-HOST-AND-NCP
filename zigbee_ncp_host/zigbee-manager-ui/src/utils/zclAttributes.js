@@ -14,13 +14,73 @@ const ZCL_ATTR_TYPES = {
   0x48: 'array', 0x4c: 'struct',
   0xe0: 'time of day', 0xe1: 'date', 0xe2: 'utc time',
   0xf0: 'IEEE addr', 0xf1: '128-bit key',
-  0xff: 'invalid' ,
+  0xff: 'invalid',
   0x83: 's24',   // signed 24-bit integer
-  0x84: 's32',   // уже есть как 0x2b?
-  0x85: 'float', // 
+  0x84: 's32',   // дубль? убрать или переименовать
+  0x85: 'float',
 };
 
 export const getAttrTypeName = (type) => ZCL_ATTR_TYPES[type] || `0x${type.toString(16)}`;
+
+/**
+ * Попробует преобразовать hex-строку в ASCII
+ * @param {string} hexStr - hex без '0x'
+ * @returns {string|null}
+ */
+function tryHexToAscii(hexStr) {
+  if (hexStr.length % 2 !== 0) return null;
+
+  const bytes = [];
+  for (let i = 0; i < hexStr.length; i += 2) {
+    const byte = parseInt(hexStr.substr(i, 2), 16);
+    if (isNaN(byte)) return null;
+    bytes.push(byte);
+  }
+
+  // Только печатные ASCII символы (32–126)
+  if (!bytes.every(b => b >= 32 && b <= 126)) return null;
+
+  return String.fromCharCode(...bytes);
+}
+
+/**
+ * Форматирует значение атрибута для отображения
+ * Учитывает value_hex, is_void_pointer, p_value и тип
+ * @param {Object} attr - объект атрибута
+ * @param {boolean} isCustom - является ли атрибут пользовательским
+ * @returns {React.ReactNode|string}
+ */
+export const formatAttributeValue = (attr, isCustom = false) => {
+  // 1. Сырые данные (приоритет)
+  if (attr.is_void_pointer && attr.value_hex) {
+    const hexStr = attr.value_hex.replace(/^0x/i, '');
+    const ascii = tryHexToAscii(hexStr);
+    return (
+      <span>
+        <strong>{attr.value_hex}</strong>
+        {ascii && <span style={{ color: '#5c9', marginLeft: '8px' }}>("{ascii}")</span>}
+      </span>
+    );
+  }
+
+  // 2. p_value (если есть)
+  if (attr.p_value !== undefined && attr.p_value !== null) {
+    return String(attr.p_value);
+  }
+
+  // 3. value (включая null/undefined)
+  if (attr.value !== undefined && attr.value !== null) {
+    return String(attr.value);
+  }
+
+  // 4. value === null → явно покажем "null"
+  if (attr.value === null) {
+    return <span style={{ color: '#888', fontStyle: 'italic' }}>null</span>;
+  }
+
+  // 5. значение неизвестно
+  return <span style={{ color: '#666' }}>—</span>;
+};
 
 /**
  * Возвращает массив стандартных атрибутов для заданного кластера
@@ -33,7 +93,7 @@ export const getStandardAttrsForCluster = (clusterId, clusterData) => {
   if (clusterId === 0) {
     attrs.push(
       { id: 0x0000, name: 'ZCL Version', value: clusterData.zcl_version, type: 0x20 },
-      { id: 0x0001, name: 'App Version', value: clusterData.application_version, type: 0x20 },
+      { id: 0x0001, name: 'App Version', value: clusterData.app_version, type: 0x20 },
       { id: 0x0002, name: 'Stack Version', value: clusterData.stack_version, type: 0x20 },
       { id: 0x0003, name: 'HW Version', value: clusterData.hw_version, type: 0x20 },
       { id: 0x0004, name: 'Manufacturer', value: clusterData.manufacturer_name, type: 0x42 },

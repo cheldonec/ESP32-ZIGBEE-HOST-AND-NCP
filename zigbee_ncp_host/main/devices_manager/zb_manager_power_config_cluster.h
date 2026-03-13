@@ -169,6 +169,22 @@ esp_err_t zb_manager_power_config_cluster_add_custom_attribute(zb_manager_power_
 
 attribute_custom_t *zb_manager_power_config_cluster_find_custom_attr_obj(zb_manager_power_config_cluster_t *cluster, uint16_t attr_id);
 
+
+/**
+ * @brief Convert Power Config Cluster object to cJSON
+ * @param cluster Pointer to the cluster
+ * @return cJSON* - new JSON object, or NULL
+ */
+cJSON* zbm_power_config_cluster_to_json(zb_manager_power_config_cluster_t *cluster);
+
+/**
+ * @brief Load Power Config Cluster from JSON
+ * @param cluster Pointer to cluster struct (must be allocated or zeroed)
+ * @param json_obj cJSON object
+ * @return ESP_OK on success
+ */
+esp_err_t zbm_power_config_cluster_load_from_json(zb_manager_power_config_cluster_t *cluster, cJSON *json_obj);
+
 #ifdef __cplusplus
 }
 #endif

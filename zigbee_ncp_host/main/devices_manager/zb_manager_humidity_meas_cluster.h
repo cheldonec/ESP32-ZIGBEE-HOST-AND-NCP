@@ -5,6 +5,7 @@
 #include "esp_err.h"
 #include <stdbool.h>
 #include "zbm_clusters.h"
+#include "cJSON.h"
 
 
 typedef enum {
@@ -138,4 +139,20 @@ const char* zb_manager_get_humidity_measurement_cluster_attr_name(uint16_t attrI
 esp_err_t zb_manager_humidity_meas_cluster_add_custom_attribute(zb_manager_humidity_measurement_cluster_t *cluster, uint16_t attr_id, uint8_t attr_type);
 
 attribute_custom_t *zb_manager_humidity_meas_cluster_find_custom_attr_obj(zb_manager_humidity_measurement_cluster_t *cluster, uint16_t attr_id);
+
+/**
+ * @brief Convert Humidity Measurement Cluster object to cJSON
+ * @param cluster Pointer to the cluster
+ * @return cJSON* - new JSON object, or NULL
+ */
+cJSON* zbm_humidity_cluster_to_json(zb_manager_humidity_measurement_cluster_t *cluster);
+
+/**
+ * @brief Load Humidity Measurement Cluster from JSON
+ * @param cluster Pointer to cluster struct (must be allocated or zeroed)
+ * @param json_obj cJSON object
+ * @return ESP_OK on success
+ */
+esp_err_t zbm_humidity_cluster_load_from_json(zb_manager_humidity_measurement_cluster_t *cluster, cJSON *json_obj);
+
 #endif // ZB_MANAGER_HUMIDITY_MEAS_CLUSTER_H

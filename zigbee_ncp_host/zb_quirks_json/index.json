@@ -1,0 +1,30 @@
+{
+  "version": "1.0",
+  "count": 4,
+  "models": [
+    {
+      "model_id": "TS0041",
+      "manufacturer": "Tuya",
+      "filename": "TS0041.json",
+      "tpl_id": 1001
+    },
+    {
+      "model_id": "TS0042",
+      "manufacturer": "Tuya",
+      "filename": "TS0042.json",
+      "tpl_id": 1002
+    },
+    {
+      "model_id": "TS0043",
+      "manufacturer": "Tuya",
+      "filename": "TS0043.json",
+      "tpl_id": 1003
+    },
+    {
+      "model_id": "TS0044",
+      "manufacturer": "Tuya",
+      "filename": "TS0044.json",
+      "tpl_id": 1004
+    }
+  ]
+}

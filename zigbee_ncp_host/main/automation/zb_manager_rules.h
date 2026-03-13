@@ -25,7 +25,65 @@ extern "C" {
 #define ZB_RULE_MAX_TRIGGERS 4
 #define ZB_RULE_MAX_ACTIONS  4
 
+/**
+ * @brief Количество виртуальных переменных
+ */
+#define ZB_VIRTUAL_VAR_COUNT 32
+/**
+ * @brief Глобальные виртуальные переменные системы
+ * Используются для хранения состояния: "дома/нет", "ночь", "отпуск" и т.д.
+ */
+extern uint8_t virtual_var[ZB_VIRTUAL_VAR_COUNT];
 
+// Макросы для удобства
+#define SYS_VAR(i) ((uint8_t)(i))                    // 0–15
+#define USR_VAR(i) ((uint8_t)(16 + (i)))             // 16–31
+#define IS_VALID_VAR(idx) ((idx) < ZB_VIRTUAL_VAR_COUNT)
+
+/**
+ * @brief Установить значение переменной
+ */
+void zb_rule_set_var(int idx, uint8_t value);
+
+/**
+ * @brief Увеличить переменную
+ */
+void zb_rule_inc_var(int idx);
+
+/**
+ * @brief Уменьшить переменную
+ */
+void zb_rule_dec_var(int idx);
+
+/**
+ * @brief Переключить переменную
+ */
+void zb_rule_toggle_var(int idx);
+
+/**
+ * @brief Семантические индексы виртуальных переменных
+ * Позволяют использовать понятные имена вместо цифр
+ */
+typedef enum {
+    VAR_MORNING_MODE,           // 0 — 🌅 утро началось
+    VAR_HOME_OCCUPIED,          // 1 — 👨‍👩‍👧‍👦 кто-то дома
+    VAR_AWAY_MODE,              // 2 — 🏠❌ режим "дома никого"
+    VAR_HOLIDAY_MODE,           // 3 — 🎉 праздник/выходной
+    VAR_NIGHT_MODE,             // 4 — 🌙 тёмное время суток
+    VAR_GARAGE_OPEN,            // 5 — 🚗🚪 ворота открыты
+    VAR_ALARM_ARMED,            // 6 — 🔔 сигнализация активна
+    VAR_BUTTON_CLICK_COUNT,     // 7 — 🔢 счётчик кликов кнопки
+    VAR_LIGHT_OVERRIDE,         // 8 — ✋ ручное управление светом
+    VAR_SYSTEM_READY,           // 9 — ✅ все устройства онлайн
+    VAR_WINDOW_OPEN,            // 10 — 🪟 окно открыто
+    VAR_BOILER_ACTIVE,          // 11 — 🔥 котёл работает
+    VAR_SUNSET_REACHED,         // 12 — 🌇 закат прошёл
+    VAR_TV_MODE,                // 13 — 📺 режим просмотра ТВ
+    VAR_DOOR_OPENED_TODAY,      // 14 — 🚪 дверь открывалась сегодня
+    VAR_LAST_TRIGGER,           // 15 — 🔄 ID последнего сработавшего правила
+
+    // ВАЖНО: Не более ZB_VIRTUAL_VAR_COUNT (32)
+} zb_virtual_var_index_t;
 /**
  * @brief Типы триггеров
  */
@@ -37,6 +95,7 @@ typedef enum {
     ZB_RULE_TRIGGER_SUNRISE_SUNSET,
     ZB_RULE_TRIGGER_BUTTON_PRESS,
     ZB_RULE_TRIGGER_DEVICE_UNAVAILABLE,
+    ZB_RULE_TRIGGER_VIRTUAL_VAR,
 } zb_rule_trigger_type_t;
 
 /**
@@ -59,6 +118,10 @@ typedef enum {
     ZB_RULE_ACTION_RUN_SCENE,
     ZB_RULE_ACTION_HTTP_REQUEST,
     ZB_RULE_ACTION_DELAY,
+    ZB_RULE_ACTION_SET_VIRTUAL_VAR,
+    ZB_RULE_ACTION_INC_VIRTUAL_VAR,
+    ZB_RULE_ACTION_DEC_VIRTUAL_VAR,
+    ZB_RULE_ACTION_TOGGLE_VIRTUAL_VAR,
 } zb_rule_action_type_t;
 
 /**
@@ -83,6 +146,10 @@ typedef struct {
         struct {
             uint32_t seconds;
         } delay;
+        struct {
+            uint8_t var_index;           // 0, 1, 2
+            uint8_t value;               // значение для записи
+        } set_virtual_var;
     } data;
 } zb_rule_action_t;
 
@@ -125,6 +192,12 @@ typedef struct {
             int offset_min; // ± minutes
         } sun_event;
 
+        struct {
+            uint8_t var_index;           // 0, 1, 2
+            zb_rule_condition_t cond;
+            uint8_t value;               // порог сравнения
+        } virtual_var;
+
         /**
          * @brief Триггер: устройство недоступно
          */
@@ -146,7 +219,7 @@ typedef enum {
  * @brief Полное правило автоматизации
  */
 typedef struct {
-    char id[32];           // уникальный ID правила
+    char id[37];           // уникальный ID правила
     char name[64];         // читаемое имя
     char module[32];       // логическая группа: "light", "security", etc.
     uint8_t priority;      // приоритет: 1 (высший) ... 5 (низший)
@@ -211,6 +284,8 @@ bool zb_rule_engine_remove_all_rules(void);
  * @brief Отправить уведомление о обновлении правил ( WebSocket)
  */
 void ws_notify_rules_update(void); // должна реализоваться в webserver.c
+
+void ws_notify_virtual_vars_update(void); // должна реализоваться в webserver.c
 /**
  * @brief Получить правило по ID
  */

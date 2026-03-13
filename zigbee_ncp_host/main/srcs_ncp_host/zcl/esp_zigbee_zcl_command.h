@@ -913,6 +913,18 @@ typedef struct zb_manager_cmd_report_attr_resp_message_s {
 
 void zb_manager_free_report_attr_resp(zb_manager_cmd_report_attr_resp_message_t* resp);
 
+//               Nostandert Cluster Comand Notify
+typedef struct zb_manager_cmd_nostandart_cluster_resp_message_s {
+    esp_zb_zcl_status_t status;       /*!< The status of the report attribute response, which can refer to esp_zb_zcl_status_t */
+    esp_zb_zcl_addr_t src_address;    /*!< The struct of address contains short and ieee address, which can refer to esp_zb_zcl_addr_s */
+    uint8_t src_endpoint;             /*!< The endpoint id which comes from report device */
+    uint8_t dst_endpoint;             /*!< The destination endpoint id */
+    uint16_t cluster; 
+    uint8_t                     cmd_id;
+    uint8_t                     cmd_payload_len;
+    uint8_t                     cmd_payload[64];
+}
+zb_manager_cmd_nostandart_cluster_resp_message_t;
 
 //                                        === REPORTING CONFIG ===
 

@@ -668,6 +668,64 @@ void ws_notify_rules_update(void)
     }
 }
 
+void ws_notify_virtual_vars_update(void)
+{
+    if (s_is_in_ap_only_mode == true) return;
+    ESP_LOGI(TAG, "📦 Notify virtual variables updated");
+    if (server_handle == NULL) return;
+
+    // Создаём JSON: {"event": "vars_updated", "vars": [0,1,0,255,...]}
+    cJSON *msg = cJSON_CreateObject();
+    cJSON_AddStringToObject(msg, "event", "vars_updated");
+
+    // Копируем значения virtual_var в массив int для cJSON
+    int var_copy[ZB_VIRTUAL_VAR_COUNT];
+    for (int i = 0; i < ZB_VIRTUAL_VAR_COUNT; i++) {
+        var_copy[i] = virtual_var[i];
+    }
+
+    cJSON *var_array = cJSON_CreateIntArray(var_copy, ZB_VIRTUAL_VAR_COUNT);
+    cJSON_AddItemToObject(msg, "vars", var_array);
+
+    // Печатаем в буфер
+    int len = cJSON_PrintPreallocated(msg, json_print_buffer, sizeof(json_print_buffer), false);
+    cJSON_Minify(json_print_buffer); // убираем пробелы
+    if (len < 0) {
+        ESP_LOGE(TAG, "Failed to print JSON into buffer");
+        cJSON_Delete(msg);
+        return;
+    }
+
+    // Делаем копию строки для асинхронной отправки
+    char *rendered_copy = strndup(json_print_buffer, sizeof(json_print_buffer) - 1);
+    if (!rendered_copy) {
+        ESP_LOGE(TAG, "Failed to allocate memory for JSON copy in ws_notify_virtual_vars_update");
+        cJSON_Delete(msg);
+        return;
+    }
+
+    // Подготавливаем асинхронную задачу
+    ws_async_data_t *async_data = malloc(sizeof(ws_async_data_t));
+    if (!async_data) {
+        free(rendered_copy);
+        cJSON_Delete(msg);
+        return;
+    }
+
+    async_data->hd = server_handle;
+    async_data->payload = (uint8_t*)rendered_copy;
+    async_data->len = strlen(rendered_copy);
+
+    // Отправляем в очередь HTTPD
+    if (httpd_queue_work(server_handle, ws_send_async_task, async_data) != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to queue work for virtual vars update");
+        free(rendered_copy);
+        free(async_data);
+    }
+
+    cJSON_Delete(msg); // Очищаем исходный JSON
+}
+
 void ws_notify_endpoint_name_update(device_custom_t *dev, endpoint_custom_t *ep)
 {
     if (s_is_in_ap_only_mode == true || !dev || !ep || !server_handle) return;
@@ -1100,6 +1158,63 @@ esp_err_t ws_handler(httpd_req_t *req)
                 httpd_ws_send_frame(req, &frame);
             }
         } 
+        else if (strcmp(cmd->valuestring, "set_virtual_var") == 0) {
+            cJSON *var_idx = cJSON_GetObjectItem(req_json, "var_index");
+            cJSON *value = cJSON_GetObjectItem(req_json, "value");
+            if (!var_idx || !value || !cJSON_IsNumber(var_idx) || !cJSON_IsNumber(value)) {
+                ESP_LOGW(TAG, "Invalid or missing var_index/value in set_virtual_var");
+                goto cleanup;
+            }
+            int idx = var_idx->valueint;
+            uint8_t val = (uint8_t)value->valueint;
+
+            if (idx >= 0 && idx < ZB_VIRTUAL_VAR_COUNT) {
+                zb_rule_set_var(idx, val);
+                ESP_LOGI(TAG, "✅ Установлено virtual_var[%d] = %d", idx, val);
+                //ws_notify_virtual_vars_update(); // оповестить UI об изменении
+            } else {
+                ESP_LOGW(TAG, "❌ Неверный индекс переменной: %d", idx);
+            }
+        }
+        else if (strcmp(cmd->valuestring, "inc_virtual_var") == 0) {
+            cJSON *var_idx = cJSON_GetObjectItem(req_json, "var_index");
+            if (!var_idx || !cJSON_IsNumber(var_idx)) {
+                ESP_LOGW(TAG, "Invalid or missing var_index in inc_virtual_var");
+                goto cleanup;
+            }
+            int idx = var_idx->valueint;
+            if (idx >= 0 && idx < ZB_VIRTUAL_VAR_COUNT) {
+                zb_rule_inc_var(idx);
+                ESP_LOGI(TAG, "✅ Инкрементировано virtual_var[%d]", idx);
+                //ws_notify_virtual_vars_update();
+            }
+        }
+        else if (strcmp(cmd->valuestring, "dec_virtual_var") == 0) {
+            cJSON *var_idx = cJSON_GetObjectItem(req_json, "var_index");
+            if (!var_idx || !cJSON_IsNumber(var_idx)) {
+                ESP_LOGW(TAG, "Invalid or missing var_index in dec_virtual_var");
+                goto cleanup;
+            }
+            int idx = var_idx->valueint;
+            if (idx >= 0 && idx < ZB_VIRTUAL_VAR_COUNT) {
+                zb_rule_dec_var(idx);
+                ESP_LOGI(TAG, "✅ Декрементировано virtual_var[%d]", idx);
+                //ws_notify_virtual_vars_update();
+            }
+        }
+        else if (strcmp(cmd->valuestring, "toggle_virtual_var") == 0) {
+            cJSON *var_idx = cJSON_GetObjectItem(req_json, "var_index");
+            if (!var_idx || !cJSON_IsNumber(var_idx)) {
+                ESP_LOGW(TAG, "Invalid or missing var_index in toggle_virtual_var");
+                goto cleanup;
+            }
+            int idx = var_idx->valueint;
+            if (idx >= 0 && idx < ZB_VIRTUAL_VAR_COUNT) {
+                zb_rule_toggle_var(idx);
+                ESP_LOGI(TAG, "✅ Переключено virtual_var[%d]", idx);
+                //ws_notify_virtual_vars_update();
+            }
+        }
 
     }
     cleanup:
@@ -1567,7 +1682,7 @@ esp_err_t save_wifi_handler(httpd_req_t *req)
                             "</body></html>";
         httpd_resp_send(req, resp, HTTPD_RESP_USE_STRLEN);
         vTaskDelay(pdMS_TO_TICKS(1500));
-        //esp_restart();  // ✅ Перезагрузка
+        esp_restart();  // ✅ Перезагрузка
 
         // Через 3 сек — перезапустим STA
         //wifi_manager_send_command(WIFI_MANAGER_STOP_AP, NULL, NULL);
@@ -2486,6 +2601,13 @@ httpd_uri_t uri_api_run_rule = {
     .user_ctx  = NULL
 };
 
+// === URI для получения глобальных переменных ===
+httpd_uri_t api_rules_vars_get = {
+    .uri       = "/api/rules/vars",
+    .method    = HTTP_GET,
+    .handler   = api_rules_vars_handler,
+};
+
 // === Запуск сервера ===
 void start_webserver(void)
 {
@@ -2546,6 +2668,7 @@ void start_webserver(void)
             httpd_register_uri_handler(server_handle, &uri_api_delete_rule);
             httpd_register_uri_handler(server_handle, &uri_api_run_rule);
             httpd_register_uri_handler(server_handle, &api_delete_all_rules);
+            httpd_register_uri_handler(server_handle, &api_rules_vars_get);
             httpd_register_uri_handler(server_handle, &uri_static);
         //}
             

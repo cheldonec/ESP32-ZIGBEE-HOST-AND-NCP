@@ -298,7 +298,7 @@ static void ESP_ZIGBEE_Task(void *pvParameters)
         esp_zb_raw_command_handler_register(init_ctx->raw_command_handler);
     }else esp_zb_raw_command_handler_register(raw_command_handler);*/
     
-        
+        esp_zb_raw_command_handler_register(raw_command_handler);
         esp_zb_aps_data_indication_handler_register(esp_zb_aps_data_indication_handler);
         esp_zb_aps_data_confirm_handler_register(esp_zb_aps_data_confirm_handler);
 

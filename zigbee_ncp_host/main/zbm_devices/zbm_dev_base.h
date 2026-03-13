@@ -38,12 +38,13 @@ cJSON *zbm_base_dev_short_list_for_webserver(void);
 cJSON *zbm_dev_base_device_to_json(device_custom_t* dev);
 esp_err_t zbm_dev_base_dev_delete_safe(device_custom_t* dev_object);
 
-cJSON *zbm_dev_base_device_to_json(device_custom_t* dev);
 
 cJSON *zbm_dev_base_to_json_safe(void);
 
 esp_err_t zbm_dev_base_queue_save_req_cmd(void); // отложенный запуск
 esp_err_t zbm_dev_base_save_req_cmd(void); // сразу
+
+esp_err_t zbm_dev_base_load_device_from_json(device_custom_t *dev, cJSON *dev_json);
 
 // UPDATE DATA
 esp_err_t zbm_dev_base_dev_update_from_read_response_safe(zb_manager_cmd_read_attr_resp_message_t* read_resp);
@@ -51,6 +52,8 @@ esp_err_t zbm_dev_base_dev_update_from_read_response_safe(zb_manager_cmd_read_at
 esp_err_t zbm_dev_base_dev_update_from_report_notify_safe(zb_manager_cmd_report_attr_resp_message_t *rep);
 
 esp_err_t zbm_dev_base_dev_update_from_discovery_attr_notify_safe(const uint8_t *data, uint16_t data_len);
+
+esp_err_t zbm_dev_base_dev_update_from_nostandart_cluster_cmd_safe(zb_manager_cmd_nostandart_cluster_resp_message_t *rep);
 
 esp_err_t zbm_dev_base_dev_update_friendly_name(uint16_t short_addr, const char* name);
 

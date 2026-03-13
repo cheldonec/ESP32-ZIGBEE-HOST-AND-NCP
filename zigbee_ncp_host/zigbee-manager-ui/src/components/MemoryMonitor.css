@@ -1,0 +1,52 @@
+/* src/components/MemoryMonitor.css */
+.memory-monitor {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  background: var(--bg-secondary);
+  border-top: 1px solid var(--border-color);
+  padding: 8px 12px;
+  font-family: 'Courier New', monospace;
+  font-size: 13px;          /* Было 11px → стало 13px */
+  color: var(--text-primary);
+  z-index: 1000;
+  text-align: center;
+  box-shadow: 0 -2px 8px rgba(0, 0, 0, 0.1);
+  transition: background 0.3s, color 0.3s;
+}
+
+.memory-monitor.warning {
+  background: #ffebee;
+  color: #c62828;
+  border-color: #ef9a9a;
+}
+
+.memory-monitor.warning .memory-content span:not(.error) {
+  color: #d32f2f;
+}
+
+.memory-content {
+  display: flex;
+  justify-content: center;
+  gap: 14px;                /* Немного увеличили отступы */
+  flex-wrap: wrap;
+  font-weight: 500;         /* Чуть жирнее для читаемости */
+}
+
+.memory-content span {
+  white-space: nowrap;
+}
+
+.error {
+  color: var(--danger) !important;
+}
+
+@media (max-width: 600px) {
+  .memory-content {
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+  }
+}

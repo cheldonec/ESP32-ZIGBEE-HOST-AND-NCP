@@ -1016,6 +1016,79 @@ static esp_err_t zb_manager_disc_attr_resp_fn(const uint8_t *input, uint16_t inl
     return ESP_OK;
 }
 
+/**
+ * @brief Обработчик ZB_MANAGER_NOSTANDART_CLUSTER_CMD_REPORT от NCP
+ */
+static esp_err_t zb_manager_nostandart_cluster_cmd_resp_fn(const uint8_t *input, uint16_t inlen)
+{
+    typedef struct {
+        esp_zb_zcl_status_t status;
+        esp_zb_zcl_addr_t src_address;
+        uint8_t src_endpoint;
+        uint8_t dst_endpoint;
+        uint16_t cluster;
+        uint8_t command_id;
+        uint8_t data_len;
+        uint8_t data[64]; // variable, but capped
+    } ESP_ZNSP_ZB_PACKED_STRUCT zb_ncp_nostandart_cmd_t;
+
+    const size_t hdr_len = offsetof(zb_ncp_nostandart_cmd_t, data);
+    if (inlen < hdr_len) {
+        ESP_LOGE(TAG, "NOSTANDART_CMD: invalid length %u < %u", inlen, hdr_len);
+        return ESP_ERR_INVALID_SIZE;
+    }
+
+    const zb_ncp_nostandart_cmd_t *cmd = (const zb_ncp_nostandart_cmd_t *)input;
+
+    // Проверка длины пейлоада
+    uint8_t actual_len = (cmd->data_len > 64) ? 64 : cmd->data_len;
+    if (hdr_len + actual_len > inlen) {
+        ESP_LOGE(TAG, "NOSTANDART_CMD: data overflows buffer");
+        return ESP_ERR_INVALID_SIZE;
+    }
+
+    // Логируем
+    ESP_LOGI(TAG, "🔧 NOSTANDART CMD: short=0x%04x, ep=%d→%d, cluster=0x%04x, cmd=0x%02x, len=%u",
+             cmd->src_address.u.short_addr,
+             cmd->src_endpoint,
+             cmd->dst_endpoint,
+             cmd->cluster,
+             cmd->command_id,
+             actual_len);
+
+    if (actual_len > 0) {
+        ESP_LOG_BUFFER_HEX_LEVEL(TAG, cmd->data, actual_len, ESP_LOG_INFO);
+    }
+
+    // Подготавливаем сообщение для action worker
+    zb_manager_cmd_nostandart_cluster_resp_message_t *msg = calloc(1, sizeof(*msg));
+    if (!msg) {
+        ESP_LOGE(TAG, "❌ Failed to allocate msg for NOSTANDART_CMD");
+        return ESP_ERR_NO_MEM;
+    }
+
+    // Копируем все поля
+    msg->status = cmd->status;
+    memcpy(&msg->src_address, &cmd->src_address, sizeof(esp_zb_zcl_addr_t));
+    msg->src_endpoint = cmd->src_endpoint;
+    msg->dst_endpoint = cmd->dst_endpoint;
+    msg->cluster = cmd->cluster;
+    msg->cmd_id = cmd->command_id;
+    msg->cmd_payload_len = actual_len;
+    memcpy(msg->cmd_payload, cmd->data, actual_len);
+
+    // Отправляем в action worker
+    bool post_ok = zb_manager_post_to_action_worker(ZB_ACTION_NOSTANDART_CLUSTER_CMD_RESP, msg, sizeof(*msg));
+    if (!post_ok) {
+        ESP_LOGE(TAG, "❌ Failed to post ZB_ACTION_NOSTANDART_CLUSTER_CMD_RESP");
+        free(msg);
+        return ESP_FAIL;
+    }
+
+    ESP_LOGI(TAG, "✅ ZB_ACTION_NOSTANDART_CLUSTER_CMD_RESP posted");
+    return ESP_OK;
+}
+
 static const esp_host_zb_func_t host_zb_func_table[] = {
     {ESP_NCP_NETWORK_FORMNETWORK, esp_host_zb_form_network_fn},
     {ESP_NCP_NETWORK_JOINNETWORK, esp_host_zb_joining_network_fn},
@@ -1036,6 +1109,7 @@ static const esp_host_zb_func_t host_zb_func_table[] = {
     {ZB_MANAGER_REPORT_CONFIG_RESP, zb_manager_report_config_resp_fn},
     {ZB_MANAGER_CUSTOM_CLUSTER_REPORT , zb_manager_custom_cluster_rep_event_fn }, 
     {ZB_MANAGER_DISCOVERY_ATTR_RESP, zb_manager_disc_attr_resp_fn},
+    {ZB_MANAGER_NOSTANDART_CLUSTER_CMD_REPORT, zb_manager_nostandart_cluster_cmd_resp_fn},
 };
 
 esp_err_t esp_host_zb_input(esp_host_header_t *host_header, const void *buffer, uint16_t len)

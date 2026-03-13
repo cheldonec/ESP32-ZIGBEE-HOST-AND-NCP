@@ -6,6 +6,7 @@
 #include "ncp_host_zb_api.h"
 #include "zb_manager_devices.h"
 #include "zb_manager_ncp_host.h"
+#include "zbm_dev_base_utils.h"
 static const char *TAG = "ON_OFF_CL";
 
 /// @brief [zb_manager_on_off_cluster.c] Обновляет значение атрибута в On/Off-кластере Zigbee
@@ -419,4 +420,288 @@ attribute_custom_t *zb_manager_on_off_cluster_find_custom_attr_obj(zb_manager_on
     }
 
     return NULL; // not found
+}
+
+cluster_custom_command_t *zb_manager_on_off_cluster_find_custom_command(
+    zb_manager_on_off_cluster_t *cluster, uint8_t cmd_id)
+{
+    if (!cluster) return NULL;
+
+    for (int i = 0; i < cluster->custom_cmd_count; i++) {
+        if (cluster->custom_commands_array[i]->cmd_id == cmd_id) {
+            return cluster->custom_commands_array[i];
+        }
+    }
+    return NULL;
+}
+
+esp_err_t zb_manager_on_off_cluster_register_custom_command(
+    zb_manager_on_off_cluster_t *cluster,
+    uint8_t cmd_id)
+{
+    if (!cluster) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    // Проверим, нет ли уже такой команды
+    for (int i = 0; i < cluster->custom_cmd_count; i++) {
+        if (cluster->custom_commands_array[i]->cmd_id == cmd_id) {
+            // Команда уже есть — ничего не делаем, или можно обновить имя?
+            // Оставляем как есть
+            return ESP_OK;
+        }
+    }
+
+    // Увеличиваем массив
+    cluster_custom_command_t **new_array = realloc(cluster->custom_commands_array,
+        (cluster->custom_cmd_count + 1) * sizeof(cluster_custom_command_t*));
+    if (!new_array) {
+        return ESP_ERR_NO_MEM;
+    }
+    cluster->custom_commands_array = new_array;
+
+    // Создаём новую команду
+    cluster_custom_command_t *cmd = calloc(1, sizeof(cluster_custom_command_t));
+    if (!cmd) {
+        return ESP_ERR_NO_MEM;
+    }
+
+    cmd->cmd_id = cmd_id;
+
+    // Автоматическое имя
+    if (cmd_id == 0xFD) {
+        strlcpy(cmd->cmd_friendly_name, "Кнопка", sizeof(cmd->cmd_friendly_name));
+    } else {
+        snprintf(cmd->cmd_friendly_name, sizeof(cmd->cmd_friendly_name),
+                 "Custom Cmd 0x%02X", cmd_id);
+    }
+
+    // Добавляем в массив
+    cluster->custom_commands_array[cluster->custom_cmd_count] = cmd;
+    cluster->custom_cmd_count++;
+
+    return ESP_OK;
+}
+
+/**
+ * @brief Convert On/Off Cluster object to cJSON
+ * @param cluster Pointer to the cluster
+ * @return cJSON* - new JSON object, or NULL on failure
+ */
+cJSON* zbm_onoff_cluster_to_json(zb_manager_on_off_cluster_t *cluster)
+{
+    if (!cluster) {
+        ESP_LOGW(TAG, "zbm_onoff_cluster_to_json: cluster is NULL");
+        return NULL;
+    }
+
+    cJSON *onoff = cJSON_CreateObject();
+    if (!onoff) {
+        ESP_LOGE(TAG, "Failed to create On/Off cluster JSON object");
+        return NULL;
+    }
+
+    // === Standard Attributes ===
+    cJSON_AddNumberToObject(onoff, "cluster_id", 0x0006);
+
+    // Основное состояние
+    cJSON_AddBoolToObject(onoff, "on_off", cluster->on_off);
+    cJSON_AddStringToObject(onoff, "state", cluster->on_off ? "ON" : "OFF");
+
+    // Global Scene Control
+    cJSON_AddBoolToObject(onoff, "global_scene_control", cluster->global_scene_control);
+
+    // Timed values
+    cJSON_AddNumberToObject(onoff, "on_time", cluster->on_time);                    // in 0.1s
+    cJSON_AddNumberToObject(onoff, "on_time_sec", cluster->on_time / 10.0f);        // human-readable
+    cJSON_AddNumberToObject(onoff, "off_wait_time", cluster->off_wait_time);
+    cJSON_AddNumberToObject(onoff, "off_wait_time_sec", cluster->off_wait_time / 10.0f);
+
+    // Startup behavior
+    const char *startup_str = "Unknown";
+    switch (cluster->start_up_on_off) {
+        case 0x00: startup_str = "Off"; break;
+        case 0x01: startup_str = "On"; break;
+        case 0x02: startup_str = "Toggle"; break;
+        case 0xFF: startup_str = "Previous"; break;
+        default: break;
+    }
+    cJSON_AddNumberToObject(onoff, "start_up_on_off", cluster->start_up_on_off);
+    cJSON_AddStringToObject(onoff, "start_up_on_off_str", startup_str);
+
+    // Last update
+    cJSON_AddNumberToObject(onoff, "last_update_ms", cluster->last_update_ms);
+
+    // === Custom Attributes (nostandart_attributes) ===
+    if (cluster->nostandart_attr_count > 0 && cluster->nostandart_attr_array) {
+        cJSON *attrs = cJSON_CreateArray();
+        if (attrs) {
+            for (int i = 0; i < cluster->nostandart_attr_count; i++) {
+                attribute_custom_t *attr = cluster->nostandart_attr_array[i];
+                if (!attr) continue;
+
+                cJSON *attr_obj = cJSON_CreateObject();
+                if (!attr_obj) continue;
+
+                cJSON_AddNumberToObject(attr_obj, "id", attr->id);
+                cJSON_AddStringToObject(attr_obj, "attr_id_text", attr->attr_id_text);
+                cJSON_AddNumberToObject(attr_obj, "type", attr->type);
+                cJSON_AddNumberToObject(attr_obj, "acces", attr->acces);
+                cJSON_AddNumberToObject(attr_obj, "size", attr->size);
+                cJSON_AddNumberToObject(attr_obj, "is_void_pointer", attr->is_void_pointer);
+                cJSON_AddNumberToObject(attr_obj, "manuf_code", attr->manuf_code);
+                cJSON_AddNumberToObject(attr_obj, "parent_cluster_id", attr->parent_cluster_id);
+
+                // Добавляем значение атрибута
+                zbm_json_add_attribute_value(attr_obj, attr);
+
+                cJSON_AddItemToArray(attrs, attr_obj);
+            }
+            cJSON_AddItemToObject(onoff, "nostandart_attributes", attrs);
+        }
+    }
+
+    // === Custom Commands ===
+    if (cluster->custom_cmd_count > 0 && cluster->custom_commands_array) {
+        cJSON *cmds = cJSON_CreateArray();
+        if (cmds) {
+            for (int i = 0; i < cluster->custom_cmd_count; i++) {
+                cluster_custom_command_t *cmd = cluster->custom_commands_array[i];
+                if (!cmd) continue;
+
+                cJSON *cmd_obj = cJSON_CreateObject();
+                if (!cmd_obj) continue;
+
+                cJSON_AddNumberToObject(cmd_obj, "cmd_id", cmd->cmd_id);
+                cJSON_AddStringToObject(cmd_obj, "cmd_friendly_name", cmd->cmd_friendly_name);
+
+                cJSON_AddItemToArray(cmds, cmd_obj);
+            }
+            cJSON_AddItemToObject(onoff, "custom_commands", cmds);
+        }
+    }
+
+    return onoff;
+}
+
+/**
+ * @brief Load On/Off Cluster from cJSON object
+ * @param cluster Pointer to allocated or zeroed zb_manager_on_off_cluster_t
+ * @param json_obj cJSON object representing the cluster
+ * @return ESP_OK on success
+ */
+esp_err_t zbm_onoff_cluster_load_from_json(zb_manager_on_off_cluster_t *cluster, cJSON *json_obj)
+{
+    if (!cluster || !json_obj) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    // Инициализируем структуру
+    *cluster = (zb_manager_on_off_cluster_t)ZIGBEE_ON_OFF_CLUSTER_DEFAULT_INIT();
+
+    // === Standard Attributes ===
+    cJSON *on_off_item = cJSON_GetObjectItem(json_obj, "on_off");
+    if (on_off_item && cJSON_IsBool(on_off_item)) {
+        cluster->on_off = cJSON_IsTrue(on_off_item);
+    }
+
+    cJSON *global_scene_control_item = cJSON_GetObjectItem(json_obj, "global_scene_control");
+    if (global_scene_control_item && cJSON_IsBool(global_scene_control_item)) {
+        cluster->global_scene_control = cJSON_IsTrue(global_scene_control_item);
+    }
+
+    LOAD_NUMBER(json_obj, "on_time", cluster->on_time);
+    LOAD_NUMBER(json_obj, "off_wait_time", cluster->off_wait_time);
+
+    cJSON *start_up_on_off_item = cJSON_GetObjectItem(json_obj, "start_up_on_off");
+    if (start_up_on_off_item && cJSON_IsNumber(start_up_on_off_item)) {
+        uint8_t val = (uint8_t)start_up_on_off_item->valueint;
+        if (val == 0x00 || val == 0x01 || val == 0x02 || val == 0xFF) {
+            cluster->start_up_on_off = val;
+        } else {
+            ESP_LOGW(TAG, "Invalid start_up_on_off value: %u, using default (0xFF)", val);
+            cluster->start_up_on_off = 0xFF;
+        }
+    }
+
+    // Last update timestamp
+    cJSON *last_update_item = cJSON_GetObjectItem(json_obj, "last_update_ms");
+    if (last_update_item && cJSON_IsNumber(last_update_item)) {
+        cluster->last_update_ms = last_update_item->valueint;
+    } else {
+        cluster->last_update_ms = esp_log_timestamp();
+    }
+
+    // === Custom Attributes (nostandart_attributes) ===
+    cJSON *attrs_json = cJSON_GetObjectItem(json_obj, "nostandart_attributes");
+    if (attrs_json && cJSON_IsArray(attrs_json)) {
+        int count = cJSON_GetArraySize(attrs_json);
+        cluster->nostandart_attr_count = count;
+        cluster->nostandart_attr_array = calloc(count, sizeof(attribute_custom_t*));
+        if (!cluster->nostandart_attr_array) {
+            return ESP_ERR_NO_MEM;
+        }
+
+        bool alloc_failed = false;
+        for (int i = 0; i < count; i++) {
+            cJSON *attr_json = cJSON_GetArrayItem(attrs_json, i);
+            if (!attr_json) continue;
+
+            attribute_custom_t *attr = calloc(1, sizeof(attribute_custom_t));
+            if (!attr) {
+                alloc_failed = true;
+                continue;
+            }
+
+            attr->id = cJSON_GetObjectItem(attr_json, "id")->valueint;
+            LOAD_STRING(attr_json, "attr_id_text", attr->attr_id_text);
+            attr->type = cJSON_GetObjectItem(attr_json, "type")->valueint;
+            attr->acces = cJSON_GetObjectItem(attr_json, "acces")->valueint;
+            attr->size = cJSON_GetObjectItem(attr_json, "size")->valueint;
+            attr->is_void_pointer = cJSON_GetObjectItem(attr_json, "is_void_pointer")->valueint;
+            attr->manuf_code = cJSON_GetObjectItem(attr_json, "manuf_code")->valueint;
+            attr->parent_cluster_id = cJSON_GetObjectItem(attr_json, "parent_cluster_id")->valueint;
+
+            attr->p_value = NULL;
+            zbm_json_load_attribute_value(attr, attr_json);
+
+            cluster->nostandart_attr_array[i] = attr;
+        }
+        if (alloc_failed) {
+            ESP_LOGW(TAG, "Partial failure loading custom attributes for On/Off cluster");
+        }
+    }
+
+    // === Custom Commands ===
+    cJSON *cmds_json = cJSON_GetObjectItem(json_obj, "custom_commands");
+    if (cmds_json && cJSON_IsArray(cmds_json)) {
+        int cmd_count = cJSON_GetArraySize(cmds_json);
+        cluster->custom_cmd_count = cmd_count;
+        cluster->custom_commands_array = calloc(cmd_count, sizeof(cluster_custom_command_t*));
+        if (!cluster->custom_commands_array) {
+            return ESP_ERR_NO_MEM;
+        }
+
+        bool cmd_alloc_failed = false;
+        for (int i = 0; i < cmd_count; i++) {
+            cJSON *cmd_json = cJSON_GetArrayItem(cmds_json, i);
+            if (!cmd_json) continue;
+
+            cluster_custom_command_t *cmd = calloc(1, sizeof(cluster_custom_command_t));
+            if (!cmd) {
+                cmd_alloc_failed = true;
+                continue;
+            }
+
+            cmd->cmd_id = cJSON_GetObjectItem(cmd_json, "cmd_id")->valueint;
+            LOAD_STRING(cmd_json, "cmd_friendly_name", cmd->cmd_friendly_name);
+
+            cluster->custom_commands_array[i] = cmd;
+        }
+        if (cmd_alloc_failed) {
+            ESP_LOGW(TAG, "Partial failure loading custom commands for On/Off cluster");
+        }
+    }
+
+    return ESP_OK;
 }

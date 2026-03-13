@@ -1,8 +1,6 @@
 // src/components/RuleEditor.js
 import React, { useState } from 'react';
 
-
-
 // Полифил для генерации UUID v4
 const generateUUID = () => {
   if (typeof crypto !== 'undefined' && crypto.randomUUID) {
@@ -20,8 +18,8 @@ const RuleEditor = ({ rule, devices, onSave, onCancel }) => {
   const [module, setModule] = useState(rule?.module || 'light');
   const [priority, setPriority] = useState(rule?.priority || 3);
   const [enabled, setEnabled] = useState(rule?.enabled !== false);
-  const [triggers, setTriggers] = useState(rule?.triggers || []);
-  const [actions, setActions] = useState(rule?.actions || []);
+  const [triggers, setTriggers] = useState((rule?.triggers || []).map(t => ({...t,id: t.id || generateUUID()})));
+  const [actions, setActions] = useState((rule?.actions || []).map(a => ({...a,id: a.id || generateUUID()})));
   const [triggerLogic, setTriggerLogic] = useState(rule?.trigger_logic || 'any');
   const modules = [
     { id: 'light', name: 'Свет' },
@@ -31,11 +29,11 @@ const RuleEditor = ({ rule, devices, onSave, onCancel }) => {
   ];
 
   // --- Триггеры ---
-
   const handleAddTrigger = () => {
     setTriggers([
       ...triggers,
       {
+        id: generateUUID(),
         type: 'device_state',
         short: '',
         endpoint_id: 1,
@@ -43,28 +41,19 @@ const RuleEditor = ({ rule, devices, onSave, onCancel }) => {
         condition: 'eq',
         value: 1,
       },
-      /*{
-        type: 'time_range',
-        from: '08:00',
-        to: '09:00',
-        days_of_week: 0b00101010, // Пн, Ср, Пт по умолчанию
-        delay_sec: 0,
-      },*/
     ]);
   };
 
   const removeTrigger = (index) => {
-    const newTriggers = [...triggers];
-    newTriggers.splice(index, 1);
-    setTriggers(newTriggers);
+    setTriggers(triggers.filter((_, i) => i !== index));
   };
 
   // --- Действия ---
-
   const handleAddAction = () => {
     setActions([
       ...actions,
       {
+        id: generateUUID(), // ← добавляем ID
         type: 'device_command',
         short: '',
         endpoint: 1,
@@ -73,13 +62,12 @@ const RuleEditor = ({ rule, devices, onSave, onCancel }) => {
     ]);
   };
 
-  const removeAction = (index) => {
-    const newActions = [...actions];
-    newActions.splice(index, 1);
-    setActions(newActions);
+  const removeAction = (id) => {
+    setActions(actions.filter(a => a.id !== id));
   };
 
   const saveRule = () => {
+    console.log('🔍 Триггеры перед сохранением:', JSON.stringify(triggers, null, 2));
     const newRule = {
       id: rule?.id || generateUUID(),
       name,
@@ -90,6 +78,7 @@ const RuleEditor = ({ rule, devices, onSave, onCancel }) => {
       triggers: JSON.parse(JSON.stringify(triggers)),
       actions: JSON.parse(JSON.stringify(actions)),
     };
+    console.log('📤 Отправляем в onSave:', newRule); // 🔥 Добавь эту строку
     onSave(newRule);
   };
 
@@ -175,12 +164,29 @@ const RuleEditor = ({ rule, devices, onSave, onCancel }) => {
         {/* Триггеры */}
         <div className="section">
           <h4>📌 Триггеры</h4>
+
+          {/* Логика объединения триггеров — теперь всегда сверху */}
+          <div className="form-group" style={{ marginTop: '8px', marginBottom: '16px' }}>
+            <label>Логика триггеров</label>
+            <select
+              value={triggerLogic}
+              onChange={(e) => setTriggerLogic(e.target.value)}
+              className="form-select"
+            >
+              <option value="any">Любой (ИЛИ) — сработает при любом условии</option>
+              <option value="all">Все (И) — сработает только при всех условиях</option>
+            </select>
+            <p style={{ fontSize: '12px', color: '#666', marginTop: '4px' }}>
+              Например: «время 20:00 И освещённость &lt; 10»
+            </p>
+          </div>
+
           {triggers.length === 0 ? (
             <p style={{ color: 'var(--text-secondary)', fontSize: '14px' }}>Нет триггеров</p>
           ) : (
             triggers.map((t, idx) => (
               <div
-                key={idx}
+                key={t.id}
                 className="trigger-item"
                 style={{
                   marginBottom: '12px',
@@ -190,15 +196,8 @@ const RuleEditor = ({ rule, devices, onSave, onCancel }) => {
                   position: 'relative',
                 }}
               >
-                <button
-                  onClick={() => removeTrigger(idx)}
-                  className="delete-btn"
-                  title="Удалить триггер"
-                >
-                  ×
-                </button>
-
-                <div style={{ marginBottom: '8px' }}>
+                {/* Тип триггера + кнопка удаления справа */}
+                <div style={{ marginBottom: '8px', position: 'relative' }}>
                   <select
                     value={t.type}
                     onChange={(e) => {
@@ -207,11 +206,30 @@ const RuleEditor = ({ rule, devices, onSave, onCancel }) => {
                       setTriggers(newTriggers);
                     }}
                     className="form-select"
+                    style={{ paddingRight: '40px' }}
                   >
                     <option value="device_state">Состояние устройства</option>
                     <option value="device_unavailable">Устройство недоступно</option>
                     <option value="time_range">Временной интервал</option>
+                    <option value="virtual_var">Виртуальная переменная</option>
                   </select>
+                  <button
+                    onClick={() => removeTrigger(idx)}
+                    className="delete-btn"
+                    title="Удалить триггер"
+                    style={{
+                      position: 'absolute',
+                      top: '6px',
+                      right: '8px',
+                      padding: '0 6px',
+                      height: '20px',
+                      minWidth: '24px',
+                      fontSize: '14px',
+                      fontWeight: 'normal',
+                    }}
+                  >
+                    ×
+                  </button>
                 </div>
 
                 {t.type === 'device_state' && (
@@ -387,6 +405,63 @@ const RuleEditor = ({ rule, devices, onSave, onCancel }) => {
                     </div>
                   </>
                 )}
+                {t.type === 'virtual_var' && (
+                  <>
+                    <div style={{ marginBottom: '8px' }}>
+                      <label>Переменная</label>
+                      <select
+                        value={t.var_index || 0}
+                        onChange={(e) => {
+                          const newTriggers = [...triggers];
+                          newTriggers[idx].var_index = Number(e.target.value);
+                          setTriggers(newTriggers);
+                        }}
+                        className="form-select"
+                      >
+                        <option value={0}>Переменная 1</option>
+                        <option value={1}>Переменная 2</option>
+                        <option value={2}>Переменная 3</option>
+                      </select>
+                    </div>
+
+                    <div style={{ marginBottom: '8px', display: 'flex', gap: '8px' }}>
+                      <div style={{ flex: 1 }}>
+                        <label>Условие</label>
+                        <select
+                          value={t.condition}
+                          onChange={(e) => {
+                            const newTriggers = [...triggers];
+                            newTriggers[idx].condition = e.target.value;
+                            setTriggers(newTriggers);
+                          }}
+                          className="form-select"
+                        >
+                          <option value="eq">=</option>
+                          <option value="ne">≠</option>
+                          <option value="gt">&gt;</option>
+                          <option value="lt">&lt;</option>
+                          <option value="gte">≥</option>
+                          <option value="lte">≤</option>
+                        </select>
+                      </div>
+                      <div style={{ flex: 1 }}>
+                        <label>Значение</label>
+                        <input
+                          type="number"
+                          min="0"
+                          max="255"
+                          value={t.value}
+                          onChange={(e) => {
+                            const newTriggers = [...triggers];
+                            newTriggers[idx].value = Number(e.target.value);
+                            setTriggers(newTriggers);
+                          }}
+                          className="form-input"
+                        />
+                      </div>
+                    </div>
+                  </>
+                )}
                 {t.type === 'device_unavailable' && (
                   <>
                     <div style={{ marginBottom: '8px' }}>
@@ -432,21 +507,7 @@ const RuleEditor = ({ rule, devices, onSave, onCancel }) => {
               </div>
             ))
           )}
-          {/* Логика объединения триггеров */}
-          <div className="form-group" style={{ marginTop: '16px', marginBottom: '16px' }}>
-            <label>Логика триггеров</label>
-            <select
-              value={triggerLogic}
-              onChange={(e) => setTriggerLogic(e.target.value)}
-              className="form-select"
-            >
-              <option value="any">Любой (ИЛИ) — сработает при любом условии</option>
-              <option value="all">Все (И) — сработает только при всех условиях</option>
-            </select>
-            <p style={{ fontSize: '12px', color: '#666', marginTop: '4px' }}>
-              Например: «время 20:00 И освещённость &lt; 10»
-            </p>
-          </div>
+
           <button
             onClick={handleAddTrigger}
             className="btn-primary"
@@ -459,12 +520,13 @@ const RuleEditor = ({ rule, devices, onSave, onCancel }) => {
         {/* Действия */}
         <div className="section" style={{ marginTop: '20px' }}>
           <h4>⚡ Действия</h4>
+
           {actions.length === 0 ? (
             <p style={{ color: 'var(--text-secondary)', fontSize: '14px' }}>Нет действий</p>
           ) : (
             actions.map((a, idx) => (
               <div
-                key={idx}
+                key={a.id}
                 className="action-item"
                 style={{
                   marginBottom: '12px',
@@ -474,27 +536,46 @@ const RuleEditor = ({ rule, devices, onSave, onCancel }) => {
                   position: 'relative',
                 }}
               >
-                <button
-                  onClick={() => removeTrigger(idx)}
-                  className="delete-btn"
-                  title="Удалить триггер"
-                >
-                  ×
-                </button>
-
-                <div style={{ marginBottom: '8px' }}>
+                {/* Тип действия + кнопка удаления справа */}
+                <div style={{ marginBottom: '8px', position: 'relative' }}>
                   <select
                     value={a.type}
                     onChange={(e) => {
                       const newActions = [...actions];
                       newActions[idx].type = e.target.value;
+                      // Сбрасываем лишние поля при смене типа
+                      if (e.target.value !== 'set_virtual_var') {
+                        delete newActions[idx].value;
+                      }
                       setActions(newActions);
                     }}
                     className="form-select"
+                    style={{ paddingRight: '40px' }}
                   >
                     <option value="device_command">Команда устройству</option>
-                    <option value="http_request">Отправить уведомление (Telegram)</option>
+                    <option value="set_virtual_var">Установить переменную</option>
+                    <option value="var_inc">Увеличить счётчик (+1)</option>
+                    <option value="var_dec">Уменьшить счётчик (-1)</option>
+                    <option value="var_toggle">Переключить флаг (0↔1)</option>
+                    {/* <option value="http_request">Отправить уведомление (Telegram)</option> */}
                   </select>
+                  <button
+                    onClick={() => removeAction(a.id)}
+                    className="delete-btn"
+                    title="Удалить действие"
+                    style={{
+                      position: 'absolute',
+                      top: '6px',
+                      right: '8px',
+                      padding: '0 6px',
+                      height: '20px',
+                      minWidth: '24px',
+                      fontSize: '14px',
+                      fontWeight: 'normal',
+                    }}
+                  >
+                    ×
+                  </button>
                 </div>
 
                 {a.type === 'device_command' && (
@@ -553,7 +634,118 @@ const RuleEditor = ({ rule, devices, onSave, onCancel }) => {
                     </div>
                   </>
                 )}
+                {a.type === 'set_virtual_var' && (
+                  <>
+                    <div style={{ marginBottom: '8px' }}>
+                      <label>Переменная</label>
+                      <select
+                        value={a.var_index || 0}
+                        onChange={(e) => {
+                          const newActions = [...actions];
+                          newActions[idx].var_index = Number(e.target.value);
+                          setActions(newActions);
+                        }}
+                        className="form-select"
+                      >
+                        {/* === Системные переменные (0–15) === */}
+                        <option value={0}>🌅 Утро началось</option>
+                        <option value={1}>🏠 Кто-то дома</option>
+                        <option value={2}>🚫 Дома никого</option>
+                        <option value={3}>🎉 Праздник / Выходной</option>
+                        <option value={4}>🌙 Ночь активна</option>
+                        <option value={5}>🚗🚪 Гараж открыт</option>
+                        <option value={6}>🔔 Сигнализация включена</option>
+                        <option value={7}>🔢 Счётчик кликов кнопки</option>
+                        <option value={8}>✋ Ручной режим света</option>
+                        <option value={9}>✅ Система готова (всё онлайн)</option>
+                        <option value={10}>🪟 Окно открыто</option>
+                        <option value={11}>🔥 Котёл работает</option>
+                        <option value={12}>🌇 Закат прошёл</option>
+                        <option value={13}>📺 Режим просмотра ТВ</option>
+                        <option value={14}>🚪 Дверь открывалась сегодня</option>
+                        <option value={15}>🔄 Последнее сработавшее правило</option>
 
+                        {/* === Пользовательские переменные (16–31) === */}
+                        <optgroup label="🔧 Пользовательские переменные">
+                          <option value={16}>📦 Переменная USER_VAR[1] (пользовательская)</option>
+                          <option value={17}>📦 Переменная USER_VAR[2]  (пользовательская)</option>
+                          <option value={18}>📦 Переменная USER_VAR[3]  (пользовательская)</option>
+                          <option value={19}>📦 Переменная USER_VAR[4]  (пользовательская)</option>
+                          <option value={20}>📦 Переменная USER_VAR[5]  (пользовательская)</option>
+                          <option value={21}>📦 Переменная USER_VAR[6]  (пользовательская)</option>
+                          <option value={22}>📦 Переменная USER_VAR[7]  (пользовательская)</option>
+                          <option value={23}>📦 Переменная USER_VAR[8]  (пользовательская)</option>
+                          <option value={24}>📦 Переменная USER_VAR[9]  (пользовательская)</option>
+                          <option value={25}>📦 Переменная USER_VAR[10]  (пользовательская)</option>
+                          <option value={26}>📦 Переменная USER_VAR[11]  (пользовательская)</option>
+                          <option value={27}>📦 Переменная USER_VAR[12]  (пользовательская)</option>
+                          <option value={28}>📦 Переменная USER_VAR[13]  (пользовательская)</option>
+                          <option value={29}>📦 Переменная USER_VAR[14]  (пользовательская)</option>
+                          <option value={30}>📦 Переменная USER_VAR[15]  (пользовательская)</option>
+                          <option value={31}>📦 Переменная USER_VAR[16]  (пользовательская)</option>
+                        </optgroup>
+                      </select>
+                    </div>
+                    <div>
+                      <label>Значение</label>
+                      <input
+                        type="number"
+                        min="0"
+                        max="255"
+                        value={a.value}
+                        onChange={(e) => {
+                          const newActions = [...actions];
+                          newActions[idx].value = Number(e.target.value);
+                          setActions(newActions);
+                        }}
+                        className="form-input"
+                      />
+                    </div>
+                  </>
+                )}
+
+                {(a.type === 'var_inc' || a.type === 'var_dec' || a.type === 'var_toggle') && (
+                  <>
+                    <div style={{ marginBottom: '8px' }}>
+                      <label>Переменная</label>
+                      <select
+                        value={a.var_index || 0}
+                        onChange={(e) => {
+                          const newActions = [...actions];
+                          newActions[idx].var_index = Number(e.target.value);
+                          setActions(newActions);
+                        }}
+                        className="form-select"
+                      >
+                        <option value={0}>🌅 Утро началось</option>
+                        <option value={1}>🏠 Кто-то дома</option>
+                        <option value={2}>🚫 Дома никого</option>
+                        <option value={3}>🎉 Праздник</option>
+                        <option value={4}>🌙 Ночь</option>
+                        <option value={5}>🚪 Гараж открыт</option>
+                        <option value={6}>🔔 Сигнализация</option>
+                        <option value={7}>📊 Счётчик кликов</option>
+                        <option value={8}>💡 Ручной режим света</option>
+                        <option value={9}>✅ Система готова</option>
+                      </select>
+                    </div>
+                    {a.type === 'var_inc' && (
+                      <p style={{ fontSize: '13px', color: '#2e8b57', margin: '4px 0' }}>
+                        ➕ Переменная будет увеличена на 1
+                      </p>
+                    )}
+                    {a.type === 'var_dec' && (
+                      <p style={{ fontSize: '13px', color: '#b22222', margin: '4px 0' }}>
+                        ➖ Переменная будет уменьшена на 1 (не ниже 0)
+                      </p>
+                    )}
+                    {a.type === 'var_toggle' && (
+                      <p style={{ fontSize: '13px', color: '#4682b4', margin: '4px 0' }}>
+                        🔁 Переменная будет переключена: 0 → 1, 1 → 0
+                      </p>
+                    )}
+                  </>
+                )}
                 {a.type === 'http_request' && (
                   <div>
                     <p style={{ color: '#888', fontSize: '13px', margin: '8px 0' }}>
@@ -581,6 +773,7 @@ const RuleEditor = ({ rule, devices, onSave, onCancel }) => {
               </div>
             ))
           )}
+
           <button
             onClick={handleAddAction}
             className="btn-primary"

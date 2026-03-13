@@ -81,7 +81,16 @@ esp_err_t api_post_rule_handler(httpd_req_t *req)
     cJSON* module = cJSON_GetObjectItem(json, "module");
     cJSON* priority = cJSON_GetObjectItem(json, "priority");
     cJSON* enabled = cJSON_GetObjectItem(json, "enabled");
-
+    cJSON* trig_logic = cJSON_GetObjectItem(json, "trigger_logic");
+    if (trig_logic && cJSON_IsString(trig_logic)) {
+        if (strcmp(trig_logic->valuestring, "all") == 0) {
+            new_rule.trigger_logic = ZB_RULE_TRIGGER_LOGIC_ALL;
+        } else {
+            new_rule.trigger_logic = ZB_RULE_TRIGGER_LOGIC_ANY; // default
+        }
+    } else {
+        new_rule.trigger_logic = ZB_RULE_TRIGGER_LOGIC_ANY; // default
+    }
     if (!id || !name || !module || !priority) {
         cJSON_Delete(json);
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Missing required fields");
@@ -140,6 +149,24 @@ esp_err_t api_post_rule_handler(httpd_req_t *req)
             t->data.time_range.days_of_week = days ? days->valueint : 0xFF; // все дни
             t->data.time_range.delay_sec = delay ? delay->valueint : 0;
         }
+        else if (strcmp(type->valuestring, "virtual_var") == 0) {
+            t->type = ZB_RULE_TRIGGER_VIRTUAL_VAR;
+            cJSON* var_idx = cJSON_GetObjectItem(trig_item, "var_index");
+            cJSON* cond = cJSON_GetObjectItem(trig_item, "condition");
+            cJSON* value = cJSON_GetObjectItem(trig_item, "value");
+
+            t->data.virtual_var.var_index = var_idx ? var_idx->valueint : 0;
+            t->data.virtual_var.value = value ? value->valueint : 0;
+
+            if (cond && cJSON_IsString(cond)) {
+                if (strcmp(cond->valuestring, "eq") == 0) t->data.virtual_var.cond = ZB_RULE_COND_EQ;
+                else if (strcmp(cond->valuestring, "ne") == 0) t->data.virtual_var.cond = ZB_RULE_COND_NE;
+                else if (strcmp(cond->valuestring, "gt") == 0) t->data.virtual_var.cond = ZB_RULE_COND_GT;
+                else if (strcmp(cond->valuestring, "lt") == 0) t->data.virtual_var.cond = ZB_RULE_COND_LT;
+                else if (strcmp(cond->valuestring, "gte") == 0) t->data.virtual_var.cond = ZB_RULE_COND_GTE;
+                else if (strcmp(cond->valuestring, "lte") == 0) t->data.virtual_var.cond = ZB_RULE_COND_LTE;
+            }
+        }
         new_rule.trigger_count++;
     }
 
@@ -147,22 +174,51 @@ esp_err_t api_post_rule_handler(httpd_req_t *req)
     cJSON* actions = cJSON_GetObjectItem(json, "actions");
     cJSON* act_item = NULL;
     cJSON_ArrayForEach(act_item, actions) {
-        if (new_rule.action_count >= 4) break;
+        if (new_rule.action_count >= ZB_RULE_MAX_ACTIONS) break;
         zb_rule_action_t* a = &new_rule.actions[new_rule.action_count];
 
         cJSON* act_type = cJSON_GetObjectItem(act_item, "type");
-        if (!act_type) continue;
+        if (!act_type || !cJSON_IsString(act_type)) continue;
 
         if (strcmp(act_type->valuestring, "device_command") == 0) {
             a->type = ZB_RULE_ACTION_DEVICE_CMD;
             cJSON* short_addr = cJSON_GetObjectItem(act_item, "short");
-            cJSON* ep = cJSON_GetObjectItem(act_item, "endpoint");
+            cJSON* endpoint = cJSON_GetObjectItem(act_item, "endpoint");
             cJSON* cmd_id = cJSON_GetObjectItem(act_item, "cmd_id");
 
             a->data.device_cmd.short_addr = short_addr ? short_addr->valueint : 0;
-            a->data.device_cmd.endpoint = ep ? ep->valueint : 1;
+            a->data.device_cmd.endpoint = endpoint ? endpoint->valueint : 1;
             a->data.device_cmd.cmd_id = cmd_id ? cmd_id->valueint : 0;
         }
+        else if (strcmp(act_type->valuestring, "set_virtual_var") == 0) {
+            a->type = ZB_RULE_ACTION_SET_VIRTUAL_VAR;
+            cJSON* var_idx = cJSON_GetObjectItem(act_item, "var_index");
+            cJSON* value = cJSON_GetObjectItem(act_item, "value");
+
+            a->data.set_virtual_var.var_index = var_idx ? var_idx->valueint : 0;
+            a->data.set_virtual_var.value = value ? value->valueint : 0;
+        }
+        else if (strcmp(act_type->valuestring, "var_inc") == 0) {
+            a->type = ZB_RULE_ACTION_INC_VIRTUAL_VAR;
+            cJSON* var_idx = cJSON_GetObjectItem(act_item, "var_index");
+            a->data.set_virtual_var.var_index = var_idx ? var_idx->valueint : 0;
+        }
+        else if (strcmp(act_type->valuestring, "var_dec") == 0) {
+            a->type = ZB_RULE_ACTION_DEC_VIRTUAL_VAR;
+            cJSON* var_idx = cJSON_GetObjectItem(act_item, "var_index");
+            a->data.set_virtual_var.var_index = var_idx ? var_idx->valueint : 0;
+        }
+        else if (strcmp(act_type->valuestring, "var_toggle") == 0) {
+            a->type = ZB_RULE_ACTION_TOGGLE_VIRTUAL_VAR;
+            cJSON* var_idx = cJSON_GetObjectItem(act_item, "var_index");
+            a->data.set_virtual_var.var_index = var_idx ? var_idx->valueint : 0;
+        }
+        // Игнорируем неизвестные типы действий
+        else {
+            ESP_LOGW(TAG, "⚠️ Неизвестный тип действия: %s", act_type->valuestring);
+            continue; // пропускаем, не увеличиваем счётчик
+        }
+
         new_rule.action_count++;
     }
 
@@ -238,6 +294,16 @@ esp_err_t api_put_rule_handler(httpd_req_t *req)
     strncpy(new_rule.module, module->valuestring, sizeof(new_rule.module) - 1);
     new_rule.priority = priority->valueint;
     new_rule.enabled = enabled ? enabled->valueint : true;
+    cJSON* trig_logic = cJSON_GetObjectItem(json, "trigger_logic");
+    if (trig_logic && cJSON_IsString(trig_logic)) {
+        if (strcmp(trig_logic->valuestring, "all") == 0) {
+            new_rule.trigger_logic = ZB_RULE_TRIGGER_LOGIC_ALL;
+        } else {
+            new_rule.trigger_logic = ZB_RULE_TRIGGER_LOGIC_ANY;
+        }
+    } else {
+        new_rule.trigger_logic = ZB_RULE_TRIGGER_LOGIC_ANY;
+    }
 
     // === Триггеры ===
     cJSON* triggers = cJSON_GetObjectItem(json, "triggers");
@@ -313,6 +379,34 @@ esp_err_t api_put_rule_handler(httpd_req_t *req)
                 a->data.device_cmd.endpoint = endpoint ? endpoint->valueint : 1;
                 a->data.device_cmd.cmd_id = cmd_id ? cmd_id->valueint : 0;
             }
+            else if (strcmp(act_type->valuestring, "set_virtual_var") == 0) {
+                a->type = ZB_RULE_ACTION_SET_VIRTUAL_VAR;
+                cJSON* var_idx = cJSON_GetObjectItem(act_item, "var_index");
+                cJSON* value = cJSON_GetObjectItem(act_item, "value");
+
+                a->data.set_virtual_var.var_index = var_idx ? var_idx->valueint : 0;
+                a->data.set_virtual_var.value = value ? value->valueint : 0;
+            }
+            else if (strcmp(act_type->valuestring, "var_inc") == 0) {
+                a->type = ZB_RULE_ACTION_INC_VIRTUAL_VAR;
+                cJSON* var_idx = cJSON_GetObjectItem(act_item, "var_index");
+                a->data.set_virtual_var.var_index = var_idx ? var_idx->valueint : 0;
+            }
+            else if (strcmp(act_type->valuestring, "var_dec") == 0) {
+                a->type = ZB_RULE_ACTION_DEC_VIRTUAL_VAR;
+                cJSON* var_idx = cJSON_GetObjectItem(act_item, "var_index");
+                a->data.set_virtual_var.var_index = var_idx ? var_idx->valueint : 0;
+            }
+            else if (strcmp(act_type->valuestring, "var_toggle") == 0) {
+                a->type = ZB_RULE_ACTION_TOGGLE_VIRTUAL_VAR;
+                cJSON* var_idx = cJSON_GetObjectItem(act_item, "var_index");
+                a->data.set_virtual_var.var_index = var_idx ? var_idx->valueint : 0;
+            }
+            else {
+                ESP_LOGW(TAG, "⚠️ Неизвестный тип действия: %s", act_type->valuestring);
+                continue; // пропускаем неизвестные типы
+            }
+
             new_rule.action_count++;
         }
     }
@@ -384,5 +478,33 @@ esp_err_t api_run_rule_handler(httpd_req_t *req)
     } else {
         httpd_resp_sendstr(req, "{\"status\":\"not_found\"}");
     }
+    return ESP_OK;
+}
+
+esp_err_t api_rules_vars_handler(httpd_req_t *req) {
+    // Создаём временный массив int
+    int var_copy[ZB_VIRTUAL_VAR_COUNT];
+    for (int i = 0; i < ZB_VIRTUAL_VAR_COUNT; i++) {
+        var_copy[i] = virtual_var[i]; // автоматическое преобразование uint8_t → int
+    }
+
+    cJSON* json_arr = cJSON_CreateIntArray(var_copy, ZB_VIRTUAL_VAR_COUNT);
+    if (!json_arr) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to create JSON array");
+        return ESP_FAIL;
+    }
+
+    char* json_str = cJSON_PrintUnformatted(json_arr);
+    cJSON_Delete(json_arr);
+
+    if (!json_str) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to print JSON");
+        return ESP_FAIL;
+    }
+
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, json_str);
+    free(json_str);
+
     return ESP_OK;
 }

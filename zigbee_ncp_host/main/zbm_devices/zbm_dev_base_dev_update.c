@@ -2,6 +2,7 @@
 #include "zbm_dev_types.h"
 #include "esp_log.h"
 #include "zb_manager_rules.h"
+#include "zbm_dev_base.h"
 
 static const char* TAG = "ZBM_DEV_BASE_UPDATE_MODULE";
 
@@ -256,7 +257,11 @@ esp_err_t zbm_dev_base_dev_update_from_report(device_custom_t* dev, endpoint_cus
             }
         }
         if (dev->server_BasicClusterObj) {
-            zb_manager_basic_cluster_update_attribute(dev->server_BasicClusterObj, rep->attr.attr_id, attr_type, value, data_len);
+            //ESP_OK просто обновился атрибут, 0xff создался новый надо сохраниться
+            if(zb_manager_basic_cluster_update_attribute(dev->server_BasicClusterObj, rep->attr.attr_id, attr_type, value, data_len)==0xff)
+            {
+                zbm_dev_base_queue_save_req_cmd();
+            }
         }
     }
     // 🔹 Power Configuration (0x0001)

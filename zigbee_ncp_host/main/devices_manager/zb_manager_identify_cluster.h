@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include "esp_err.h"
+#include "cJSON.h"
 /**
  * @brief Structure representing the Zigbee Identify Cluster attributes and state
  * 
@@ -129,5 +130,19 @@ void handle_identify_command(uint16_t duration_seconds, zigbee_identify_effect_c
 */
 esp_err_t zigbee_manager_identify_cluster_update_attribute(zb_manager_identify_cluster_t* cluster, uint16_t attr_id, void* value);
 
+/**
+ * @brief Convert Identify Cluster object to cJSON
+ * @param cluster Pointer to the cluster
+ * @return cJSON* - new JSON object, or NULL
+ */
+cJSON* zbm_identify_cluster_to_json(zb_manager_identify_cluster_t *cluster);
+
+/**
+ * @brief Load Identify Cluster from JSON
+ * @param cluster Pointer to cluster struct (must be allocated or zeroed)
+ * @param json_obj cJSON object
+ * @return ESP_OK on success
+ */
+esp_err_t zbm_identify_cluster_load_from_json(zb_manager_identify_cluster_t *cluster, cJSON *json_obj);
 
 #endif

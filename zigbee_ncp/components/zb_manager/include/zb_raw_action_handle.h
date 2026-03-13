@@ -1,6 +1,8 @@
 #ifndef ZIGBEE_RAW_HANDLE_MODULE_H
 #define ZIGBEE_RAW_HANDLE_MODULE_H
 
+#include "esp_zigbee_type.h"
+#include "zb_handlers.h"
 
 /**************************************  RAW DATA ************************************************/
 typedef struct raw_data_ind_s {
@@ -24,6 +26,18 @@ typedef struct raw_data_ind_s {
     int rx_time;                /*!< Reserved, a time indication for the received packet based on the local clock */
     uint16_t manuf_code;
 } raw_data_ind_t;
+
+typedef struct zb_manager_cmd_nostandart_cluster_resp_packed_message_s {
+    esp_zb_zcl_status_t status;       /*!< The status of the report attribute response, which can refer to esp_zb_zcl_status_t */
+    esp_zb_zcl_addr_t src_address;    /*!< The struct of address contains short and ieee address, which can refer to esp_zb_zcl_addr_s */
+    uint8_t src_endpoint;             /*!< The endpoint id which comes from report device */
+    uint8_t dst_endpoint;             /*!< The destination endpoint id */
+    uint16_t cluster; 
+    uint8_t                     cmd_id;
+    uint8_t                     cmd_payload_len;
+    uint8_t                     cmd_payload[64];
+}
+__attribute__ ((packed)) zb_manager_cmd_nostandart_cluster_resp_packed_message_t;
 
 bool raw_command_handler(uint8_t bufid);
 

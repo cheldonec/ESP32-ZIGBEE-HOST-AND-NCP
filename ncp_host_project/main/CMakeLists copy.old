@@ -1,0 +1,26 @@
+set(PRIV_REQ_var
+    esp_timer esp_wifi esp_http_server nvs_flash spiffs vfs driver  
+)
+
+set(SRCS_var main.c)
+
+file(GLOB_RECURSE SRCS_dir
+    "${CMAKE_CURRENT_LIST_DIR}/zbm_dev_base/*.c"
+    "${CMAKE_CURRENT_LIST_DIR}/zbm_automation/*.c"
+    "${CMAKE_CURRENT_LIST_DIR}/wifi_manager/*.c"
+    "${CMAKE_CURRENT_LIST_DIR}/zbm_web_server/*.c"
+    "${CMAKE_CURRENT_LIST_DIR}/zbm_spiffs_manager/*.c"
+    "${CMAKE_CURRENT_LIST_DIR}/zbm_REST_api/*.c"
+)
+
+list(APPEND SRCS_var ${SRCS_dir})
+
+set(INC_DIR_var
+    "." "zbm_dev_base" "zbm_automation" "wifi_manager" "zbm_web_server" "zbm_spiffs_manager" "zbm_REST_api"
+)
+
+idf_component_register(
+    SRCS ${SRCS_var}
+    INCLUDE_DIRS ${INC_DIR_var}
+    PRIV_REQUIRES ${PRIV_REQ_var}
+)

@@ -1,0 +1,11 @@
+# Name,   Type, SubType, Offset,  Size, Flags
+# =============================================
+nvs,                data, nvs,      ,        0x12000,
+otadata,            data, ota,      ,        0x2000,
+phy_init,           data, phy,      ,        0x1000,
+ota_0,              app,  ota_0,    ,        2M,
+ota_1,              app,  ota_1,    ,        2M,
+zbm_ui,             data, spiffs,   ,        4M,
+zbm_conf,           data, spiffs,   ,        2M,
+zbm_quirks,         data, spiffs,   ,        0x50000,
+zbm_certs,          data, spiffs,   ,        0x20000,

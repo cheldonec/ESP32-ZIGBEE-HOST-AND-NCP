@@ -1,0 +1,344 @@
+**********************************************************
+создание JSON значения p_value атрибута
+// === Обработка значения атрибута в зависимости от типа ===
+                switch (attr->data_type) {
+                    // ===== Булево =====
+                    case ZBM_ATTR_TYPE_BOOL: {
+                        bool val = *(bool*)attr->p_value;
+                        cJSON_AddBoolToObject(jattr, "value", val);
+                        break;
+                    }
+
+                    // ===== 8-битные целые (беззнаковые/знаковые) =====
+                    case ZBM_ATTR_TYPE_U8: {
+                        uint8_t val = *(uint8_t*)attr->p_value;
+                        cJSON_AddNumberToObject(jattr, "value", val);
+                        break;
+                    }
+                    case ZBM_ATTR_TYPE_S8: {
+                        int8_t val = *(int8_t*)attr->p_value;
+                        cJSON_AddNumberToObject(jattr, "value", val);
+                        break;
+                    }
+
+                    // ===== 16-битные =====
+                    case ZBM_ATTR_TYPE_U16: {
+                        uint16_t val = *(uint16_t*)attr->p_value;
+                        cJSON_AddNumberToObject(jattr, "value", val);
+                        break;
+                    }
+                    case ZBM_ATTR_TYPE_S16: {
+                        int16_t val = *(int16_t*)attr->p_value;
+                        cJSON_AddNumberToObject(jattr, "value", val);
+                        break;
+                    }
+                    case ZBM_ATTR_TYPE_T16BIT_ENUM:
+                    case ZBM_ATTR_TYPE_T8BIT_ENUM: {
+                        uint16_t val = (attr->data_type == ZBM_ATTR_TYPE_T8BIT_ENUM) ?
+                                    *(uint8_t*)attr->p_value : *(uint16_t*)attr->p_value;
+                        cJSON_AddNumberToObject(jattr, "value", val);
+                        break;
+                    }
+
+                    // ===== 32-битные =====
+                    case ZBM_ATTR_TYPE_U24:  // Трактуем как U32
+                    case ZBM_ATTR_TYPE_U32: {
+                        uint32_t val = 0;
+                        memcpy(&val, attr->p_value, attr->data_size);
+                        cJSON_AddNumberToObject(jattr, "value", (double)val); // Чтобы избежать потерь
+                        break;
+                    }
+                    case ZBM_ATTR_TYPE_S24:  // Трактуем как S32
+                    case ZBM_ATTR_TYPE_S32: {
+                        int32_t val = 0;
+                        memcpy(&val, attr->p_value, attr->data_size);
+                        cJSON_AddNumberToObject(jattr, "value", (double)val);
+                        break;
+                    }
+
+                    // ===== 64-битные =====
+                    case ZBM_ATTR_TYPE_U40:
+                    case ZBM_ATTR_TYPE_U48:
+                    case ZBM_ATTR_TYPE_U56:
+                    case ZBM_ATTR_TYPE_U64: {
+                        uint64_t val = 0;
+                        memcpy(&val, attr->p_value, attr->data_size);
+                        char num_str[21];
+                        snprintf(num_str, sizeof(num_str), "%" PRIu64, val);
+                        cJSON_AddStringToObject(jattr, "value", num_str); // JSON не поддерживает U64 как число
+                        break;
+                    }
+                    case ZBM_ATTR_TYPE_S40:
+                    case ZBM_ATTR_TYPE_S48:
+                    case ZBM_ATTR_TYPE_S56:
+                    case ZBM_ATTR_TYPE_S64: {
+                        int64_t val = 0;
+                        memcpy(&val, attr->p_value, attr->data_size);
+                        char num_str[22];
+                        snprintf(num_str, sizeof(num_str), "%" PRId64, val);
+                        cJSON_AddStringToObject(jattr, "value", num_str);
+                        break;
+                    }
+
+                    // ===== Плавающая точка =====
+                    case ZBM_ATTR_TYPE_SEMI: // 2-byte float — редко используется
+                    case ZBM_ATTR_TYPE_SINGLE: { // float (4 байта)
+                        float val = *(float*)attr->p_value;
+                        cJSON_AddNumberToObject(jattr, "value", (double)val);
+                        break;
+                    }
+                    case ZBM_ATTR_TYPE_DOUBLE: { // double (8 байт)
+                        double val = *(double*)attr->p_value;
+                        cJSON_AddNumberToObject(jattr, "value", val);
+                        break;
+                    }
+
+                    // ===== Строки =====
+                    case ZBM_ATTR_TYPE_CHAR_STRING:
+                    case ZBM_ATTR_TYPE_LONG_CHAR_STRING: {
+                        char* str = (char*)attr->p_value;
+                        if (str[attr->data_size - 1] == '\0') {
+                            cJSON_AddStringToObject(jattr, "value", str);
+                        } else {
+                            // Не завершена нулём — обрезаем по размеру
+                            char* safe_str = strndup(str, attr->data_size);
+                            if (safe_str) {
+                                cJSON_AddStringToObject(jattr, "value", safe_str);
+                                free(safe_str);
+                            } else {
+                                cJSON_AddStringToObject(jattr, "value", "<string>");
+                            }
+                        }
+                        break;
+                    }
+
+                    case ZBM_ATTR_TYPE_OCTET_STRING:
+                    case ZBM_ATTR_TYPE_LONG_OCTET_STRING: {
+                        // Выводим как hex-строку
+                        char* hex = malloc(attr->data_size * 2 + 1);
+                        if (hex) {
+                            for (int i = 0; i < attr->data_size; i++) {
+                                sprintf(&hex[i * 2], "%02X", ((uint8_t*)attr->p_value)[i]);
+                            }
+                            cJSON_AddStringToObject(jattr, "value", hex);
+                            free(hex);
+                        } else {
+                            cJSON_AddStringToObject(jattr, "value", "<octet>");
+                        }
+                        break;
+                    }
+
+                    // ===== IEEE Address (U64) =====
+                    case ZBM_ATTR_TYPE_IEEE_ADDR: {
+                        uint8_t* addr = (uint8_t*)attr->p_value;
+                        char ieee_str[24];
+                        snprintf(ieee_str, sizeof(ieee_str), "%02X:%02X:%02X:%02X:%02X:%02X:%02X:%02X",
+                                addr[0], addr[1], addr[2], addr[3], addr[4], addr[5], addr[6], addr[7]);
+                        cJSON_AddStringToObject(jattr, "value", ieee_str);
+                        break;
+                    }
+
+                    // ===== Cluster ID / Attribute ID =====
+                    case ZBM_ATTR_TYPE_CLUSTER_ID: {
+                        uint16_t id = *(uint16_t*)attr->p_value;
+                        char id_str[7];
+                        snprintf(id_str, sizeof(id_str), "0x%04X", id);
+                        cJSON_AddStringToObject(jattr, "value", id_str);
+                        break;
+                    }
+                    case ZBM_ATTR_TYPE_ATTRIBUTE_ID: {
+                        uint16_t id = *(uint16_t*)attr->p_value;
+                        char id_str[7];
+                        snprintf(id_str, sizeof(id_str), "0x%04X", id);
+                        cJSON_AddStringToObject(jattr, "value", id_str);
+                        break;
+                    }
+
+                    // ===== Время и дата =====
+                    case ZBM_ATTR_TYPE_UTC_TIME: {
+                        uint32_t utc = *(uint32_t*)attr->p_value;
+                        cJSON_AddNumberToObject(jattr, "value", (double)utc);
+                        break;
+                    }
+                    case ZBM_ATTR_TYPE_TIME_OF_DAY: {
+                        uint32_t tod = *(uint32_t*)attr->p_value;
+                        uint8_t hour = (tod >> 24) & 0xFF;
+                        uint8_t min  = (tod >> 16) & 0xFF;
+                        uint8_t sec  = (tod >>  8) & 0xFF;
+                        uint8_t hun  = (tod      ) & 0xFF;
+                        char time_str[16];
+                        snprintf(time_str, sizeof(time_str), "%02d:%02d:%02d.%02d", hour, min, sec, hun);
+                        cJSON_AddStringToObject(jattr, "value", time_str);
+                        break;
+                    }
+                    case ZBM_ATTR_TYPE_DATE: {
+                        uint32_t date = *(uint32_t*)attr->p_value;
+                        uint8_t year  = (date >> 24) & 0xFF;
+                        uint8_t month = (date >> 16) & 0xFF;
+                        uint8_t day   = (date >>  8) & 0xFF;
+                        uint8_t dow   = (date      ) & 0xFF;
+                        char date_str[16];
+                        static const char* dow_names[] = {"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
+                        snprintf(date_str, sizeof(date_str), "%04d-%02d-%02d (%s)", 2000 + year, month, day, dow_names[dow % 7]);
+                        cJSON_AddStringToObject(jattr, "value", date_str);
+                        break;
+                    }
+
+                    // ===== Массивы и структуры (нельзя вывести напрямую) =====
+                    case ZBM_ATTR_TYPE_ARRAY:
+                    case ZBM_ATTR_TYPE_T16BIT_ARRAY:
+                    case ZBM_ATTR_TYPE_T32BIT_ARRAY:
+                    case ZBM_ATTR_TYPE_STRUCTURE:
+                    case ZBM_ATTR_TYPE_SET:
+                    case ZBM_ATTR_TYPE_BAG:
+                        cJSON_AddStringToObject(jattr, "value", "<complex>");
+                        break;
+
+                    // ===== Неизвестный или необработанный тип =====
+                    default:
+                        cJSON_AddStringToObject(jattr, "value", "<raw>");
+                        break;
+                }
+*********************************************************************************
+typedef struct zbm_dev_s {
+    uint8_t                                 index_in_array;
+    char*                                   friendly_name;
+    uint16_t                                short_addr;             //
+    uint16_t                                parent_short_addr;                                   
+    uint8_t                                 ieee_addr[8];
+    uint8_t                                 capability;
+    uint8_t                                 lqi;                // уровень качества связи
+    uint32_t                                last_seen_ms;         // время последнего контакт
+    uint64_t                                device_timeout_ms;
+    bool                                    is_online;
+    uint16_t                                manufacturer_code;
+    bool                                    has_pending_read;         // флаг, была ли команда на чтение атрибутов, исп-я при старте ESP для online статуса небатареечных устройств
+    bool                                    has_pending_response;     // флаг, было ли получение ответа на запросы, исп-я при старте ESP для online статуса небатареечных устройств
+    uint32_t                                last_pending_read_ms;
+    uint8_t                                 endpoints_count;
+    zbm_dev_endpoint_t**                    endpoints_array;
+    uint16_t                                last_guid_update_short_addr; // для оптимизации при регистрации в хэш, например при смене адреса
+} zbm_dev_t;
+
+typedef struct zbm_dev_endpoint_s {
+    uint8_t                                 is_use_on_device;
+    uint8_t                                 id;
+    char*                                   friendlyname;
+    zbm_device_type_t                       device_id;
+    uint8_t                                 standart_cluster_count; // стандартные кластеры по ZCL
+    zbm_standart_cluster_t**                standart_cluster_array;
+    uint8_t                                 custom_cluster_count; // нестандартные кластеры (например TUYA)
+    zbm_custom_cluster_t**                  custom_cluster_array;
+} zbm_dev_endpoint_t;
+
+typedef struct zbm_standart_cluster_s {
+    zbm_cluster_id_t                        id;
+    char*                                   friendlyname;
+    zbm_cluster_role_t                      role_mask; // esp_zb_zcl_cluster_role_t; 0x01U SERVER (input) 0x02U CLIENT (output)
+    uint8_t                                 attr_count; // стандартные атрибуты кластера по ZCL
+    zbm_cluster_attribute_t**               attr_array;
+    uint8_t                                 standart_cmd_count; // типа 0x00 in cluster 0x0006 (команда по ZCL доступная для конкретного кластера)
+    zbm_cluster_standart_cmd_t**            standart_cmd_array;
+    uint8_t                                 custom_report_cmd_count; // типа TUYA 0xfd from cluster 0x0006 (в кластер не шлётся, только читается репорт)
+    zbm_cluster_custom_report_cmd_t**       custom_report_cmd_array;
+}zbm_standart_cluster_t;
+
+typedef struct zbm_custom_cluster_s {
+    zbm_cluster_id_custom_t                 id;
+    char*                                   friendlyname;
+    zbm_cluster_role_t                      role_mask; // esp_zb_zcl_cluster_role_t; 0x01U SERVER (input) 0x02U CLIENT (output)
+    uint8_t                                 attr_count; // стандартные атрибуты кластера по ZCL
+    zbm_cluster_attribute_t**               attr_array;
+    uint8_t                                 standart_cmd_count; // типа 0x00 in cluster 0x0006 (команда по ZCL доступная для конкретного кластера)
+    zbm_cluster_standart_cmd_t**            standart_cmd_array;
+    uint8_t                                 custom_report_cmd_count; // типа TUYA 0xfd from cluster 0x0006 (в кластер не шлётся, только читается репорт)
+    zbm_cluster_custom_report_cmd_t**       custom_report_cmd_array;
+}zbm_custom_cluster_t;
+
+typedef struct zbm_cluster_attribute_s {
+    uint16_t                                id;
+    char*                                   friendlyname; 
+    uint8_t                                 acces;      /*!< Attribute access options according to esp_zb_zcl_attr_access_t */
+    uint64_t                                last_update_ms;
+    zbm_attr_data_types_t                   data_type;       /*!< Attribute type see zcl_attr_type */
+    uint16_t                                data_size;
+    void*                                   p_value;
+    char                                    guid[64];
+}zbm_cluster_attribute_t;
+
+// параметры кластерной команды
+typedef struct zbm_cluster_cmd_param_s {
+    char*                                   friendlyname; 
+    zbm_cmd_data_types_t                    data_type;       /*!< Attribute type see zcl_attr_type */
+    uint16_t                                data_size;
+    void*                                   p_value;
+}zbm_cluster_cmd_param_t;
+
+// кластерная команда
+typedef struct zbm_cluster_standart_cmd_s {
+    uint8_t                                 id;
+    char*                                   friendlyname; 
+    uint8_t                                 param_count;
+    zbm_cluster_cmd_param_t**               params;
+    char                                    guid[64];
+}zbm_cluster_standart_cmd_t;
+
+// нестандартный репорт в стандартный кластер например TUYA 0xfd
+typedef struct zbm_cluster_custom_report_cmd_s {
+    uint8_t                                 id;
+    char*                                   friendlyname;  // генерится на лету только для JSON
+    zbm_cmd_data_types_t                    data_type;
+    uint16_t                                data_size;
+    void*                                   p_value;
+    char                                    guid[64];
+}zbm_cluster_custom_report_cmd_t;
+
+
+ЗАДАЧА!!!
+Создание из базы (SPIFFS)
+1. Создаём новое устройство
+   zbm_dev_t* dev = zbm_create_device_by_ieee(ieee_addr);
+
+2. Получаем размер массива "endpoints" (cJSON функции) и устанавливаем dev->endpoints_count (uint8_t)
+
+3. выделяем память для массива эндпоинтов dev->endpoints_array = calloc(1, dev->endpoints_count * sizeof(zbm_dev_endpoint_t*))  и проверяем на NULL
+
+4. перебираем "endpoints" в cJSON
+    4.1 Создаём эндпоинт zbm_dev_endpoint_t* ep = zbm_create_empty_endpoint(); и проверяем на NULL
+    4.2 заполняем поля is_use_on_device, id, friendlyname, device_id = get_device_type_by_name(const char* name)
+    4.3 Получаем размер массива "ZCL_Clusters" (cJSON функции) и устанавливаем ep->standart_cluster_count (uint8_t)
+    4.4 Получаем размер массива "NoZCL_Clusters" (cJSON функции) и устанавливаем ep->custom_cluster_count (uint8_t)
+    4.5 Выделяем память ep->standart_cluster_array = calloc(1, ep->standart_cluster_count * sizeof(zbm_standart_cluster_t*))  и проверяем на NULL
+    4.6 Выделяем память ep->custom_cluster_array = calloc(1, ep->custom_cluster_count * sizeof(zbm_custom_cluster_t*))  и проверяем на NULL
+    4.7 Перебираем "ZCL_Clusters" в cJSON
+        4.7.1 Получаем "role" (возможные варианты "server" : "client" ) во временную переменную role_mask
+        4.7.2 Создаём кластер zbm_standart_cluster_t* cluster = (zbm_standart_cluster_t*)create_cluster(cluster_id, role_mask, false); 
+                (friendlyname, cluster_id, role_mask заполнятся автоатом) и проверяем на NULL 
+        4.7.3 Получаем размер массива "attributes" (cJSON функции) и устанавливаем cluster->attr_count (uint8_t)
+        4.7.4 Выделяем память cluster->attr_array = calloc (1, cluster->attr_count * sizeof(zbm_cluster_attribute_t*))
+        4.7.8 Перебираем "attributes" в cJSON
+              4.7.8.1 Читаем во временные переменные "id", "type", "size", "name"
+              4.7.8.2 Создаём атрибут zbm_cluster_attribute_t* attr = create_attr(uint16_t id, const char* name, zbm_attr_data_types_t type, uint16_t size)
+              4.7.8.3 Читаем "guid" и устанавливаем attr->guid
+              4.7.8.4 Читаем "value"  (смотрим создание JSON значения p_value атрибута и при необходимости исрользуем для установки attr->p_value) 
+              4.7.8.5 Вставляем атрибут в массив cluster->attr_array
+        4.7.9 Получаем размер массива "commands" (cJSON функции) и устанавливаем cluster->standart_cmd_count (uint8_t)
+        4.7.10 если cluster->standart_cmd_count > 0 то используем стандартное создание стандартных команд
+            zbm_cluster_standart_cmd_t** zbm_create_standard_command_array(uint16_t cluster_id, zbm_cluster_role_t role_mask, uint8_t* count)
+            то есть вызываем cluster->standart_cmd_array = zbm_create_standard_command_array(cluster_id, role_mask, cluster->standart_cmd_count)
+            4.7.10.1 Перебираем "commands" и копируем "guid" в zbm_create_standard_command_array[i]->guid
+        4.7.11 Получаем размер массива "custom_reports" cluster->custom_report_cmd_count
+        4.7.12 Выделяем память cluster->custom_report_cmd_array = calloc (1, cluster->custom_report_cmd_count * sizeof(zbm_cluster_attribute_t*)) 
+        4.7.13 Перебираем "custom_reports"
+             4.7.13.1 Создаём объект zbm_cluster_custom_report_cmd_t* report_cmd = calloc(1, sizeof(zbm_cluster_custom_report_cmd_t));
+             4.7.13.2 читаем поля "id", "name", "guid", "type", "size"
+             4.7.13.3 Выделяем память для p_value
+             4.7.13.3 Вставляем объект в cluster->custom_report_cmd_array
+    4.8 Вставляем клстер в ep->standart_cluster_array
+    4.9 Перебираем "NoZCL_Clusters" в cJSON
+    4.10 повторяем всё как и для "ZCL_Clusters"
+    ...
+    4.n вставляем эндпоинт в массив
+
+              
+        

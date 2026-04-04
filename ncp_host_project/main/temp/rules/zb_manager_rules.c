@@ -1,0 +1,1257 @@
+// main/rules/zb_manager_rules.c
+#include "zb_manager_rules.h"
+#include "esp_log.h"
+#include "zb_manager_automation.h"
+#include "cJSON.h"
+#include <string.h>
+#include <time.h>
+#include <freertos/FreeRTOS.h>
+#include "spiffs_helper.h"
+
+static const char* TAG = "ZB_RULE";
+
+#define RULES_NVS_NAMESPACE "rules"
+#define RULES_JSON_KEY      "rules_list"
+
+//zb_rule_t rules[ZB_RULE_MAX_COUNT];
+uint8_t virtual_var[ZB_VIRTUAL_VAR_COUNT] = {0};
+static bool vars_need_save = false;
+uint8_t rules_count = 0;
+zb_rule_t** rules_array = NULL;
+delayed_action_t delayed_actions[8] = {0};
+uint8_t delayed_count = 0;
+// Внутренние функции
+static bool rule_matches_trigger(const zb_rule_t* rule, cJSON* event);
+static void execute_rule_actions(const zb_rule_t* rule);
+static void rules_task(void* pvParameters);
+
+void check_time_triggers(void);
+
+void schedule_delayed_action(const char* rule_id, uint32_t delay_sec);
+void process_delayed_actions(void);
+static esp_err_t zb_rule_save_vars_to_spiffs(void);
+static esp_err_t zb_rule_load_vars_from_spiffs(void);
+/**
+ * @brief Установить значение переменной
+ */
+void zb_rule_set_var(int idx, uint8_t value);
+
+/**
+ * @brief Увеличить переменную
+ */
+void zb_rule_inc_var(int idx);
+
+/**
+ * @brief Уменьшить переменную
+ */
+void zb_rule_dec_var(int idx);
+
+/**
+ * @brief Переключить переменную
+ */
+void zb_rule_toggle_var(int idx);
+
+// ===================================================================
+//             Чтение/Сохранение/изменение Виртуальных переменных
+// ===================================================================
+static esp_err_t zb_rule_save_vars_to_spiffs(void) {
+    FILE* f = fopen(ZB_MANAGER_RULES_VARS_FILE, "w");
+    if (!f) return ESP_FAIL;
+    fwrite(virtual_var, 1, ZB_VIRTUAL_VAR_COUNT, f);
+    fclose(f);
+    return ESP_OK;
+}
+
+static esp_err_t zb_rule_load_vars_from_spiffs(void) {
+    FILE* f = fopen(ZB_MANAGER_RULES_VARS_FILE, "r");
+    if (!f) return ESP_ERR_NOT_FOUND;
+    fread(virtual_var, 1, ZB_VIRTUAL_VAR_COUNT, f);
+    fclose(f);
+    return ESP_OK;
+}
+
+/**
+ * @brief Установить значение переменной
+ */
+void zb_rule_set_var(int idx, uint8_t value) {
+    if (idx < ZB_VIRTUAL_VAR_COUNT) {
+        virtual_var[idx] = value;
+        ESP_LOGI(TAG, "virtual_var[%d] = %d", idx, value);
+        ws_notify_virtual_vars_update();
+    }
+}
+
+/**
+ * @brief Увеличить переменную
+ */
+void zb_rule_inc_var(int idx) {
+    if (idx < ZB_VIRTUAL_VAR_COUNT && virtual_var[idx] < 255) {
+        virtual_var[idx]++;
+        ESP_LOGI(TAG, "virtual_var[%d] incremented → %d", idx, virtual_var[idx]);
+        ws_notify_virtual_vars_update(); //
+    }
+}
+
+/**
+ * @brief Уменьшить переменную
+ */
+void zb_rule_dec_var(int idx) {
+    if (idx < ZB_VIRTUAL_VAR_COUNT && virtual_var[idx] > 0) {
+        virtual_var[idx]--;
+        ESP_LOGI(TAG, "virtual_var[%d] decremented → %d", idx, virtual_var[idx]);
+        ws_notify_virtual_vars_update(); //
+    }
+}
+
+/**
+ * @brief Переключить переменную
+ */
+void zb_rule_toggle_var(int idx) {
+    if (idx < ZB_VIRTUAL_VAR_COUNT) {
+        virtual_var[idx] = !virtual_var[idx];
+        ESP_LOGI(TAG, "virtual_var[%d] toggled → %d", idx, virtual_var[idx]);
+        ws_notify_virtual_vars_update(); 
+    }
+}
+// ===================================================================
+//                         Инициализация
+// ===================================================================
+
+void zb_rule_engine_init(void)
+{
+    // Инициализируем массив
+    rules_array = calloc(ZB_RULE_MAX_COUNT, sizeof(zb_rule_t*));
+    if (!rules_array) {
+        ESP_LOGE(TAG, "Failed to allocate rules array");
+        return;
+    }
+
+    // Загружаем из SPIFFS
+    esp_err_t err = zb_rule_engine_load_from_spiffs();
+    if (err != ESP_OK) {
+        ESP_LOGI(TAG, "No rules file found, starting with empty rule set");
+        rules_count = 0;
+    }
+
+    // Загрузка переменных
+    zb_rule_load_vars_from_spiffs();
+
+    xTaskCreate(rules_task, "zb_rules_task", 4096, NULL, 5, NULL);
+}
+
+
+static bool rule_matches_trigger(const zb_rule_t* rule, cJSON* event) {
+    cJSON* short_addr_obj = cJSON_GetObjectItem(event, "short");
+    if (!short_addr_obj) return false;
+    uint16_t short_addr = short_addr_obj->valueint;
+
+    cJSON* clusters = cJSON_GetObjectItem(event, "clusters");
+    cJSON* event_type = cJSON_GetObjectItem(event, "event");
+    if (!event_type || !cJSON_IsString(event_type)) return false;
+
+    bool any_match = false;
+    bool all_match = true;
+
+    for (int i = 0; i < rule->trigger_count; i++) {
+        const zb_rule_trigger_t* t = &rule->triggers[i];
+        bool match = false;
+
+        // === Триггер: state_update (устройство прислало данные) ===
+        if (t->type == ZB_RULE_TRIGGER_DEVICE_STATE && strcmp(event_type->valuestring, "state_update") == 0) {
+            if (t->data.device_state.short_addr != short_addr) continue;
+
+            if (!clusters) continue;
+
+            cJSON* cl_item = NULL;
+            cJSON_ArrayForEach(cl_item, clusters) {
+                cJSON* type = cJSON_GetObjectItem(cl_item, "type");
+                cJSON* value = cJSON_GetObjectItem(cl_item, "value");
+                if (!type || !value) continue;
+
+                // Проверяем совпадение cluster_type
+                if (strcmp(type->valuestring, t->data.device_state.cluster_type) == 0) {
+                    double val = value->valuedouble;
+
+                    switch (t->data.device_state.cond) {
+                        case ZB_RULE_COND_EQ: match = (val == t->data.device_state.value); break;
+                        case ZB_RULE_COND_NE: match = (val != t->data.device_state.value); break;
+                        case ZB_RULE_COND_GT: match = (val > t->data.device_state.value); break;
+                        case ZB_RULE_COND_LT: match = (val < t->data.device_state.value); break;
+                        case ZB_RULE_COND_GTE: match = (val >= t->data.device_state.value); break;
+                        case ZB_RULE_COND_LTE: match = (val <= t->data.device_state.value); break;
+                        default: match = false; break;
+                    }
+
+                    if (match) break; // достаточно одного совпадения кластера
+                }
+
+                // === Дополнительно: проверка кастомных команд по шаблону on_off_custom_cmd_0xNN ===
+                else if (strncmp(t->data.device_state.cluster_type, "on_off_custom_cmd_0x", 20) == 0 &&
+                         strncmp(type->valuestring, "on_off_custom_cmd_0x", 20) == 0) {
+
+                    uint8_t expected_cmd_id = 0, actual_cmd_id = 0;
+                    if (sscanf(t->data.device_state.cluster_type + 20, "%02hhx", &expected_cmd_id) == 1 &&
+                        sscanf(type->valuestring + 20, "%02hhx", &actual_cmd_id) == 1) {
+
+                        if (expected_cmd_id != actual_cmd_id) {
+                            continue; // не тот cmd_id
+                        }
+                    } else {
+                        continue;
+                    }
+
+                    double val = value->valuedouble;
+                    switch (t->data.device_state.cond) {
+                        case ZB_RULE_COND_EQ: match = (val == t->data.device_state.value); break;
+                        case ZB_RULE_COND_NE: match = (val != t->data.device_state.value); break;
+                        case ZB_RULE_COND_GT: match = (val > t->data.device_state.value); break;
+                        case ZB_RULE_COND_LT: match = (val < t->data.device_state.value); break;
+                        case ZB_RULE_COND_GTE: match = (val >= t->data.device_state.value); break;
+                        case ZB_RULE_COND_LTE: match = (val <= t->data.device_state.value); break;
+                        default: match = false; break;
+                    }
+
+                    if (match) break;
+                }
+            }
+        }
+
+        else if (t->type == ZB_RULE_TRIGGER_VIRTUAL_VAR) {
+            uint8_t current_val = virtual_var[t->data.virtual_var.var_index];
+            uint8_t target_val = t->data.virtual_var.value;
+
+            switch (t->data.virtual_var.cond) {
+                case ZB_RULE_COND_EQ: match = (current_val == target_val); break;
+                case ZB_RULE_COND_NE: match = (current_val != target_val); break;
+                case ZB_RULE_COND_GT: match = (current_val > target_val); break;
+                case ZB_RULE_COND_LT: match = (current_val < target_val); break;
+                case ZB_RULE_COND_GTE: match = (current_val >= target_val); break;
+                case ZB_RULE_COND_LTE: match = (current_val <= target_val); break;
+                default: match = false; break;
+            }
+        }
+
+        // === Триггер: device_unavailable ===
+        else if (t->type == ZB_RULE_TRIGGER_DEVICE_UNAVAILABLE && strcmp(event_type->valuestring, "device_unavailable") == 0) {
+            cJSON* cluster_obj = cJSON_GetObjectItem(event, "cluster");
+            if (!cluster_obj || !cJSON_IsString(cluster_obj)) {
+                continue;
+            }
+
+            if (t->data.device_unavailable.short_addr == short_addr &&
+                strcmp(t->data.device_unavailable.cluster_type, cluster_obj->valuestring) == 0) {
+                match = true;
+            }
+        }
+
+        // === Триггер: time_range — НЕ обрабатываем здесь! Только по таймеру
+        // Пропускаем — он проверяется в check_time_triggers()
+
+        // Обновляем результаты
+        if (match) {
+            any_match = true;
+        } else {
+            all_match = false;
+        }
+    }
+
+    return rule->trigger_logic == ZB_RULE_TRIGGER_LOGIC_ANY ? any_match : all_match;
+}
+
+/**
+ * @brief Выполнить действия правила
+ */
+static void execute_rule_actions(const zb_rule_t* rule) {
+    for (int i = 0; i < rule->action_count; i++) {
+        const zb_rule_action_t* a = &rule->actions[i];
+
+        switch (a->type) {
+            case ZB_RULE_ACTION_DEVICE_CMD: {
+                zb_automation_request_t req = {0};
+                req.short_addr = a->data.device_cmd.short_addr;
+                req.endpoint_id = a->data.device_cmd.endpoint;
+                req.cmd_id = a->data.device_cmd.cmd_id;
+                zb_automation_send_command(&req);
+                ESP_LOGI(TAG, "✅ Executed action: device_cmd %04x ep=%d cmd=%d", req.short_addr, req.endpoint_id, req.cmd_id);
+                break;
+            }
+            case ZB_RULE_ACTION_SET_VIRTUAL_VAR: {
+                uint8_t idx = a->data.set_virtual_var.var_index;
+                uint8_t val = a->data.set_virtual_var.value;
+                virtual_var[idx] = val;
+                ESP_LOGI(TAG, "📌 Установлена виртуальная переменная VAR[%d] = %d", idx, val);
+                ws_notify_virtual_vars_update();
+                vars_need_save = true;
+                break;
+            }
+
+            case ZB_RULE_ACTION_INC_VIRTUAL_VAR: {
+                uint8_t idx = a->data.set_virtual_var.var_index;
+                if (virtual_var[idx] < 255) virtual_var[idx]++;
+                ESP_LOGI(TAG, "📈 Увеличена виртуальная переменная VAR[%d] += 1 → %d", idx, virtual_var[idx]);
+                ws_notify_virtual_vars_update();
+                vars_need_save = true;
+                break;
+            }
+            case ZB_RULE_ACTION_DEC_VIRTUAL_VAR: {
+                uint8_t idx = a->data.set_virtual_var.var_index;
+                if (virtual_var[idx] > 0) {
+                    virtual_var[idx]--;
+                }
+                ESP_LOGI(TAG, "📉 Уменьшена виртуальная переменная VAR[%d] -= 1 → %d", idx, virtual_var[idx]);
+                ws_notify_virtual_vars_update();
+                vars_need_save = true;
+                break;
+            }
+            case ZB_RULE_ACTION_TOGGLE_VIRTUAL_VAR: {
+                uint8_t idx = a->data.set_virtual_var.var_index;
+                virtual_var[idx] = !virtual_var[idx];
+                ESP_LOGI(TAG, "🔁 Инвертирована виртуальная переменная VAR[%d] toggled → %d", idx, virtual_var[idx]);
+                ws_notify_virtual_vars_update();
+                vars_need_save = true;
+                break;
+            }
+            default:
+                ESP_LOGW(TAG, "⚠️ Неизвестный тип действия: %d", a->type);
+                break;
+        }
+    }
+}
+
+
+/**
+ * @brief Задача для фоновой обработки
+ */
+static void rules_task(void* pvParameters) {
+    uint64_t last_save_time = 0;
+    while (1) {
+        vTaskDelay(pdMS_TO_TICKS(1000)); // каждые 10 сек
+
+        process_delayed_actions(); // проверяем задержки
+        check_time_triggers();
+        // Каждую минуту — проверяем время
+        /*static int last_min = -1;
+        time_t now = time(NULL);
+        struct tm timeinfo;
+        localtime_r(&now, &timeinfo);
+        if (timeinfo.tm_min != last_min) {
+            last_min = timeinfo.tm_min;
+            check_time_triggers();
+        }*/
+        if (vars_need_save && (xTaskGetTickCount() * portTICK_PERIOD_MS - last_save_time) > 60000) {
+            zb_rule_save_vars_to_spiffs();
+            vars_need_save = false;
+            last_save_time = xTaskGetTickCount() * portTICK_PERIOD_MS;
+        }
+    }
+}
+
+/**
+ * @brief Проверить все правила на событие
+ * Вызывается из zb_manager_devices при изменении состояния
+ */
+void zb_rule_engine_process_event(cJSON* event) {
+    if (!event) return;
+
+    int highest_priority = 6;
+    const zb_rule_t* winner = NULL;
+
+    for (int i = 0; i < rules_count; i++) {
+        zb_rule_t* rule = rules_array[i];
+        if (!rule) continue;
+
+        if (!rule->enabled) continue;
+        if (rule_matches_trigger(rule, event)) {  // ✅ Передаём rule, а не &rule
+            if (rule->priority < highest_priority) {
+                highest_priority = rule->priority;
+                winner = rule;  // ✅ Присваиваем rule, а не &rule
+            }
+        }
+    }
+
+    if (winner) {
+        execute_rule_actions(winner);
+    }
+}
+
+
+// ===================================================================
+//                      Работа с SPIFFS
+// ===================================================================
+
+esp_err_t zb_rule_engine_load_from_spiffs(void)
+{
+     FILE* f = fopen(ZB_MANAGER_RULES_JSON_FILE, "r");
+    if (!f) return ESP_ERR_NOT_FOUND;
+
+    fseek(f, 0, SEEK_END);
+    long len = ftell(f);
+    fseek(f, 0, SEEK_SET);
+
+    ESP_LOGI(TAG, "📂 Найден файл %s, размер: %ld байт", ZB_MANAGER_RULES_JSON_FILE, len);
+
+    char* json_str = malloc(len + 1);
+    if (!json_str) { 
+        fclose(f); 
+        ESP_LOGE(TAG, "❌ Не удалось выделить память под JSON");
+        return ESP_ERR_NO_MEM; 
+    }
+    fread(json_str, 1, len, f);
+    json_str[len] = '\0';
+    fclose(f);
+
+    ESP_LOGI(TAG, "📥 JSON содержимое: %s", json_str); //
+
+    cJSON* root = cJSON_Parse(json_str);
+    free(json_str);
+    if (!root){
+        ESP_LOGE(TAG, "❌ Ошибка парсинга JSON");
+        return ESP_ERR_INVALID_ARG;
+    } 
+
+    int count = cJSON_GetArraySize(root);
+    rules_count = 0;
+
+    ESP_LOGI(TAG, "🔍 Парсим %d правил из JSON", count);
+
+    for (int i = 0; i < count && i < ZB_RULE_MAX_COUNT; i++) {
+        cJSON* item = cJSON_GetArrayItem(root, i);
+        zb_rule_t* rule = calloc(1, sizeof(zb_rule_t));  // ← выделяем память
+        if (!rule) continue;
+
+        // Парсим поля...
+        cJSON* id = cJSON_GetObjectItem(item, "id");
+        if (!id) { free(rule); continue; }
+        strncpy(rule->id, id->valuestring, 31);
+
+        cJSON* name = cJSON_GetObjectItem(item, "name");
+        strncpy(rule->name, name ? name->valuestring : "Unnamed", 63);
+
+        cJSON* module = cJSON_GetObjectItem(item, "module");
+        strncpy(rule->module, module ? module->valuestring : "other", 31);
+
+        rule->priority = cJSON_GetObjectItem(item, "priority")->valueint;
+        rule->enabled = cJSON_GetObjectItem(item, "enabled") ? cJSON_IsTrue(cJSON_GetObjectItem(item, "enabled")) : true;
+        cJSON* trig_logic = cJSON_GetObjectItem(item, "trigger_logic");
+        if (trig_logic && cJSON_IsString(trig_logic)) {
+            if (strcmp(trig_logic->valuestring, "all") == 0) {
+                rule->trigger_logic = ZB_RULE_TRIGGER_LOGIC_ALL;
+            } else {
+                rule->trigger_logic = ZB_RULE_TRIGGER_LOGIC_ANY;
+            }
+        } else {
+            rule->trigger_logic = ZB_RULE_TRIGGER_LOGIC_ANY;
+        }
+        // === Триггеры ===
+        cJSON* triggers = cJSON_GetObjectItem(item, "triggers");
+        rule->trigger_count = 0;
+        cJSON* trig_item = NULL;
+        cJSON_ArrayForEach(trig_item, triggers) {
+            if (rule->trigger_count >= 8) break;
+            zb_rule_trigger_t* t = &rule->triggers[rule->trigger_count];
+
+            cJSON* type = cJSON_GetObjectItem(trig_item, "type");
+            if (!type) continue;
+
+            if (strcmp(type->valuestring, "device_state") == 0) {
+                t->type = ZB_RULE_TRIGGER_DEVICE_STATE;
+                cJSON* short_addr = cJSON_GetObjectItem(trig_item, "short");
+                cJSON* ep_id = cJSON_GetObjectItem(trig_item, "endpoint_id");
+                cJSON* cl_type = cJSON_GetObjectItem(trig_item, "cluster_type");
+                cJSON* cond = cJSON_GetObjectItem(trig_item, "condition");
+                cJSON* value = cJSON_GetObjectItem(trig_item, "value");
+
+                t->data.device_state.short_addr = short_addr ? short_addr->valueint : 0;
+                t->data.device_state.endpoint_id = ep_id ? ep_id->valueint : 1;
+                if (cl_type) strncpy(t->data.device_state.cluster_type, cl_type->valuestring, 31);
+                if (cond) {
+                    if (strcmp(cond->valuestring, "eq") == 0) t->data.device_state.cond = ZB_RULE_COND_EQ;
+                    else if (strcmp(cond->valuestring, "ne") == 0) t->data.device_state.cond = ZB_RULE_COND_NE;
+                    else if (strcmp(cond->valuestring, "gt") == 0) t->data.device_state.cond = ZB_RULE_COND_GT;
+                    else if (strcmp(cond->valuestring, "lt") == 0) t->data.device_state.cond = ZB_RULE_COND_LT;
+                    else if (strcmp(cond->valuestring, "gte") == 0) t->data.device_state.cond = ZB_RULE_COND_GTE;
+                    else if (strcmp(cond->valuestring, "lte") == 0) t->data.device_state.cond = ZB_RULE_COND_LTE;
+                }
+                t->data.device_state.value = value ? value->valuedouble : 0;
+            } else if (strcmp(type->valuestring, "time_range") == 0) {
+                t->type = ZB_RULE_TRIGGER_TIME_RANGE;
+                cJSON* from = cJSON_GetObjectItem(trig_item, "from");
+                cJSON* to = cJSON_GetObjectItem(trig_item, "to");
+                cJSON* days = cJSON_GetObjectItem(trig_item, "days_of_week");
+                cJSON* delay = cJSON_GetObjectItem(trig_item, "delay_sec");
+
+                if (from) strncpy(t->data.time_range.from, from->valuestring, 5);
+                if (to) strncpy(t->data.time_range.to, to->valuestring, 5);
+                t->data.time_range.from[5] = '\0';
+                t->data.time_range.to[5] = '\0';
+
+                t->data.time_range.days_of_week = days ? (uint8_t)days->valueint : 0xFF;
+                t->data.time_range.delay_sec = delay ? delay->valueint : 0;
+            }
+            rule->trigger_count++;
+        }
+
+        // === Действия ===
+        cJSON* actions = cJSON_GetObjectItem(item, "actions");
+            rule->action_count = 0;
+            cJSON* act_item = NULL;
+            cJSON_ArrayForEach(act_item, actions) {
+                if (rule->action_count >= ZB_RULE_MAX_ACTIONS) break;
+                zb_rule_action_t* a = &rule->actions[rule->action_count];
+
+                cJSON* act_type = cJSON_GetObjectItem(act_item, "type");
+                if (!act_type || !cJSON_IsString(act_type)) continue;
+
+                if (strcmp(act_type->valuestring, "device_command") == 0) {
+                    a->type = ZB_RULE_ACTION_DEVICE_CMD;
+                    cJSON* short_addr = cJSON_GetObjectItem(act_item, "short");
+                    cJSON* endpoint = cJSON_GetObjectItem(act_item, "endpoint");
+                    cJSON* cmd_id = cJSON_GetObjectItem(act_item, "cmd_id");
+
+                    a->data.device_cmd.short_addr = short_addr ? short_addr->valueint : 0;
+                    a->data.device_cmd.endpoint = endpoint ? endpoint->valueint : 1;
+                    a->data.device_cmd.cmd_id = cmd_id ? cmd_id->valueint : 0;
+                }
+                else if (strcmp(act_type->valuestring, "set_virtual_var") == 0) {
+                    a->type = ZB_RULE_ACTION_SET_VIRTUAL_VAR;
+                    cJSON* var_idx = cJSON_GetObjectItem(act_item, "var_index");
+                    cJSON* value = cJSON_GetObjectItem(act_item, "value");
+
+                    a->data.set_virtual_var.var_index = var_idx ? var_idx->valueint : 0;
+                    a->data.set_virtual_var.value = value ? value->valueint : 0;
+                }
+                else if (strcmp(act_type->valuestring, "var_inc") == 0) {
+                    a->type = ZB_RULE_ACTION_INC_VIRTUAL_VAR;
+                    cJSON* var_idx = cJSON_GetObjectItem(act_item, "var_index");
+                    a->data.set_virtual_var.var_index = var_idx ? var_idx->valueint : 0;
+                }
+                else if (strcmp(act_type->valuestring, "var_dec") == 0) {
+                    a->type = ZB_RULE_ACTION_DEC_VIRTUAL_VAR;
+                    cJSON* var_idx = cJSON_GetObjectItem(act_item, "var_index");
+                    a->data.set_virtual_var.var_index = var_idx ? var_idx->valueint : 0;
+                }
+                else if (strcmp(act_type->valuestring, "var_toggle") == 0) {
+                    a->type = ZB_RULE_ACTION_TOGGLE_VIRTUAL_VAR;
+                    cJSON* var_idx = cJSON_GetObjectItem(act_item, "var_index");
+                    a->data.set_virtual_var.var_index = var_idx ? var_idx->valueint : 0;
+                }
+
+                rule->action_count++;
+            }
+
+        //rules_count++;
+        // ✅ ДОБАВЛЯЕМ ПРАВИЛО В МАССИВ
+        if (rules_count >= ZB_RULE_MAX_COUNT) {
+            ESP_LOGE(TAG, "❌ Достигнут лимит правил: %d", ZB_RULE_MAX_COUNT);
+            free(rule);
+        } else {
+            rules_array[rules_count] = rule;
+            ESP_LOGI(TAG, "✅ Загружено правило '%s' на индекс %d", rule->name, rules_count);
+            rules_count++;
+        }
+    }
+
+    cJSON_Delete(root);
+    ESP_LOGI(TAG, "Loaded %d rules from SPIFFS", rules_count);
+    return ESP_OK;
+}
+
+esp_err_t zb_rule_engine_save_to_spiffs(void)
+{
+    FILE* f = fopen(ZB_MANAGER_RULES_JSON_FILE, "w");
+    if (!f) {
+        ESP_LOGE("RULE_SAVE", "❌ Не удалось открыть %s для записи", ZB_MANAGER_RULES_JSON_FILE);
+        return ESP_FAIL;
+    }
+
+    cJSON* root = cJSON_CreateArray();
+    if (!root) {
+        fclose(f);
+        ESP_LOGE("RULE_SAVE", "❌ Не удалось создать JSON массив");
+        return ESP_ERR_NO_MEM;
+    }
+
+    ESP_LOGI("RULE_SAVE", "💾 Сохранение %d правил", rules_count);
+
+    for (int i = 0; i < rules_count; i++) {
+        if (rules_array[i] == NULL) {
+            ESP_LOGW("RULE_SAVE", "⚠️ Пропуск NULL правила на индексе %d", i);
+            continue;
+        }
+        cJSON* item = rule_to_json(rules_array[i]);
+        if (!item) {
+            ESP_LOGE("RULE_SAVE", "❌ rule_to_json вернул NULL для правила %s", rules_array[i]->id);
+            continue;
+        }
+        cJSON_AddItemToArray(root, item);
+    }
+
+    char* json_str = cJSON_PrintUnformatted(root);
+    if (!json_str) {
+        fclose(f);
+        cJSON_Delete(root);
+        ESP_LOGE("RULE_SAVE", "❌ cJSON_PrintUnformatted вернул NULL");
+        return ESP_ERR_NO_MEM;
+    }
+
+    // Выведем длину строки для контроля
+    ESP_LOGI("RULE_SAVE", "📄 JSON строка: %d байт", strlen(json_str));
+
+    fprintf(f, "%s", json_str);
+    free(json_str);
+    fclose(f);
+    cJSON_Delete(root);
+
+    ESP_LOGI("RULE_SAVE", "✅ Успешно сохранено в %s", ZB_MANAGER_RULES_JSON_FILE);
+    return ESP_OK;
+}
+
+
+
+bool zb_rule_engine_add_rule(const zb_rule_t* rule_template)
+{
+    if (!rule_template) {
+        ESP_LOGE(TAG, "❌ rule_template is NULL");
+        return false;
+    }
+
+    if (rules_count >= ZB_RULE_MAX_COUNT) {
+        ESP_LOGW(TAG, "❌ Достигнут лимит правил: %d", ZB_RULE_MAX_COUNT);
+        return false;
+    }
+
+    zb_rule_t* new_rule = calloc(1, sizeof(zb_rule_t));
+    if (!new_rule) {
+        ESP_LOGE(TAG, "❌ Не удалось выделить память под новое правило");
+        return false;
+    }
+
+    // Копируем поля по одному, безопасно
+    memcpy(new_rule, rule_template, sizeof(zb_rule_t));
+
+    // Генерируем ID, если не задан
+    if (strlen(new_rule->id) == 0) {
+        snprintf(new_rule->id, sizeof(new_rule->id), "rule_%04x", 
+                 (unsigned int)(esp_log_timestamp() & 0xFFFF));
+        ESP_LOGI(TAG, "🆔 Сгенерирован ID: %s", new_rule->id);
+    }
+
+    //new_rule->trigger_logic = ZB_RULE_TRIGGER_LOGIC_ANY;
+    // Сохраняем
+    rules_array[rules_count] = new_rule;
+    ESP_LOGI(TAG, "✅ Добавлено правило '%s' на индекс %d", new_rule->name, rules_count);
+    rules_count++;
+
+    // Сохраняем на диск и уведомляем
+    esp_err_t save_err = zb_rule_engine_save_to_spiffs();
+    if (save_err != ESP_OK) {
+        ESP_LOGE(TAG, "❌ Ошибка сохранения в SPIFFS: %s", esp_err_to_name(save_err));
+        // Но правило уже в памяти — можно попробовать ещё раз
+    } else {
+        ESP_LOGI(TAG, "💾 Правило сохранено в %s", ZB_MANAGER_RULES_JSON_FILE);
+    }
+
+    ws_notify_rules_update();
+
+    return true;
+}
+
+
+
+bool zb_rule_engine_update_rule(const char* rule_id, const zb_rule_t* updated_rule)
+{
+    // Проверки входных данных
+    if (!rule_id || strlen(rule_id) == 0) {
+        ESP_LOGE(TAG, "❌ rule_id is NULL or empty");
+        return false;
+    }
+
+    if (!updated_rule) {
+        ESP_LOGE(TAG, "❌ updated_rule is NULL");
+        return false;
+    }
+
+    if (!rules_array) {
+        ESP_LOGE(TAG, "❌ rules_array not initialized");
+        return false;
+    }
+
+    // Поиск правила по ID
+    for (int i = 0; i < rules_count; i++) {
+        if (!rules_array[i]) {
+            ESP_LOGW(TAG, "⚠️ rules_array[%d] is NULL", i);
+            continue;
+        }
+
+        if (strcmp(rules_array[i]->id, rule_id) == 0) {
+            ESP_LOGI(TAG, "🔄 Обновляем правило: %s (index=%d)", rule_id, i);
+
+            // Копируем всё содержимое
+            memcpy(rules_array[i], updated_rule, sizeof(zb_rule_t));
+
+            // Гарантируем, что ID совпадает (на случай, если изменился)
+            strncpy(rules_array[i]->id, rule_id, sizeof(rules_array[i]->id) - 1);
+            rules_array[i]->id[sizeof(rules_array[i]->id) - 1] = '\0';
+
+            // Сохраняем на диск
+            esp_err_t save_err = zb_rule_engine_save_to_spiffs();
+            if (save_err != ESP_OK) {
+                ESP_LOGE(TAG, "❌ Ошибка при сохранении после обновления: %s", esp_err_to_name(save_err));
+                return false;
+            }
+
+            ESP_LOGI(TAG, "✅ Правило '%s' успешно обновлено", rule_id);
+            ws_notify_rules_update();
+
+            return true;
+        }
+    }
+
+    ESP_LOGW(TAG, "❌ Правило с ID '%s' не найдено", rule_id);
+    return false;
+}
+
+
+
+bool zb_rule_engine_remove_rule(const char* rule_id)
+{
+    for (int i = 0; i < rules_count; i++) {
+        if (strcmp(rules_array[i]->id, rule_id) == 0) {
+            free(rules_array[i]);  // ← освобождаем память
+
+            // Сдвигаем хвост
+            memmove(&rules_array[i], &rules_array[i+1],
+                    (rules_count - i - 1) * sizeof(zb_rule_t*));
+            rules_count--;
+
+            zb_rule_engine_save_to_spiffs();
+            ws_notify_rules_update();
+            return true;
+        }
+    }
+    return false;
+}
+
+// Удалить все
+bool zb_rule_engine_remove_all_rules(void)
+{
+    for (int i = 0; i < rules_count; i++) {
+        free(rules_array[i]);
+    }
+    rules_count = 0;
+    zb_rule_engine_save_to_spiffs();
+    ws_notify_rules_update();
+    return true;
+}
+
+
+const zb_rule_t* zb_rule_engine_get_rule(const char* rule_id)
+{
+    for (int i = 0; i < rules_count; i++) {
+        if (strcmp(rules_array[i]->id, rule_id) == 0) {
+            return rules_array[i];
+        }
+    }
+    return NULL;
+}
+
+
+bool zb_automation_run_rule_now(const char* rule_id)
+{
+    const zb_rule_t* rule = zb_rule_engine_get_rule(rule_id);
+    if (!rule || !rule->enabled) {
+        ESP_LOGW("RULE_RUN", "Правило не найдено или выключено: %s", rule_id);
+        return false;
+    }
+
+    ESP_LOGI("RULE_RUN", "✅ Ручной запуск: %s", rule->name);
+    execute_rule_actions(rule); // вызываем действия
+    return true;
+}
+
+// Вспомогательная: сериализация правила в JSON
+cJSON* rule_to_json(const zb_rule_t* rule) {
+    if (!rule) {
+        ESP_LOGE("RULE_JSON", "❌ rule == NULL");
+        return cJSON_CreateObject();
+    }
+    ESP_LOGI("RULE_JSON", "🔄 Сериализация правила: %s (id=%s)", rule->name, rule->id);
+
+    cJSON* r = cJSON_CreateObject();
+    cJSON_AddStringToObject(r, "id", rule->id);
+    cJSON_AddStringToObject(r, "name", rule->name);
+    cJSON_AddStringToObject(r, "module", rule->module);
+    cJSON_AddNumberToObject(r, "priority", rule->priority);
+    cJSON_AddBoolToObject(r, "enabled", rule->enabled);
+    const char* logic_str = (rule->trigger_logic == ZB_RULE_TRIGGER_LOGIC_ALL) ? "all" : "any";
+    cJSON_AddStringToObject(r, "trigger_logic", logic_str);
+
+    // Триггеры
+    cJSON* triggers = cJSON_CreateArray();
+    for (int j = 0; j < rule->trigger_count; j++) {
+        const zb_rule_trigger_t* t = &rule->triggers[j];
+        cJSON* trig = cJSON_CreateObject();
+
+        switch (t->type) {
+            case ZB_RULE_TRIGGER_DEVICE_STATE:
+                cJSON_AddStringToObject(trig, "type", "device_state");
+                cJSON_AddNumberToObject(trig, "short", t->data.device_state.short_addr);
+                cJSON_AddNumberToObject(trig, "endpoint_id", t->data.device_state.endpoint_id);
+                cJSON_AddStringToObject(trig, "cluster_type", t->data.device_state.cluster_type);
+                const char* cond_str = "eq";
+                switch (t->data.device_state.cond) {
+                    case ZB_RULE_COND_EQ: cond_str = "eq"; break;
+                    case ZB_RULE_COND_NE: cond_str = "ne"; break;
+                    case ZB_RULE_COND_GT: cond_str = "gt"; break;
+                    case ZB_RULE_COND_LT: cond_str = "lt"; break;
+                    case ZB_RULE_COND_GTE: cond_str = "gte"; break;
+                    case ZB_RULE_COND_LTE: cond_str = "lte"; break;
+                }
+                cJSON_AddStringToObject(trig, "condition", cond_str);
+                cJSON_AddNumberToObject(trig, "value", t->data.device_state.value);
+                break;
+
+            case ZB_RULE_TRIGGER_DEVICE_UNAVAILABLE:
+                cJSON_AddStringToObject(trig, "type", "device_unavailable");
+                cJSON_AddNumberToObject(trig, "short", t->data.device_unavailable.short_addr);
+                cJSON_AddStringToObject(trig, "cluster_type", t->data.device_unavailable.cluster_type);
+                cJSON_AddNumberToObject(trig, "timeout_ms", t->data.device_unavailable.timeout_ms);
+                break;
+
+            case ZB_RULE_TRIGGER_TIME_RANGE:
+                cJSON_AddStringToObject(trig, "type", "time_range");
+                cJSON_AddStringToObject(trig, "from", t->data.time_range.from);
+                cJSON_AddStringToObject(trig, "to", t->data.time_range.to);
+                cJSON_AddNumberToObject(trig, "days_of_week", t->data.time_range.days_of_week);
+                cJSON_AddNumberToObject(trig, "delay_sec", t->data.time_range.delay_sec);
+                break;
+
+            case ZB_RULE_TRIGGER_VIRTUAL_VAR:
+                cJSON_AddStringToObject(trig, "type", "virtual_var");
+                cJSON_AddNumberToObject(trig, "var_index", t->data.virtual_var.var_index);
+                cJSON_AddNumberToObject(trig, "value", t->data.virtual_var.value);
+                const char* cond_str_v = "eq";
+                switch (t->data.virtual_var.cond) {
+                    case ZB_RULE_COND_EQ: cond_str_v = "eq"; break;
+                    case ZB_RULE_COND_NE: cond_str_v = "ne"; break;
+                    case ZB_RULE_COND_GT: cond_str_v = "gt"; break;
+                    case ZB_RULE_COND_LT: cond_str_v = "lt"; break;
+                    case ZB_RULE_COND_GTE: cond_str_v = "gte"; break;
+                    case ZB_RULE_COND_LTE: cond_str_v = "lte"; break;
+                }
+                cJSON_AddStringToObject(trig, "condition", cond_str_v);
+                break;
+
+            default:
+                ESP_LOGW("RULE_JSON", "⚠️ Неизвестный тип триггера: %d", t->type);
+                cJSON_AddStringToObject(trig, "type", "unknown");
+                break;
+        }
+        cJSON_AddItemToArray(triggers, trig);
+    }
+    cJSON_AddItemToObject(r, "triggers", triggers);
+
+    // Действия
+    cJSON* actions = cJSON_CreateArray();
+    for (int j = 0; j < rule->action_count; j++) {
+        const zb_rule_action_t* a = &rule->actions[j];
+        cJSON* act = cJSON_CreateObject();
+        switch (a->type) {
+            case ZB_RULE_ACTION_DEVICE_CMD:
+                cJSON_AddStringToObject(act, "type", "device_command");
+                cJSON_AddNumberToObject(act, "short", a->data.device_cmd.short_addr);
+                cJSON_AddNumberToObject(act, "endpoint", a->data.device_cmd.endpoint);
+                cJSON_AddNumberToObject(act, "cmd_id", a->data.device_cmd.cmd_id);
+                break;
+
+            case ZB_RULE_ACTION_SET_VIRTUAL_VAR:
+                cJSON_AddStringToObject(act, "type", "set_virtual_var");
+                cJSON_AddNumberToObject(act, "var_index", a->data.set_virtual_var.var_index);
+                cJSON_AddNumberToObject(act, "value", a->data.set_virtual_var.value);
+                break;
+
+            case ZB_RULE_ACTION_INC_VIRTUAL_VAR:
+                cJSON_AddStringToObject(act, "type", "var_inc");
+                cJSON_AddNumberToObject(act, "var_index", a->data.set_virtual_var.var_index);
+                break;
+
+            case ZB_RULE_ACTION_DEC_VIRTUAL_VAR:
+                cJSON_AddStringToObject(act, "type", "var_dec");
+                cJSON_AddNumberToObject(act, "var_index", a->data.set_virtual_var.var_index);
+                break;
+
+            case ZB_RULE_ACTION_TOGGLE_VIRTUAL_VAR:
+                cJSON_AddStringToObject(act, "type", "var_toggle");
+                cJSON_AddNumberToObject(act, "var_index", a->data.set_virtual_var.var_index);
+                break;
+
+            default:
+                cJSON_AddStringToObject(act, "type", "unknown");
+                break;
+        }
+        cJSON_AddItemToArray(actions, act);
+    }
+    cJSON_AddItemToObject(r, "actions", actions);
+
+    return r;
+}
+
+void zb_rule_trigger_state_update_double(uint16_t short_addr, const char* cluster_type, double value)
+{
+    ESP_LOGI(TAG, "🔄 zb_rule_trigger_state_update_double: %d, %s, %f", short_addr, cluster_type, value);
+    cJSON* event = cJSON_CreateObject();
+    if (!event) return;
+
+    cJSON_AddStringToObject(event, "event", "state_update");
+    cJSON_AddNumberToObject(event, "short", short_addr);
+
+    cJSON* clusters = cJSON_CreateArray();
+    cJSON* cl = cJSON_CreateObject();
+    cJSON_AddStringToObject(cl, "type", cluster_type);  // например: "on_off_custom_cmd_0x05"
+    cJSON_AddNumberToObject(cl, "value", value);
+    cJSON_AddItemToArray(clusters, cl);
+    cJSON_AddItemToObject(event, "clusters", clusters);
+
+    // Передаём событие в движок правил
+    zb_rule_engine_process_event(event);
+
+    // Очищаем память
+    cJSON_Delete(event);
+}
+
+void zb_rule_trigger_state_update(uint16_t short_addr,esp_zb_zcl_cluster_id_t cluster_id,uint16_t attr_id,void* data,uint8_t data_len,esp_zb_zcl_attr_type_t attr_type)
+{
+    // Определяем строковый тип кластера
+    const char* cluster_type_str = NULL;
+    bool is_tracked_attr = false;
+
+    if (cluster_id == ESP_ZB_ZCL_CLUSTER_ID_ON_OFF && attr_id == ESP_ZB_ZCL_ATTR_ON_OFF_ON_OFF_ID) {
+        cluster_type_str = "on_off";
+        is_tracked_attr = true;
+    }
+    else if (cluster_id == ESP_ZB_ZCL_CLUSTER_ID_TEMP_MEASUREMENT && attr_id == ATTR_TEMP_MEASUREMENT_VALUE_ID) {
+        cluster_type_str = "temperature";
+        is_tracked_attr = true;
+    }
+    else if (cluster_id == ESP_ZB_ZCL_CLUSTER_ID_REL_HUMIDITY_MEASUREMENT && attr_id == ATTR_REL_HUMIDITY_MEASUREMENT_VALUE_ID) {
+        cluster_type_str = "humidity";
+        is_tracked_attr = true;
+    }
+    else if (cluster_id == ESP_ZB_ZCL_CLUSTER_ID_POWER_CONFIG && attr_id == ESP_ZB_ZCL_ATTR_POWER_CONFIG_BATTERY_PERCENTAGE_REMAINING_ID) {
+        cluster_type_str = "battery";
+        is_tracked_attr = true;
+    }
+
+    // Если атрибут не отслеживается — выходим
+    if (!is_tracked_attr) {
+        ESP_LOGD(TAG, "Attribute not tracked for rules: cluster=0x%04x, attr=0x%04x", cluster_id, attr_id);
+        return;
+    }
+
+    cJSON* event = cJSON_CreateObject();
+    if (!event) return;
+
+    // === СЛУЧАЙ 1: Данные есть → state_update ===
+    if (data && data_len > 0) {
+        cJSON_AddStringToObject(event, "event", "state_update");
+        cJSON_AddNumberToObject(event, "short", short_addr);
+
+        cJSON* clusters = cJSON_CreateArray();
+        cJSON* cl = cJSON_CreateObject();
+
+        cJSON_AddStringToObject(cl, "type", cluster_type_str);
+
+        // Парсим значение в double
+        double numeric_value = 0.0;
+        bool parsed = false;
+
+        if (attr_type == ESP_ZB_ZCL_ATTR_TYPE_BOOL && data_len >= 1) {
+            numeric_value = *(uint8_t*)data ? 1.0 : 0.0;
+            parsed = true;
+        }
+        else if (attr_type == ESP_ZB_ZCL_ATTR_TYPE_U8 && data_len >= 1) {
+            numeric_value = *(uint8_t*)data;
+            parsed = true;
+        }
+        else if (attr_type == ESP_ZB_ZCL_ATTR_TYPE_S8 && data_len >= 1) {
+            numeric_value = *(int8_t*)data;
+            parsed = true;
+        }
+        else if (attr_type == ESP_ZB_ZCL_ATTR_TYPE_U16 && data_len >= 2) {
+            numeric_value = *(uint16_t*)data;
+            parsed = true;
+        }
+        else if (attr_type == ESP_ZB_ZCL_ATTR_TYPE_S16 && data_len >= 2) {
+            numeric_value = *(int16_t*)data;
+            parsed = true;
+        }
+        else if (attr_type == ESP_ZB_ZCL_ATTR_TYPE_SINGLE && data_len >= 4) {
+            numeric_value = (double)*(float*)data;
+            parsed = true;
+        }
+
+        if (!parsed) {
+            ESP_LOGW(TAG, "Unsupported attr type 0x%02x or invalid length %d", attr_type, data_len);
+            cJSON_Delete(event);
+            return;
+        }
+
+        // Масштабирование
+        if (cluster_id == ESP_ZB_ZCL_CLUSTER_ID_TEMP_MEASUREMENT) {
+            numeric_value /= 100.0;  // centi-degrees → °C
+        }
+        else if (cluster_id == ESP_ZB_ZCL_CLUSTER_ID_POWER_CONFIG && attr_id == ESP_ZB_ZCL_ATTR_POWER_CONFIG_BATTERY_PERCENTAGE_REMAINING_ID) {
+            numeric_value /= 2.0;  // 0..200 → 0..100%
+        }
+
+        cJSON_AddNumberToObject(cl, "value", numeric_value);
+        cJSON_AddItemToArray(clusters, cl);
+        cJSON_AddItemToObject(event, "clusters", clusters);
+
+        ESP_LOGI(TAG, "🔄 Rule trigger: %s = %.3f (dev=0x%04x)", cluster_type_str, numeric_value, short_addr);
+    }
+    // === СЛУЧАЙ 2: Данных нет → device_unavailable ===
+    else {
+        cJSON_AddStringToObject(event, "event", "device_unavailable");
+        cJSON_AddNumberToObject(event, "short", short_addr);
+        cJSON_AddStringToObject(event, "cluster", cluster_type_str);
+        cJSON_AddNumberToObject(event, "attr_id", attr_id);
+
+        ESP_LOGW(TAG, "🚨 Rule trigger: device 0x%04x cluster '%s' is unavailable", short_addr, cluster_type_str);
+    }
+
+    // Отправляем в движок правил
+    zb_rule_engine_process_event(event);
+
+    // Очищаем
+    cJSON_Delete(event);
+}
+
+ // zb_manager_rules.c
+void check_time_triggers(void)
+{
+    time_t now = time(NULL);
+    struct tm timeinfo;
+    localtime_r(&now, &timeinfo);
+
+    // Текущее время в секундах с начала дня
+    int current_total_sec = timeinfo.tm_hour * 3600 + timeinfo.tm_min * 60 + timeinfo.tm_sec;
+
+    // Бит дня недели: Пн=0, Вт=1, ..., Вс=6 → бит 6
+    uint8_t current_day_bit = 1 << (timeinfo.tm_wday == 0 ? 6 : timeinfo.tm_wday - 1);
+
+    ESP_LOGD(TAG, "⏰ Проверка временных триггеров: %02d:%02d:%02d, день=%d (бит=0x%02x)",
+             timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec,
+             timeinfo.tm_wday, current_day_bit);
+
+    for (int i = 0; i < rules_count; i++) {
+        zb_rule_t* rule = rules_array[i];
+        if (!rule) {
+            ESP_LOGW(TAG, "⚠️ rules_array[%d] == NULL", i);
+            continue;
+        }
+
+        if (!rule->enabled) {
+            ESP_LOGD(TAG, "⏭️ Правило '%s' выключено — пропускаем", rule->name);
+            continue;
+        }
+
+        bool triggered = false;
+        for (int j = 0; j < rule->trigger_count; j++) {
+            zb_rule_trigger_t* t = &rule->triggers[j];
+
+            if (t->type != ZB_RULE_TRIGGER_TIME_RANGE) {
+                continue;
+            }
+
+            // Парсим from и to из строки "HH:MM" в секунды
+            int from_hour, from_min, to_hour, to_min;
+            if (sscanf(t->data.time_range.from, "%d:%d", &from_hour, &from_min) != 2) {
+                ESP_LOGW(TAG, "❌ Неверный формат 'from': %s", t->data.time_range.from);
+                continue;
+            }
+            if (sscanf(t->data.time_range.to, "%d:%d", &to_hour, &to_min) != 2) {
+                ESP_LOGW(TAG, "❌ Неверный формат 'to': %s", t->data.time_range.to);
+                continue;
+            }
+
+            int from_total_sec = from_hour * 3600 + from_min * 60;
+            int to_total_sec = to_hour * 3600 + to_min * 60;
+
+            // Проверка дня недели
+            if (!(t->data.time_range.days_of_week & current_day_bit)) {
+                continue;
+            }
+
+            // Проверка времени (с учётом перехода через 00:00)
+            bool in_interval;
+            if (from_total_sec <= to_total_sec) {
+                // Простой случай: 08:00 → 22:00
+                in_interval = (current_total_sec >= from_total_sec && current_total_sec <= to_total_sec);
+            } else {
+                // Через полночь: 23:00 → 06:00
+                in_interval = (current_total_sec >= from_total_sec || current_total_sec <= to_total_sec);
+            }
+
+            if (in_interval) {
+                triggered = true;
+
+                if (t->data.time_range.delay_sec == 0) {
+                    ESP_LOGI(TAG, "⚡ Выполняем правило '%s' немедленно", rule->name);
+                    execute_rule_actions(rule);
+                } else {
+                    ESP_LOGI(TAG, "⏳ Запланирована задержка: %u сек для правила '%s'", t->data.time_range.delay_sec, rule->name);
+                    schedule_delayed_action(rule->id, t->data.time_range.delay_sec);
+                }
+                break; // одно совпадение — достаточно
+            }
+        }
+
+        if (!triggered) {
+            ESP_LOGD(TAG, "❌ Правило '%s' не сработало по времени", rule->name);
+        }
+    }
+}
+
+void check_time_triggers_old(void) {
+    time_t now = time(NULL);
+    struct tm timeinfo;
+    localtime_r(&now, &timeinfo);
+
+    char current_time[6];
+    snprintf(current_time, sizeof(current_time), "%02d:%02d", timeinfo.tm_hour, timeinfo.tm_min);
+
+    // Бит номер дня: Пн=0, Вт=1, ..., Вс=6
+    uint8_t current_day_bit = 1 << (timeinfo.tm_wday == 0 ? 6 : timeinfo.tm_wday - 1); // воскресенье → 6
+
+    ESP_LOGI(TAG, "⏰ ПРОВЕРКА ВРЕМЕННЫХ ТРИГГЕРОВ");
+    ESP_LOGI(TAG, "🕒 Текущее время: %s, день недели: %d (бит: 0x%02x)", 
+             current_time, timeinfo.tm_wday, current_day_bit);
+
+    for (int i = 0; i < rules_count; i++) {
+        zb_rule_t* rule = rules_array[i];
+        if (!rule) {
+            ESP_LOGW(TAG, "⚠️ rules_array[%d] == NULL", i);
+            continue;
+        }
+
+        if (!rule->enabled) {
+            ESP_LOGD(TAG, "⏭️ Правило '%s' выключено — пропускаем", rule->name);
+            continue;
+        }
+
+        ESP_LOGD(TAG, "🔍 Проверяем правило: '%s' (ID: %s)", rule->name, rule->id);
+
+        bool triggered = false;
+        for (int j = 0; j < rule->trigger_count; j++) {
+            zb_rule_trigger_t* t = &rule->triggers[j];
+
+            if (t->type != ZB_RULE_TRIGGER_TIME_RANGE) {
+                ESP_LOGD(TAG, "   → Триггер %d: не time_range (тип=%d)", j, t->type);
+                continue;
+            }
+
+            ESP_LOGI(TAG, "🎯 Найден временной триггер:");
+            ESP_LOGI(TAG, "   from='%s', to='%s', delay_sec=%u", 
+                     t->data.time_range.from, t->data.time_range.to, t->data.time_range.delay_sec);
+            ESP_LOGI(TAG, "   days_of_week=0x%02x, current_day_bit=0x%02x", 
+                     t->data.time_range.days_of_week, current_day_bit);
+
+            // Проверка дня недели
+            if (!(t->data.time_range.days_of_week & current_day_bit)) {
+                ESP_LOGW(TAG, "❌ Не совпадение дня недели: требуется 0x%02x, сегодня 0x%02x",
+                         t->data.time_range.days_of_week, current_day_bit);
+                continue;
+            } else {
+                ESP_LOGI(TAG, "✅ Совпадение дня недели!");
+            }
+
+            // Проверка времени
+            int cmp_from = strcmp(current_time, t->data.time_range.from);
+            int cmp_to = strcmp(current_time, t->data.time_range.to);
+
+            ESP_LOGI(TAG, "⏰ Сравнение времени:");
+            ESP_LOGI(TAG, "   '%s' >= '%s' ? %s", current_time, t->data.time_range.from, cmp_from >= 0 ? "да" : "нет");
+            ESP_LOGI(TAG, "   '%s' <= '%s' ? %s", current_time, t->data.time_range.to, cmp_to <= 0 ? "да" : "нет");
+
+            bool in_interval = (cmp_from >= 0) && (cmp_to <= 0);
+
+            if (in_interval) {
+                ESP_LOGI(TAG, "🔥 ВРЕМЯ В ИНТЕРВАЛЕ! Правило сработает.");
+                triggered = true;
+
+                if (t->data.time_range.delay_sec == 0) {
+                    ESP_LOGI(TAG, "⚡ Выполняем действия немедленно...");
+                    execute_rule_actions(rule);
+                } else {
+                    ESP_LOGI(TAG, "⏳ Запланирована задержка: %u сек", t->data.time_range.delay_sec);
+                    schedule_delayed_action(rule->id, t->data.time_range.delay_sec);
+                }
+                break; // один сработавший триггер — достаточно
+            } else {
+                ESP_LOGW(TAG, "❌ Время НЕ в интервале!");
+            }
+        }
+
+        if (!triggered) {
+            ESP_LOGD(TAG, "❌ Правило '%s' не сработало ни по одному триггеру", rule->name);
+        }
+    }
+}
+
+void schedule_delayed_action(const char* rule_id, uint32_t delay_sec) {
+    if (delayed_count >= 8) return;
+
+    time_t fire_at = time(NULL) + delay_sec;
+
+    // Проверим, нет ли уже такой задержки
+    for (int i = 0; i < delayed_count; i++) {
+        if (strcmp(delayed_actions[i].rule_id, rule_id) == 0) {
+            delayed_actions[i].fire_at = fire_at;
+            return;
+        }
+    }
+
+    strncpy(delayed_actions[delayed_count].rule_id, rule_id, 31);
+    delayed_actions[delayed_count].fire_at = fire_at;
+    delayed_count++;
+}
+
+void process_delayed_actions(void) {
+    time_t now = time(NULL);
+    struct tm now_tm;
+    localtime_r(&now, &now_tm);
+    char now_str[6];
+    snprintf(now_str, sizeof(now_str), "%02d:%02d", now_tm.tm_hour, now_tm.tm_min);
+
+    ESP_LOGD(TAG, "⏳ Проверка отложенных действий... текущее время: %s", now_str);
+
+    for (int i = 0; i < delayed_count; i++) {
+        struct tm fire_tm;
+        localtime_r(&delayed_actions[i].fire_at, &fire_tm);
+        char fire_str[6];
+        snprintf(fire_str, sizeof(fire_str), "%02d:%02d", fire_tm.tm_hour, fire_tm.tm_min);
+
+        ESP_LOGD(TAG, "   → Отложенное действие: ID=%s, запланировано на %s, прошло=%ds",
+                 delayed_actions[i].rule_id,
+                 fire_str,
+                 (int)(now - delayed_actions[i].fire_at));
+
+        if (delayed_actions[i].fire_at <= now) {
+            const zb_rule_t* rule = zb_rule_engine_get_rule(delayed_actions[i].rule_id);
+            if (rule && rule->enabled) {
+                ESP_LOGI(TAG, "🔥 ВЫПОЛНЕНИЕ ОТЛОЖЕННОГО ПРАВИЛА: '%s'", rule->name);
+                execute_rule_actions(rule);
+            } else {
+                ESP_LOGW(TAG, "⚠️ Правило для отложенного действия не найдено или выключено: %s",
+                         delayed_actions[i].rule_id);
+            }
+
+            // Удаление
+            memmove(&delayed_actions[i], &delayed_actions[i+1],
+                    (delayed_count - i - 1) * sizeof(delayed_action_t));
+            delayed_count--;
+            i--;
+        }
+    }
+}

@@ -1,0 +1,201 @@
+menu "Zigbee Manager"
+    menu "WI-FI Options"
+        menu "SoftAP Configuration"
+        comment "SoftAP Configuration"
+
+        config ESP_WIFI_AP_SSID
+            string "WiFi AP SSID"
+            default "myssid"
+            help
+                SSID (network name) of the AP for the example to connect to.
+
+        config ESP_WIFI_AP_PASSWORD
+            string "WiFi AP Password"
+            default "mypassword"
+            help
+                WiFi password of the AP for the example to use.
+
+        config ESP_WIFI_AP_CHANNEL
+            int "WiFi AP Channel"
+            range 1 14
+            default 1
+            help
+                WiFi channel (network channel) of the AP for the example to use.
+
+        config ESP_MAX_STA_CONN_AP
+            int "Maximal STA connections"
+            default 4
+            help
+                Max number of the STA connects to AP.
+        endmenu
+
+        menu "STA Configuration"
+        comment "STA Configuration"
+
+        config ESP_WIFI_REMOTE_AP_SSID
+            string "WiFi Remote AP SSID"
+            default "otherapssid"
+            help
+                SSID (network name) for the example's sta to connect to.
+
+        config ESP_WIFI_REMOTE_AP_PASSWORD
+            string "WiFi Remote AP Password"
+            default "otherappassword"
+            help
+                WiFi password for the example to use.
+
+        config ESP_MAXIMUM_STA_RETRY
+            int "Maximum retry"
+            default 5
+            help
+                Set the maximum retry value to prevent the station from continuously
+                attempting to reconnect to the Access Point (AP) when the AP doesn't exist.
+
+        choice ESP_WIFI_SCAN_AUTH_MODE_THRESHOLD
+            prompt "WiFi Scan auth mode threshold"
+            default ESP_WIFI_AUTH_WPA2_PSK
+            help
+                The weakest authmode to accept in the scan mode.
+                This value defaults to ESP_WIFI_AUTH_WPA2_PSK in case password is present
+                and ESP_WIFI_AUTH_OPEN is used. Please select ESP_WIFI_AUTH_WEP / ESP_WIFI_AUTH_WPA_PSK
+                in case AP is operating in WEP / WPA mode.
+
+            config ESP_WIFI_AUTH_OPEN
+                bool "OPEN"
+            config ESP_WIFI_AUTH_WEP
+                bool "WEP"
+            config ESP_WIFI_AUTH_WPA_PSK
+                bool "WPA PSK"
+            config ESP_WIFI_AUTH_WPA2_PSK
+                bool "WPA2 PSK"
+            config ESP_WIFI_AUTH_WPA_WPA2_PSK
+                bool "WPA/WPA2 PSK"
+            config ESP_WIFI_AUTH_WPA3_PSK
+                bool "WPA3 PSK"
+            config ESP_WIFI_AUTH_WPA2_WPA3_PSK
+                bool "WPA2/WPA3 PSK"
+            config ESP_WIFI_AUTH_WAPI_PSK
+                bool "WAPI PSK"
+        endchoice
+
+        endmenu
+
+        menu "Network Scan"
+            config EXAMPLE_SCAN_LIST_SIZE
+                int "Max size of scan list"
+                range 0 20
+                default 10
+                help
+                    The size of array that will be used to retrieve the list of access points.
+
+            config EXAMPLE_USE_SCAN_CHANNEL_BITMAP
+                bool "Scan only non overlapping channels using Channel bitmap"
+                default 0
+                help
+                    Enable this to scan only the non overlapping channels i.e 1,6,11 by mentioning a channel bitmap
+                    in scan config. If you wish to scan a different set of specific channels, please edit the channel_list
+                    array in scan.c. Channels for a 2.4 ghz network range should range from 1-14.
+        endmenu
+
+        menu "MDNS Host"
+            config MDNS_HOST_NAME
+            string "MDNS HOST NAME"
+            default "my_esp32_host"
+            help
+                MDNS HOST NAME (enable when ESP connect to the AP) test with 'ping my_esp32_host.local'
+        endmenu
+    endmenu
+    menu "HOST UART Config"
+        config HOST_BUS_UART_BAUD_RATE
+            int 
+            default 115200
+            range 9600 891200
+            prompt "UART baud rate"
+            help
+                Set UART baud rate.
+        
+        config HOST_BUS_UART_BYTE_SIZE
+            int 
+            default 3
+            range 0 3
+            prompt "UART word length"
+            help
+                Set UART word length are defined as follows:
+
+                - 0x0: 5bits
+                - 0x1: 6bits
+                - 0x2: 7bits
+                - 0x3: 8bits
+
+        config HOST_BUS_UART_STOP_BITS
+            int 
+            default 1
+            range 1 3
+            prompt "UART stop bits"
+            help
+                Set UART stop bits are defined as follows:
+
+                - 0x1, 1bit
+                - 0x2, 1.5bits
+                - 0x3, 2bits
+
+        config HOST_BUS_UART_FLOW_CONTROL
+            int 
+            default 0
+            range 0 3
+            prompt "UART HW flow control mode"
+            help
+                Set UART HW flow control mode are defined as follows:
+
+                - 0x0, disable hardware flow control
+                - 0x1, enable RX hardware flow control (rts)
+                - 0x2, enable TX hardware flow control (cts)
+                - 0x3, enable hardware flow control
+        
+        config HOST_BUS_UART_NUM
+            int
+            range 0 2
+            default 1
+            prompt "UART number"
+            help
+                Set UART number.
+        
+        config HOST_BUS_UART_RX_PIN
+            int 
+            range -1 40
+            #default 5
+            default 29 if IDF_TARGET_ESP32P4
+            default 18 if IDF_TARGET_ESP32S3
+            #
+            prompt "UART RX pin"
+            help
+                Set UART RX pin.
+        
+        config HOST_BUS_UART_TX_PIN
+            int
+            range -1 40 
+            #default 4
+            default 30 if IDF_TARGET_ESP32P4
+            default 17 if IDF_TARGET_ESP32S3
+            #
+            prompt "UART TX pin"
+            help
+                Set UART TX pin.
+        
+        config HOST_BUS_UART_RTS_PIN
+            int 
+            default -1
+            range -1 30
+            prompt "UART rts pin"
+            help
+                Set UART rts pin.
+        
+        config HOST_BUS_UART_CTS_PIN
+            int 
+            default -1
+            range -1 30
+            prompt "UART cts pin"
+            help
+                Set UART cts pin.
+    endmenu
+endmenu

@@ -1,0 +1,31 @@
+#ifndef ZBM_WEB_SERVER_H
+
+#define ZBM_WEB_SERVER_H
+
+#include "esp_http_server.h"
+#include <stdbool.h>
+#include "cJSON.h"
+
+void start_webserver(void);
+void stop_webserver(void);
+
+
+// Функция отправки через web socket отдельным потоком httpd_queue_work(server_handle, ws_send_async_task, async_data)
+typedef struct {
+    httpd_handle_t hd;
+    uint8_t *payload; 
+    size_t len;
+} ws_async_data_t;
+
+void ws_send_async_task(void *arg);
+
+
+// === Асинхронная отправка HTTP-ответа (аналог ws_send_async_task) ===
+typedef struct {
+    httpd_req_t* req;
+    cJSON* response;
+} http_async_resp_t;
+
+
+
+#endif

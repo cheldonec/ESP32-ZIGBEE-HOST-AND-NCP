@@ -360,6 +360,7 @@ cJSON* device_to_json(zbm_dev_t* dev) {
 
         // Кастомные кластеры
         cJSON* cust_clusters = cJSON_CreateArray();
+        //ESP_LOGI(TAG,"ep->custom_cluster_count; %d", ep->custom_cluster_count);
         cJSON_AddItemToObject(jep, "custom_clusters", cust_clusters);
         for (int cl_idx = 0; cl_idx < ep->custom_cluster_count; cl_idx++) {
             zbm_custom_cluster_t* cluster = ep->custom_cluster_array[cl_idx];

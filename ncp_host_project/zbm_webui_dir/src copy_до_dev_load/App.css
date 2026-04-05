@@ -1,0 +1,491 @@
+/* src/App.css */
+
+/* Глобальные стили */
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  font-family: system-ui, -apple-system, sans-serif;
+  background: #0d1117;
+  color: #e0e0e0;
+  -webkit-font-smoothing: antialiased;
+}
+
+#root {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Контейнер */
+.app-container {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  background: #121212;
+  font-size: 14px;
+}
+
+/* Шапка */
+.header {
+  background: linear-gradient(to right, #1a1a1a, #121212);
+  border-bottom: 1px solid rgba(50, 100, 200, 0.2);
+  padding: 12px 20px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 13px;
+  color: #ccc;
+  font-family: 'Segoe UI', monospace;
+}
+
+.header .left {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+}
+
+.header strong {
+  color: white;
+  font-weight: 600;
+}
+
+.header .ieee {
+  background: #1e1e1e;
+  padding: 4px 8px;
+  border: 1px solid #333;
+  border-radius: 4px;
+  font-size: 11px;
+  color: #aaa;
+}
+
+/* Навигация */
+.navbar {
+  background: #1e1e1e;
+  border-bottom: 1px solid #333;
+  padding: 8px 8px;
+  position: sticky;
+  top: 10px;
+  z-index: 10;
+  overflow-x: auto;
+  white-space: nowrap;
+}
+
+.nav-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  margin: 0 4px;
+  border-radius: 6px;
+  text-decoration: none;
+  color: #aaa;
+  font-size: 13px;
+  transition: all 0.2s;
+}
+
+.nav-link:hover {
+  background: #2c2c2c;
+  color: white;
+}
+
+.nav-link.active {
+  background: #2563eb;
+  color: white;
+  box-shadow: 0 1px 4px rgba(37, 99, 235, 0.3);
+}
+
+/* Основной макет */
+.main-layout {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+}
+
+/* Список устройств */
+.device-list {
+  width: 280px;
+  background: #1a1a1a;
+  border-right: 1px solid #333;
+  display: flex;
+  flex-direction: column;
+}
+
+.device-list h2 {
+  padding: 16px;
+  font-size: 16px;
+  font-weight: 600;
+  color: white;
+  border-bottom: 1px solid #333;
+  background: #1e1e1e;
+}
+
+.device-item {
+  padding: 12px 16px;
+  border-bottom: 1px solid #2c2c2c;
+  cursor: default;
+  transition: background 0.2s;
+}
+
+.device-item:hover {
+  background: #242424;
+}
+
+.device-item .name {
+  font-weight: 500;
+  color: white;
+  font-size: 14px;
+}
+
+.device-item .info {
+  font-size: 11px;
+  color: #777;
+  margin-top: 2px;
+}
+
+.device-status {
+  font-size: 11px;
+  padding: 2px 6px;
+  border-radius: 10px;
+  font-family: monospace;
+  min-width: 60px;
+  text-align: center;
+}
+
+.status-online {
+  background: #054020;
+  color: #4ade80;
+  border: 1px solid #0a5c30;
+}
+
+.status-offline {
+  background: #400505;
+  color: #f87171;
+  border: 1px solid #5c0a0a;
+}
+
+/* Детали устройства */
+.device-details {
+  flex: 1;
+  padding: 24px;
+  background: linear-gradient(to bottom right, #141414, #101010);
+  overflow-y: auto;
+  color: #ddd;
+}
+
+.device-details h2 {
+  font-size: 20px;
+  color: white;
+  margin-bottom: 4px;
+}
+
+.device-details .ieee {
+  font-size: 12px;
+  color: #777;
+  font-family: monospace;
+}
+
+.panel {
+  background: #1e1e1e;
+  border: 1px solid #333;
+  border-radius: 8px;
+  margin-top: 16px;
+  overflow: hidden;
+}
+
+.panel-header {
+  padding: 10px 12px;
+  background: #242424;
+  font-size: 13px;
+  font-weight: 500;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  color: #ddd;
+  border-bottom: 1px solid #333;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 4px;
+}
+
+th {
+  text-align: left;
+  padding: 6px 8px;
+  font-size: 11px;
+  text-transform: uppercase;
+  color: #999;
+  border-bottom: 1px solid #444;
+}
+
+td {
+  padding: 6px 8px;
+  border-bottom: 1px solid #2c2c2c;
+  font-family: monospace;
+  font-size: 12px;
+  color: #eee;
+}
+
+tr:hover td {
+  background: #242424;
+}
+
+code {
+  font-family: monospace;
+  background: #242424;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 12px;
+  color: #eee;
+}
+
+/* Футер */
+.footer {
+  background: rgba(10, 10, 10, 0.8);
+  backdrop-filter: blur(4px);
+  border-top: 1px solid #333;
+  padding: 8px 20px;
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+  color: #777;
+  font-family: monospace;
+}
+
+.footer span {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.panel-body {
+  padding: 16px;
+  font-size: 13px;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.max-w-lg {
+  max-width: 600px;
+}
+
+.mx-auto {
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.settings-container {
+  max-width: 600px;
+  margin-top: 16px;
+  margin-left: 16px;
+}
+
+/* === Новые стили для Settings === */
+
+.settings-page {
+  padding: 24px;
+}
+
+/* Контейнер с прокруткой */
+.settings-scroll-container {
+  max-height: calc(100vh - 200px); /* Учитывает заголовок, статус, футер */
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding-right: 8px; /* Для компенсации полосы прокрутки */
+}
+
+/* Сетка: две колонки на больших экранах */
+.settings-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 24px;
+  min-width: 700px; /* Минимальная ширина для двух колонок */
+}
+
+/* Адаптивность: на малых экранах — одна колонка */
+@media (max-width: 768px) {
+  .settings-grid {
+    grid-template-columns: 1fr;
+    gap: 16px;
+  }
+
+  .settings-scroll-container {
+    max-height: none;
+    overflow: visible;
+  }
+}
+
+.form-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.form-row {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 8px 12px;
+  background: #1e1e1e;
+  border: 1px solid #333;
+  border-radius: 6px;
+}
+
+.form-label {
+  width: 140px;
+  font-size: 13px;
+  color: #ccc;
+}
+
+.form-input {
+  flex: 1;
+  padding: 8px 12px;
+  background: #242424;
+  border: 1px solid #444;
+  border-radius: 4px;
+  color: #fff;
+  font-size: 13px;
+}
+
+.form-input:focus {
+  outline: none;
+  border-color: #2563eb;
+}
+
+.form-static-value {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+
+.form-static-text {
+  padding: 8px 12px;
+  background: #242424;
+  border: 1px solid #444;
+  border-radius: 4px;
+  color: #fff;
+  font-size: 13px;
+  font-family: monospace;
+}
+
+.form-hint {
+  font-size: 11px;
+  color: #777;
+  margin-top: 4px;
+}
+
+.form-ap-info {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.form-sub-label {
+  font-size: 11px;
+  color: #777;
+}
+
+.form-code {
+  display: block;
+  margin-top: 4px;
+  padding: 6px 10px;
+  background: #242424;
+  border-radius: 4px;
+  font-family: monospace;
+  font-size: 12px;
+  color: #eee;
+}
+
+.form-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 16px;
+  padding-top: 16px;
+  border-top: 1px solid #333;
+  margin-top: 16px;
+}
+
+.btn-primary {
+  padding: 8px 16px;
+  background: #2563eb;
+  color: white;
+  border: none;
+  border-radius: 6px;
+  font-weight: 500;
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.btn-primary:hover:not(.btn-disabled) {
+  background: #4c54d2;
+}
+
+.btn-primary.btn-disabled {
+  background: #4c54d2;
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+
+.btn-danger {
+  padding: 8px 16px;
+  background: #dc2626;
+  color: white;
+  border: none;
+  border-radius: 6px;
+  font-weight: 500;
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.btn-danger:hover {
+  background: #b91c1c;
+}
+
+.settings-footer {
+  max-width: 600px;
+  margin: 16px auto 0;
+  padding-top: 12px;
+  border-top: 1px solid #333;
+  text-align: center;
+  font-size: 12px;
+  color: #777;
+}
+
+/* === Фикс для полей с глазиком (пароли) === */
+.form-ap-info > div {
+  position: relative;
+  display: flex;
+  align-items: center;
+  width: 100%;
+}
+
+.form-ap-info input.form-input {
+  width: 100%;
+  padding-right: 32px; /* место под кнопку */
+  box-sizing: border-box;
+}
+
+.form-ap-info button[aria-label] {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  background: none;
+  border: none;
+  font-size: 12px;
+  color: #aaa;
+  cursor: pointer;
+  padding: 0;
+  line-height: 1;
+  z-index: 10;
+  width: auto;
+}

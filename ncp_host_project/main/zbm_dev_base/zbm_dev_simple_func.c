@@ -15,6 +15,7 @@
 #include "zbm_low_level_types.h"
 #include "zbm_spiffs_helper.h"
 #include "zbm_dev_storage_spiffs.h"
+#include "zbm_web_server.h"
 
 static const char* TAG = "zbm_dev_simple_func";
 
@@ -42,6 +43,8 @@ uint8_t zbm_device_apply_reported_value(
     if (!dev_obj || !new_value) return 0xFF;
     if (!zbm_is_valid_data_size(data_type, data_size)) return 0xFF;
 
+    dev_obj->last_seen_ms = get_ms();
+    dev_obj->is_online = true;
     // Поиск или создание эндпоинта
     zbm_dev_endpoint_t* endpoint = NULL;
     for (uint8_t i = 0; i < dev_obj->endpoints_count; i++) {
@@ -329,6 +332,8 @@ uint8_t zbm_device_apply_reported_value(
     memcpy(attr->p_value, new_value, data_size);
     attr->last_update_ms = get_ms();
 
+    //отправляем в web socet
+    zbm_ws_send_update(attr->guid, attr->data_type, new_value, data_size);
     return created ? 1 : 0;
 }
 
@@ -554,7 +559,8 @@ uint8_t zbm_update_cluster_custom_report(
     }
 
     memcpy(report_cmd->p_value, new_value, data_size);
-
+    //отправляем в web socet
+    zbm_ws_send_update(report_cmd->guid, report_cmd->data_type, new_value, data_size);
     return created ? 1 : 0;
 }
 

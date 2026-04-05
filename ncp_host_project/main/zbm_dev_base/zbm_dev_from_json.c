@@ -554,6 +554,7 @@ zbm_dev_t* restore_device_from_json(cJSON* json) {
                 }
             }
 
+            //ESP_LOGI(TAG, "custom_count = %d", ep->custom_cluster_count);
             for (int cl_i = 0; cl_i < ep->custom_cluster_count; cl_i++) {
                 cJSON* j_cl = cJSON_GetArrayItem(j_cust_clusters, cl_i);
                 if (!j_cl || !cJSON_IsObject(j_cl)) continue;
@@ -571,8 +572,21 @@ zbm_dev_t* restore_device_from_json(cJSON* json) {
                     }
                 }
 
-                zbm_custom_cluster_t* cluster = (zbm_custom_cluster_t*)create_cluster(cluster_id, role_mask, true);
+                /*zbm_custom_cluster_t* cluster = NULL;
+                cluster = (zbm_custom_cluster_t*)create_cluster(cluster_id, role_mask, true);
+                if (!cluster) continue;*/
+                zbm_custom_cluster_t* cluster = calloc(1, sizeof(zbm_custom_cluster_t));
                 if (!cluster) continue;
+
+                cluster->id = cluster_id;
+                cluster->role_mask = role_mask;
+                cluster->attr_count = 0;
+                cluster->attr_array = NULL;
+                cluster->standart_cmd_count = 0;
+                cluster->standart_cmd_array = NULL;
+                cluster->custom_report_cmd_count = 0;
+                cluster->custom_report_cmd_array = NULL;
+                cluster->friendlyname = NULL;
 
                 cJSON* j_friendly = cJSON_GetObjectItem(j_cl, "friendlyname");
                 if (j_friendly && cJSON_IsString(j_friendly)) {
@@ -923,6 +937,7 @@ zbm_dev_t* restore_device_from_json(cJSON* json) {
                         cluster->custom_report_cmd_array[r_i] = rep;
                     }
                 }
+                ep->custom_cluster_array[cl_i] = cluster;
             }
         }
 

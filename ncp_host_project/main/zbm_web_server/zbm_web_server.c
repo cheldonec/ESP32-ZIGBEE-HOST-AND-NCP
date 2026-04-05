@@ -18,6 +18,12 @@ static int ws_client_fd = -1;
 static char json_buffer_for_response[8192]; // буфер для cJSON
 static SemaphoreHandle_t json_buffer_mutex = NULL; // мьютекс для потокобезопасности
 
+// === Глобальные переменные ===
+static QueueHandle_t ws_update_queue = NULL;
+static TaskHandle_t ws_update_task_handle = NULL;
+#define ZBM_WS_UPDATE_QUEUE_SIZE 32
+
+
 // MIME-типы
 static const char* get_content_type(const char* path) {
     if (strstr(path, ".html")) return "text/html";
@@ -40,6 +46,69 @@ void ws_send_async_task(void *arg);
 // Обработчики
 esp_err_t get_index_html_req_handler(httpd_req_t *req);
 esp_err_t get_from_ws_handler(httpd_req_t *req);
+
+//задача для приёма атрибутов и отправки их в UI
+void ws_update_task(void *pvParameters) {
+    zbm_ws_update_msg_t msg;
+    static const char* TAG = "WS_UPDATE_TASK";
+
+    ESP_LOGI(TAG, "WS Update Task started");
+
+    while (1) {
+        if (xQueueReceive(ws_update_queue, &msg, portMAX_DELAY) == pdTRUE) {
+            ESP_LOGD(TAG, "Received update for GUID: %s", msg.guid);
+
+            // === Формируем событие для UI ===
+            cJSON *event = cJSON_CreateObject();
+            cJSON_AddStringToObject(event, "event", "attribute_updated");
+            cJSON_AddStringToObject(event, "guid", msg.guid);
+            cJSON_AddNumberToObject(event, "type", msg.type);
+
+            // Добавляем value_bytes как массив
+            cJSON *j_value_bytes = cJSON_CreateIntArray((int*)msg.value, msg.value_len);
+            cJSON_AddItemToObject(event, "value_bytes", j_value_bytes);
+
+            // Отправляем через WebSocket
+            if (xSemaphoreTake(json_buffer_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+                int len = cJSON_PrintPreallocated(event, json_buffer_for_response, sizeof(json_buffer_for_response), false);
+                if (len > 0) {
+                    cJSON_Minify(json_buffer_for_response);
+                    ws_async_data_t *async_data = malloc(sizeof(ws_async_data_t));
+                    if (async_data) {
+                        async_data->hd = server_handle;
+                        async_data->payload = (uint8_t*)strdup(json_buffer_for_response);
+                        async_data->len = strlen(json_buffer_for_response);
+                        httpd_queue_work(server_handle, ws_send_async_task, async_data);
+                    }
+                }
+                xSemaphoreGive(json_buffer_mutex);
+            }
+
+            cJSON_Delete(event);
+        }
+    }
+}
+
+bool zbm_ws_send_update(const char* guid, uint8_t type, const void* value, size_t value_len) {
+    if (!guid || !value || value_len == 0 || value_len > 256) {
+        return false;
+    }
+
+    ESP_LOGI(TAG, "📤 Sending WS update: GUID=%s, type=%d, len=%d", guid, type, value_len);
+    zbm_ws_update_msg_t msg = {0};
+    strlcpy(msg.guid, guid, sizeof(msg.guid));
+    msg.type = type;
+    msg.value_len = value_len;
+    memcpy(msg.value, value, value_len);
+
+    BaseType_t ret = xQueueSendToBack(ws_update_queue, &msg, pdMS_TO_TICKS(10));
+    if (ret != pdTRUE) {
+        ESP_LOGW(TAG, "WS queue full, dropping update for %s", guid);
+        return false;
+    }
+
+    return true;
+}
 
 // Асинхронная отправка WS
 void ws_send_async_task(void *arg)
@@ -222,6 +291,7 @@ esp_err_t static_file_handler(httpd_req_t *req)
 
 esp_err_t get_from_ws_handler(httpd_req_t *req)
 {
+    ESP_LOGI(TAG, "WebSocket handshake requested from %s", req->uri);
     if (req->method == HTTP_GET) {
         ESP_LOGI(TAG, "WebSocket handshake requested");
         return ESP_OK;
@@ -564,6 +634,22 @@ httpd_uri_t get_ssdp_description_xml = {
 
 void start_webserver(void)
 {
+    // Создаём очередь
+    if (!ws_update_queue) {
+        ws_update_queue = xQueueCreate(ZBM_WS_UPDATE_QUEUE_SIZE, sizeof(zbm_ws_update_msg_t));
+        if (!ws_update_queue) {
+            ESP_LOGE(TAG, "Failed to create WS update queue");
+            vSemaphoreDelete(json_buffer_mutex);
+            json_buffer_mutex = NULL;
+            return;
+        }
+    }
+
+    // Создаём задачу
+    if (!ws_update_task_handle) {
+        xTaskCreatePinnedToCore(ws_update_task,"ws_update_task",4096,NULL,2,&ws_update_task_handle,0);
+    }
+
     if (server_handle) {
         ESP_LOGW(TAG, "Web server already running");
         return;

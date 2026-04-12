@@ -73,6 +73,30 @@ export const useDevices = ({ onAttributeUpdate, onSystemNotify } = {}) => {
     };
 
     loadDevices();
+    // обработка сигнала по обновлению устройства
+    const refreshDeviceByShort = async (shortAddr) => {
+    try {
+      const res = await fetch(`/api/device/by_short?addr=${shortAddr}`);
+      if (!res.ok) {
+        console.warn(`❌ Failed to refresh device ${shortAddr}:`, res.status);
+        return;
+      }
+
+      const updatedDevice = await res.json();
+      console.log('✅ Device refreshed:', updatedDevice);
+
+      setDevices(prev => {
+        return prev.map(device =>
+          device.short_addr === shortAddr ? updatedDevice : device
+        );
+      });
+    } catch (err) {
+      console.error('💥 Failed to refresh device:', err);
+    }
+  };
+
+
+    //
 
     ws = new WebSocket(`ws://${window.location.host}/ws`);
     console.log('🚀 Trying to connect WebSocket:', `ws://${window.location.host}/ws`);
@@ -91,6 +115,14 @@ export const useDevices = ({ onAttributeUpdate, onSystemNotify } = {}) => {
           updateDeviceAttribute(data);
         }
 
+      // ✅ Обработка обновления структуры устройства
+      else if (data.event === 'system_notify' && data.type === 'device_updated') {
+        const { short_addr } = data.data || {};
+        if (short_addr) {
+          console.log('🔁 Device structure changed, refreshing:', short_addr);
+          refreshDeviceByShort(short_addr);
+        }
+      }
         // ✅ Обработка системных уведомлений
       else if (data.event === 'system_notify') {
         const { type, message } = data;

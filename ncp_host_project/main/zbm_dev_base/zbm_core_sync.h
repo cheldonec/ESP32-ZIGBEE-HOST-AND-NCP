@@ -201,7 +201,8 @@ uint8_t zbm_update_cluster_custom_report_safe(zbm_dev_t* dev_obj,uint8_t endpoin
 void zbm_device_apply_simple_descriptor_safe(zbm_dev_t* dev,uint8_t endpoint_id,uint16_t device_id,
         uint16_t* input_clusters, uint8_t in_count,uint16_t* output_clusters, uint8_t out_count);
 
-
+// ====================== Active Endpoint ============================
+uint8_t zbm_process_active_endpoint_response_safe(zbm_dev_t* dev, uint8_t zdo_status, uint8_t ep_count, uint8_t* ep_list);
 
 extern cJSON* device_to_brief_json(zbm_dev_t* dev);
 

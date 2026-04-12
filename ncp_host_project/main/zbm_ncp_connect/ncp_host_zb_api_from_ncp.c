@@ -5,7 +5,7 @@
 #include "zbm_zigbee_structures.h"
 #include "esp_log.h"
 #include "zbm_core_sync.h"
-
+#include "zbm_web_server.h"
 #include "string.h"
 
 static const char* TAG = "NCP_HOST_ZB_API_FROM_NCP";
@@ -644,6 +644,81 @@ static esp_err_t zb_manager_nostandart_cluster_cmd_resp_fn(const uint8_t *input,
     return ESP_OK;
 }
 
+static esp_err_t zb_manager_active_ep_resp_fn(const uint8_t *input, uint16_t inlen)
+{
+    ESP_LOGI(TAG, "zb_manager_active_ep_resp_fn: inlen=%d", inlen);
+
+    typedef struct {
+        local_esp_zb_zdp_status_t zdo_status;
+        uint8_t                 ep_count;
+        esp_zb_user_cb_t        find_usr;
+        // далее следует массив ep_count байт
+    } ESP_ZNSP_ZB_PACKED_STRUCT esp_zb_zdo_active_ep_t;
+
+    if (inlen < sizeof(esp_zb_zdo_active_ep_t)) {
+        ESP_LOGE(TAG, "Invalid inlen for active_ep_resp");
+        return ESP_OK;
+    }
+
+    esp_zb_zdo_active_ep_t *zdo_resp = (esp_zb_zdo_active_ep_t *)input;
+    uint8_t* ep_list = ((uint8_t*)input) + sizeof(esp_zb_zdo_active_ep_t);
+
+    // Вызов callback (если задан)
+    if (zdo_resp->find_usr.user_cb) {
+        local_esp_zb_zdo_active_ep_callback_t cb = (local_esp_zb_zdo_active_ep_callback_t)zdo_resp->find_usr.user_cb;
+        cb(zdo_resp->zdo_status, zdo_resp->ep_count, ep_list, (void*)zdo_resp->find_usr.user_ctx);
+    }
+
+    // === Обрабатываем ответ ===
+    zbm_dev_t* dev = NULL;
+    uint16_t* short_addr_value = (uint16_t*)zdo_resp->find_usr.user_ctx;
+    ESP_LOGW(TAG, "short_addr_value: %d", *short_addr_value);
+    dev = zbm_find_device_in_devdb_by_short_safe(*short_addr_value);
+    //(zbm_dev_t*)zdo_resp->find_usr.user_ctx;
+    if (!dev) {
+        ESP_LOGW(TAG, "No device context in user_ctx for active_ep_resp");
+        return ESP_OK;
+    }
+
+    uint8_t result = zbm_process_active_endpoint_response_safe(
+        dev,
+        zdo_resp->zdo_status,
+        zdo_resp->ep_count,
+        ep_list
+    );
+
+    if (result == 0xFF) {
+        ESP_LOGD(TAG, "Active EP response processing failed or no valid endpoints");
+        return ESP_OK;
+    }
+
+    // === Если были изменения — сохраняем и уведомляем ===
+    // Даже если result == 0 (обновление), можно обновить last_seen_ms
+    // Но чаще всего нас интересует создание новых эндпоинтов → result == 1
+
+    if (result == 1) {
+        // Что-то новое добавилось → точно надо сохранить
+        zbm_save_device_to_spiffs_safe(dev);
+        cJSON *data = cJSON_CreateObject();
+        // Отправляем только short_addr
+        if (dev->short_addr != 0xFFFE) {
+            char short_str[16];
+            snprintf(short_str, sizeof(short_str), "0x%04X", dev->short_addr);
+            cJSON_AddStringToObject(data, "short_addr", short_str);
+        }
+
+        zbm_ws_send_sys_notify("device_updated", "Device endpoints updated", data);
+    } else if (result == 0) {
+        // Можно обновить время, но не обязательно сохранять
+        // Например, все эндпоинты уже были, но устройство просто ответило
+        // Решение: не сохраняем, но можно отправить notify, если важно
+        // zbm_ws_send_device_update_notify(dev->ieee_addr);
+        // Пока — только если создано
+    }
+
+    return ESP_OK;
+}
+
 const esp_host_zb_func_t host_zb_api_from_ncp_func_table[] = {
     {ESP_NCP_NETWORK_FORMNETWORK, esp_host_zb_form_network_fn},
     /*{ESP_NCP_NETWORK_JOINNETWORK, esp_host_zb_joining_network_fn},*/
@@ -658,8 +733,8 @@ const esp_host_zb_func_t host_zb_api_from_ncp_func_table[] = {
     {ZB_MANAGER_DEV_ASSOCIATED_EVENT, zb_manager_dev_assoc_event_fn},
     {ZB_MANAGER_DEV_UPDATE_EVENT, zb_manager_dev_update_event_fn},
     {ZB_MANAGER_DEV_AUTH_EVENT, zb_manager_dev_auth_event_fn},
-    /*{ZB_MANAGER_ACTIVE_EP_RESP, zb_manager_active_ep_resp_fn},
-    {ZB_MANAGER_SIMPLE_DESC_RESP, zb_manager_simple_desc_resp_fn},
+    {ZB_MANAGER_ACTIVE_EP_RESP, zb_manager_active_ep_resp_fn},
+    /*{ZB_MANAGER_SIMPLE_DESC_RESP, zb_manager_simple_desc_resp_fn},
     {ZB_MANAGER_NODE_DESC_RSP, zb_manager_node_desc_resp_fn},
     {ZB_MANAGER_REPORT_CONFIG_RESP, zb_manager_report_config_resp_fn},
     {ZB_MANAGER_CUSTOM_CLUSTER_REPORT , zb_manager_custom_cluster_rep_event_fn }, 

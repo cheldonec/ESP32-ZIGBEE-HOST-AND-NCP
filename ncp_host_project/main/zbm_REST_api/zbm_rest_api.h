@@ -42,4 +42,7 @@ esp_err_t zbm_rest_api_post_open_close_zigbee_network_handler(httpd_req_t* req);
 
 // === Обработчик: GET /api/get/zigbee_network/status — статус сети Zigbee ===
 esp_err_t zbm_rest_api_get_zigbee_network_status_handler(httpd_req_t* req);
+
+// === Обработчик: POST /api/zdo/active_endpoint — запрос Active Endpoint ===
+esp_err_t zbm_rest_api_post_active_endpoint_handler(httpd_req_t* req);
 #endif

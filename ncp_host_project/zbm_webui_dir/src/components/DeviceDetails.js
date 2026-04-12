@@ -124,9 +124,18 @@ export default function DeviceDetails({ device }) {
         <div className="panel-body">
           <table>
             <tbody>
-              <tr><td>IEEE</td><td><code className="text-blue-300">{device.ieee_addr}</code></td></tr>
-              <tr><td>Short Addr</td><td><code className="text-green-300">{device.short_addr}</code></td></tr>
-              <tr><td>LQI</td><td>{device.lqi || '—'}</td></tr>
+              <tr>
+                <td>IEEE</td>
+                <td><code className="text-blue-300">{device.ieee_addr}</code></td>
+              </tr>
+              <tr>
+                <td>Short Addr</td>
+                <td><code className="text-green-300">{device.short_addr}</code></td>
+              </tr>
+              <tr>
+                <td>LQI</td>
+                <td>{device.lqi || '—'}</td>
+              </tr>
               <tr>
                 <td>Онлайн</td>
                 <td>
@@ -137,6 +146,34 @@ export default function DeviceDetails({ device }) {
               </tr>
             </tbody>
           </table>
+
+          {/* Кнопка: Active Endpoint Request */}
+          <div className="mt-3 pt-3 border-t border-gray-700 flex justify-center">
+            <button
+              className="btn-primary text-xs px-3 py-1.5"
+              onClick={async () => {
+                const short = parseInt(device.short_addr.replace('0x', ''), 16);
+                try {
+                  const res = await fetch('/api/zdo/active_endpoint_req', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ short_addr: short })
+                  });
+
+                  const data = await res.json();
+                  if (data.status === 'success') {
+                    alert(`✅ Запрос отправлен: Active Endpoint для 0x${short.toString(16).toUpperCase()}`);
+                  } else {
+                    alert(`❌ Ошибка: ${data.message}`);
+                  }
+                } catch (err) {
+                  alert(`Ошибка сети: ${err.message}`);
+                }
+              }}
+            >
+              📡 Запросить эндпоинты (Active EP)
+            </button>
+          </div>
         </div>
       </div>
 

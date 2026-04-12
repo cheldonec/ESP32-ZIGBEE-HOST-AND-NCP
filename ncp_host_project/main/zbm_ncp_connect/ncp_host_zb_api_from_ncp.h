@@ -52,6 +52,9 @@ typedef enum {
     ESP_ZB_ZDP_STATUS_INVALID_INDEX         = 0x8f,   /*!< The index in the received command is out of bounds. */
 } local_esp_zb_zdp_status_t;
 
+//ZDO
+
+typedef void (*local_esp_zb_zdo_active_ep_callback_t)(local_esp_zb_zdp_status_t zdo_status, uint8_t ep_count, uint8_t *ep_id_list, void *user_ctx);
 
 
 #endif

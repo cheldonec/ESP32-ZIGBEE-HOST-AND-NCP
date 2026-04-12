@@ -567,6 +567,84 @@ uint8_t zbm_update_cluster_custom_report(
     return created ? 1 : 0;
 }
 
+// === Обработка ответа Active Endpoint ===
+// result = 0 (update), result = 1 (update with create), result = 0xff (update error)
+// Вызывающий отвечает за сохранение и уведомления
+uint8_t zbm_process_active_endpoint_response(
+    zbm_dev_t* dev,
+    uint8_t zdo_status,
+    uint8_t ep_count,
+    uint8_t* ep_list)
+{
+    if (!dev || !ep_list) {
+        ESP_LOGW(TAG, "Invalid args: dev=%p, ep_list=%p", dev, ep_list);
+        return 0xFF;
+    }
+
+    if (zdo_status != 0x00) {
+        ESP_LOGW(TAG, "ZDO status error: 0x%02x", zdo_status);
+        return 0xFF;
+    }
+
+    dev->last_seen_ms = get_ms();
+    dev->is_online = true;
+
+    bool created_any = false;
+    bool updated_any = false; // всегда true, если есть эндпоинты
+
+    for (int i = 0; i < ep_count; i++) {
+        uint8_t endpoint_id = ep_list[i];
+
+        // Проверим, есть ли такой эндпоинт
+        zbm_dev_endpoint_t* ep = NULL;
+        for (int j = 0; j < dev->endpoints_count; j++) {
+            if (dev->endpoints_array[j] && dev->endpoints_array[j]->id == endpoint_id) {
+                ep = dev->endpoints_array[j];
+                updated_any = true;
+                break;
+            }
+        }
+
+        if (ep) {
+            ESP_LOGD(TAG, "Endpoint 0x%02x already exists", endpoint_id);
+            continue;
+        }
+
+        // Создаём новый эндпоинт
+        ep = calloc(1, sizeof(zbm_dev_endpoint_t));
+        if (!ep) {
+            ESP_LOGE(TAG, "Failed to allocate endpoint %d", endpoint_id);
+            continue;
+        }
+        ep->id = endpoint_id;
+        ep->is_use_on_device = 1;
+
+        // Расширяем массив
+        zbm_dev_endpoint_t** new_array = realloc(dev->endpoints_array,
+            (dev->endpoints_count + 1) * sizeof(zbm_dev_endpoint_t*));
+        if (!new_array) {
+            free(ep);
+            ESP_LOGE(TAG, "Failed to realloc endpoints array");
+            continue;
+        }
+        dev->endpoints_array = new_array;
+        dev->endpoints_array[dev->endpoints_count++] = ep;
+        created_any = true;
+
+        ESP_LOGI(TAG, "Added new endpoint %d to device 0x%04x", endpoint_id, dev->short_addr);
+    }
+
+    // === Определяем результат ===
+    if (created_any) {
+        return 1; // что-то создано
+    } else if (updated_any || ep_count > 0) {
+        return 0; // только обновлено (или дубли)
+    } else {
+        return 0xFF; // не должно быть, но на всякий случай
+    }
+}
+
+
 // === Генерация имени кластера ===
 char* generate_cluster_name(uint16_t cluster_id, bool is_custom)
 {

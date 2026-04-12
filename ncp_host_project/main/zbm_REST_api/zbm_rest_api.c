@@ -555,3 +555,87 @@ esp_err_t zbm_rest_api_get_zigbee_network_status_handler(httpd_req_t* req) {
     free(json_str);
     return ESP_OK;
 }
+
+// === Обработчик: POST /api/zdo/active_endpoint — запрос Active Endpoint ===
+esp_err_t zbm_rest_api_post_active_endpoint_handler(httpd_req_t* req) {
+    char *buf = NULL;
+    int total_len = req->content_len;
+    esp_err_t ret = ESP_OK;
+    cJSON *root = NULL;
+
+    if (total_len <= 0 || total_len > 1024) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Empty or large body");
+        return ESP_OK;
+    }
+
+    buf = calloc(1, total_len + 1);
+    if (!buf) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "No memory");
+        return ESP_ERR_NO_MEM;
+    }
+
+    int received = httpd_req_recv(req, buf, total_len);
+    if (received <= 0) {
+        free(buf);
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Recv failed");
+        return ESP_OK;
+    }
+    buf[received] = '\0';
+
+    root = cJSON_Parse(buf);
+    if (!root) {
+        ret = ESP_ERR_INVALID_ARG;
+        goto _end;
+    }
+
+    cJSON *short_addr_obj = cJSON_GetObjectItem(root, "short_addr");
+    if (!short_addr_obj || !cJSON_IsNumber(short_addr_obj)) {
+        ret = ESP_ERR_INVALID_ARG;
+        goto _end;
+    }
+    uint16_t short_addr = (uint16_t)short_addr_obj->valuedouble;
+
+    zbm_dev_t* dev = NULL;
+    dev = zbm_find_device_in_devdb_by_short_safe(short_addr);
+    if (!dev) {
+        ret = ESP_ERR_INVALID_ARG;
+        goto _end;
+    }
+
+    ESP_LOGI(TAG, "ZDO: Send Active Endpoint Request to 0x%04X", dev->short_addr);
+
+    ret = zbm_to_ncp_req_active_endpoint_req(short_addr, NULL, &dev->short_addr);
+    if (ret == ESP_OK) {
+        ESP_LOGI(TAG, "✅ Active Endpoint Request sent");
+    } else {
+        ESP_LOGE(TAG, "❌ Failed to send Active Endpoint Request");
+    }
+
+_end:
+    cJSON_Delete(root);
+    free(buf);
+
+    // Ответ
+    cJSON *resp = cJSON_CreateObject();
+    cJSON_AddStringToObject(resp, "status", ret == ESP_OK ? "success" : "error");
+    cJSON_AddStringToObject(resp, "message", ret == ESP_OK ? "Command sent" : "Send failed");
+
+    char *json_str = cJSON_PrintUnformatted(resp);
+    cJSON_Delete(resp);
+
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    if (ret == ESP_OK) {
+        httpd_resp_set_status(req, "200 OK");
+    } else {
+        httpd_resp_set_status(req, "500 Internal Server Error");
+    }
+    if (json_str) {
+        httpd_resp_send(req, json_str, strlen(json_str));
+        free(json_str);
+    } else {
+        httpd_resp_sendstr(req, "{\"status\":\"error\",\"message\":\"JSON alloc failed\"}");
+    }
+
+    return ESP_OK;
+}

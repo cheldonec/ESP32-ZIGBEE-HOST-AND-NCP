@@ -590,6 +590,14 @@ httpd_uri_t api_coordinator_post = {
     .handler   = zbm_rest_api_post_coordinator_handler,
     .user_ctx  = NULL
 };
+
+// ========================== ZDO =========================
+httpd_uri_t uri_active_endpoint = {
+    .uri       = "/api/zdo/active_endpoint_req",
+    .method    = HTTP_POST,
+    .handler   = zbm_rest_api_post_active_endpoint_handler,
+    .user_ctx  = NULL
+};
 // === SPIFFS API ===
 // === Для /api/spiffs/config ===
 // === Для config ===
@@ -813,6 +821,7 @@ void start_webserver(void)
         httpd_register_uri_handler(server_handle, &uri_zbm_rest_api_post_open_close_zigbee_network);
         httpd_register_uri_handler(server_handle, &uri_get_zigbee_network_status);
         httpd_register_uri_handler(server_handle, &uri_get_server_status);
+        httpd_register_uri_handler(server_handle, &uri_active_endpoint);
         // === SPIFFS API ===
         // config
         httpd_register_uri_handler(server_handle, &uri_spiffs_config_ls);

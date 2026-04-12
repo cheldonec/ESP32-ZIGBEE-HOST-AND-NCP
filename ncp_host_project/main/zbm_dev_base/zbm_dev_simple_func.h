@@ -20,6 +20,10 @@ uint8_t zbm_update_cluster_custom_report(zbm_dev_t* dev_obj,uint8_t endpoint_id,
     uint16_t cluster_id,zbm_cluster_role_t role_mask,uint8_t cmd_id,
     const char* cmd_friendlyname,zbm_cmd_data_types_t data_type,uint16_t data_size,const void* new_value);
 
+// === Обработка ответа Active Endpoint ===
+// Обновление нестандартного репорта(команды) кластера с проверкой role_mask
+// result = 0 (update), result = 1 (update with create), result = 0xff (update error)
+uint8_t zbm_process_active_endpoint_response(zbm_dev_t* dev, uint8_t zdo_status, uint8_t ep_count, uint8_t* ep_list);
 
     /**
  * @brief Генерирует имя кластера (например, "On/Off" или "Custom Cluster 0xEF00")

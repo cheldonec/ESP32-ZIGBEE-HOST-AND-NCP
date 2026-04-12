@@ -7,6 +7,7 @@
 #include "zbm_ncp_connect.h"
 #include "zbm_core_sync.h"
 #include "cJSON.h"
+#include "ncp_host_zb_api_from_ncp.h"
 
 
 esp_err_t zbm_to_ncp_cmd_init_zigbee_stack(void);
@@ -30,6 +31,12 @@ esp_err_t zbm_to_ncp_cmd_open_zigbee_network(uint8_t seconds);
 esp_err_t zbm_to_ncp_cmd_close_zigbee_network(void);
 
 esp_err_t zbm_to_ncp_cmd_get_local_long_addr(esp_zb_ieee_addr_t ieee_addr);
+
+// ===============================  ZDO ==========================================
+// active_ep_req
+
+esp_err_t zbm_to_ncp_req_active_endpoint_req(uint16_t  addr_of_interest, local_esp_zb_zdo_active_ep_callback_t user_cb, void *user_ctx);
+
 
 // ===============================  ZCL ==========================================
 //return the transaction sequence number

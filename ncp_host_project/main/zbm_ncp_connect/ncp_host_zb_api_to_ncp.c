@@ -148,6 +148,41 @@ esp_err_t zbm_to_ncp_cmd_get_local_long_addr(esp_zb_ieee_addr_t ieee_addr)
     return esp_host_zb_output(ESP_NCP_NETWORK_LONG_ADDRESS_GET, NULL, 0, ieee_addr, &outlen);
 }
 
+esp_err_t zbm_to_ncp_req_active_endpoint_req(uint16_t  addr_of_interest, local_esp_zb_zdo_active_ep_callback_t user_cb, void *user_ctx)
+{
+    esp_err_t ret = ESP_FAIL;
+    uint8_t output = 0;
+    uint16_t outlen = sizeof(uint8_t);
+    ESP_LOGI("HOST_ZDO_COMMAND_MODULE", "zb_manager_zdo_active_ep_req");
+    typedef struct {
+        esp_zb_user_cb_t find_usr;
+        uint16_t dst_nwk_addr;              /*!< NWK address that request sent to */
+    } __attribute__ ((packed)) esp_zb_zdo_active_ep_t;
+
+    //ESP_LOGI(TAG, "esp_zb_zdo_active_ep_req _before zdo_data");
+    esp_zb_zdo_active_ep_t zdo_data = {
+        .find_usr = {
+            .user_cb = (uint32_t)user_cb,
+            .user_ctx = (uint32_t)user_ctx,
+        },
+       .dst_nwk_addr = addr_of_interest,
+    };
+    uint16_t inlen = sizeof(esp_zb_zdo_active_ep_t);  // параметры не передаются, как выше в esp_zb_zdo_match_cluster
+    uint8_t  *input = calloc(1, inlen);
+    if (input) {
+        //ESP_LOGI(TAG, "esp_zb_zdo_active_ep_req _before memcopy");
+        memcpy(input, &zdo_data, sizeof(esp_zb_zdo_active_ep_t));
+        //ESP_LOGI(TAG, "esp_zb_zdo_active_ep_req _after memcopy");
+        ret = esp_host_zb_output(ZB_MANAGER_ACTIVE_EP_REQ_CMD, input, inlen, &output, &outlen);
+        
+        //ESP_LOGI(TAG, "esp_zb_zdo_active_ep_req _after esp_host_zb_output");
+        free(input);
+        input = NULL;
+    }
+    return ret;    
+}
+
+
 uint8_t zbm_to_ncp_req_read_attributes(esp_zb_zcl_read_attr_cmd_t *cmd_req)
 {
     ESP_LOGI(TAG, "Try to Read ATTR");

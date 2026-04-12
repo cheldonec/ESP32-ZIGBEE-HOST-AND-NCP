@@ -649,3 +649,11 @@ void zbm_device_apply_simple_descriptor_safe(zbm_dev_t* dev,
     }
 }
 
+uint8_t zbm_process_active_endpoint_response_safe(zbm_dev_t* dev, uint8_t zdo_status, uint8_t ep_count, uint8_t* ep_list)
+{
+    uint8_t ret = 0xff;
+    zbm_core_sync_lock();
+    ret = zbm_process_active_endpoint_response(dev, zdo_status, ep_count, ep_list);
+    zbm_core_sync_unlock();
+    return ret;
+}

@@ -106,6 +106,7 @@ void zbm_load_all_devices_from_spiffs_and_restore(void) {
             zbm_dev_t* restored = restore_device_from_json(json);
             if (restored) {
                 ESP_LOGI(TAG, "✅ Restored device from SPIFFS: %s (short=0x%04X)", ieee_item->valuestring, restored->short_addr);
+                //zbm_guid_db_dump_all();
             } else {
                 ESP_LOGE(TAG, "❌ Failed to restore device: %s", ieee_item->valuestring);
             }

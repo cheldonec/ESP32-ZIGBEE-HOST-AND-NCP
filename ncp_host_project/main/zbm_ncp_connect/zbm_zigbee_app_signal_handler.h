@@ -105,6 +105,41 @@ typedef struct esp_zb_zdo_signal_device_update_params_s {
     uint16_t parent_short;          /*!< The short address of device's parent */
 } esp_zb_zdo_signal_device_update_params_t;
 
+/**
+ * @brief The payload of ESP_ZB_ZDO_SIGNAL_DEVICE_ANNCE signal
+ *
+ * @note Stack passes this parameter to application when some device joins/rejoins to network.
+ */
+typedef struct esp_zb_zdo_signal_device_annce_params_s {
+    uint16_t device_short_addr;           /*!< address of device that recently joined to network */
+    esp_zb_ieee_addr_t   ieee_addr;       /*!< The 64-bit (IEEE) address assigned to the device. */
+    uint8_t       capability;             /*!< The capability of the device. */
+} esp_zb_zdo_signal_device_annce_params_t;
+
+
+/**
+ * @brief The payload of ESP_ZB_ZDO_SIGNAL_DEVICE_AUTHORIZED signal
+ * @note The authorization_type as following:
+ *          0x00 = Authorization type for legacy devices ( < r21)
+ *              Status:
+ *                  0x00: Authorization success
+ *                  0x01: Authorization failed
+ *          0x01 = Authorization type for r21 device through TCLK
+ *              Status:
+ *                  0x00: Authorization success
+ *                  0x01: Authorization timeout
+ *                  0x02: Authorization failed
+ *          0x02 = Authorization type for SE through CBKE
+ *              Status:
+ *                  0x00: Authorization success
+ */
+typedef struct esp_zb_zdo_signal_device_authorized_params_s {
+    esp_zb_ieee_addr_t long_addr; /*!< Long Address of the updated device */
+    uint16_t short_addr;          /*!< Short Address of the updated device */
+    uint8_t authorization_type;   /*!< Type of the authorization procedure */
+    uint8_t authorization_status; /*!< Status of the authorization procedure which depends on authorization_type */
+} esp_zb_zdo_signal_device_authorized_params_t;
+
 void *esp_zb_app_signal_get_params(uint32_t *signal_p);
 
 bool zbm_zigbee_app_signal_handler(local_esp_zb_app_signal_t *signal_s);

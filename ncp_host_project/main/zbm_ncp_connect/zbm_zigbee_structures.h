@@ -2,6 +2,7 @@
 #define ZBM_ZIGBEE_STRUCTURES
 #include <stdint.h>
 #include "zbm_attr_types.h"
+#include "zbm_cmd_types.h"
 
 #define ESP_ZB_PACKED_STRUCT __attribute__ ((packed))
 
@@ -217,5 +218,30 @@ typedef struct esp_zb_zcl_report_attr_message_s {
     esp_zb_zcl_attribute_t attribute; /*!< The attribute entry of report response */
 } esp_zb_zcl_report_attr_message_t;
 
+
+/**
+ * @brief Frame Controll
+ *
+ */
+typedef struct zbm_frame_control_s{
+    uint8_t frame_type       : 2;               /*!< The frame type, refer to esp_zb_zcl_frame_type_t */
+    uint8_t manuf_specific   : 1;               /*!< Sent as manufacturer extension with code. */
+    uint8_t direction        : 1;               /*!< The command direction, refer to esp_zb_zcl_cmd_direction_t */
+    uint8_t dis_defalut_resp : 1;               /*!< Disable default response for this command. */
+    uint8_t reserved         : 3;
+}zbm_frame_control_t;
+
+/**
+ * @brief Отправка кластерной команды Zigbee например ON/OFF
+ *
+ */
+typedef struct zbm_send_zcl_cmd_to_cluster_cmd_s {
+    esp_zb_zcl_basic_cmd_t zcl_basic_cmd;           /*!< Basic command info */
+    esp_zb_zcl_address_mode_t address_mode;         /*!< APS addressing mode constants refer to esp_zb_zcl_address_mode_t */
+    uint16_t clusterID;                             /*!< Cluster ID to read */
+    zbm_frame_control_t frame_control;              /*!< Frame Controll */
+    uint16_t manuf_code;                            /*!< The manufacturer code sent with the command. */
+    zbm_cluster_standart_cmd_t *cmd_object;
+} zbm_send_zcl_cmd_to_cluster_cmd_t;
 
 #endif

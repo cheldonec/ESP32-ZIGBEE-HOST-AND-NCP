@@ -1,11 +1,12 @@
 // src/hooks/useDevices.js
 
-import { useState, useEffect, useRef } from 'react'; // ← добавили useRef
-import { fromZigbeeType } from '../utils/fromZigbee';
+import { useState, useEffect, useRef } from 'react';
+// ✅ Используем fromZigbeeType из zigbeeTypes.js (единая точка)
+import { fromZigbeeType } from '../utils/zigbeeTypes';
 
 const toHexAddr = (short) => short.toString(16).toUpperCase().padStart(4, '0');
 
-export const useDevices = ({ onAttributeUpdate } = {}) => {
+export const useDevices = ({ onAttributeUpdate, onSystemNotify } = {}) => {
   const [devices, setDevices] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -13,9 +14,20 @@ export const useDevices = ({ onAttributeUpdate } = {}) => {
 
   // ✅ Сохраняем последнюю версию колбэка
   const onAttributeUpdateRef = useRef();
+  const onSystemNotifyRef = useRef();
   useEffect(() => {
     onAttributeUpdateRef.current = onAttributeUpdate;
   }, [onAttributeUpdate]);
+
+  useEffect(() => {
+    onSystemNotifyRef.current = onSystemNotify;
+  }, [onSystemNotify]);
+
+  // ✅ Реф для актуального списка устройств
+  const devicesRef = useRef(devices);
+  useEffect(() => {
+    devicesRef.current = devices;
+  }, [devices]);
 
   useEffect(() => {
     let ws = null;
@@ -27,12 +39,22 @@ export const useDevices = ({ onAttributeUpdate } = {}) => {
         const res = await fetch('/api/devices');
         if (!res.ok) throw new Error('Failed to fetch device list');
         const briefList = await res.json();
+        console.log('✅ [useDevices] Got brief device list:', briefList);
 
         const fullDevicesPromises = briefList.map(async (dev) => {
-          const addrHex = toHexAddr(dev.short);
+          const addrNum = typeof dev.short === 'string' ? parseInt(dev.short, 16) : dev.short;
+          const addrHex = addrNum.toString(16).toUpperCase().padStart(4, '0');
           const detailRes = await fetch(`/api/device/by_short?addr=0x${addrHex}`);
-          if (!detailRes.ok) return null;
-          return await detailRes.json();
+
+          if (!detailRes.ok) {
+            const text = await detailRes.text();
+            console.warn(`❌ Failed to load device 0x${addrHex}:`, detailRes.status, text);
+            return null;
+          }
+
+          const data = await detailRes.json();
+          console.log(`✅ Loaded device 0x${addrHex}:`, data.ieee_addr);
+          return data;
         });
 
         const fullDevices = await Promise.allSettled(fullDevicesPromises);
@@ -40,8 +62,10 @@ export const useDevices = ({ onAttributeUpdate } = {}) => {
           .filter(p => p.status === 'fulfilled' && p.value !== null)
           .map(p => p.value);
 
+        console.log('✅ [useDevices] Final devices loaded:', validDevices.length, validDevices);
         setDevices(validDevices);
       } catch (err) {
+        console.error('💥 Failed to load devices:', err);
         setError(err.message);
       } finally {
         setLoading(false);
@@ -56,6 +80,7 @@ export const useDevices = ({ onAttributeUpdate } = {}) => {
     ws.onopen = () => {
       console.log('✅ WebSocket: connected');
       setWsRetry(0);
+      window.ws = ws;
     };
 
     ws.onmessage = (e) => {
@@ -65,6 +90,31 @@ export const useDevices = ({ onAttributeUpdate } = {}) => {
         if (data.event === 'attribute_updated') {
           updateDeviceAttribute(data);
         }
+
+        // ✅ Обработка системных уведомлений
+      else if (data.event === 'system_notify') {
+        const { type, message } = data;
+
+        let emoji = 'ℹ️';
+        if (type === 'zigbee_permit_join_started') emoji = '🔓';
+        if (type === 'zigbee_permit_join_stopped') emoji = '🔒';
+
+        // Вызываем внешний колбэк
+        if (onSystemNotifyRef.current) {
+          onSystemNotifyRef.current({
+            type,
+            message,
+            emoji,
+            data
+          });
+        }
+        // ✅ Дополнительно: триггерим DOM-событие для других подписчиков
+        const event = new CustomEvent('system_notify', {
+          detail: { type, message, emoji, data }
+        });
+        window.dispatchEvent(event);
+      }
+
       } catch (err) {
         console.error('❌ WS parse error:', e.data);
       }
@@ -72,18 +122,23 @@ export const useDevices = ({ onAttributeUpdate } = {}) => {
 
     ws.onerror = (err) => {
       console.error('⚠️ WebSocket error:', err);
+      window.ws = null;
     };
 
     ws.onclose = () => {
       console.log('🔁 WebSocket closed, reconnecting...');
+      window.ws = null;
       setTimeout(() => setWsRetry(r => r + 1), 3000);
     };
 
+    // 🔁 Обновление атрибута (видит актуальные устройства через ref)
     const updateDeviceAttribute = (update) => {
       const { guid, type, value_bytes } = update;
-      console.log('🔄 Update requested:', { guid, type, value_bytes });
 
-      if (!guid || !Array.isArray(value_bytes)) return;
+      if (!guid || !Array.isArray(value_bytes)) {
+        console.warn('Invalid update data:', update);
+        return;
+      }
 
       let formattedValue = '—';
       try {
@@ -91,32 +146,65 @@ export const useDevices = ({ onAttributeUpdate } = {}) => {
         formattedValue = String(fromZigbeeType(type, buffer));
       } catch (err) {
         formattedValue = 'parse error';
+        console.error('Failed to parse value:', err);
       }
 
-      const parts = guid.split(':');
-      const short = parts[0]?.toUpperCase() || '???';
-      const ep = parts[1] || '?';
-      const clusterId = parts[3] || '????';
-      const attrId = parts[4] || '????';
+      // ✅ Используем актуальный список устройств
+      const currentDevices = devicesRef.current;
 
-      const attrName = findAttributeName(devices, guid);
-      const friendlyName = attrName ? `${attrName}` : `Attr ${attrId}`;
+      console.log('🔍 Looking for GUID:', guid);
+      console.log('💾 Current devices count:', currentDevices.length);
 
-      // ✅ Используем ref, чтобы не зависеть от пересоздания функции
-      if (onAttributeUpdateRef.current) {
-        onAttributeUpdateRef.current({
-          guid,
-          short,
-          ep,
-          clusterId,
-          attrId,
-          attributeName: friendlyName,
-          value: formattedValue,
-          rawValue: value_bytes,
-          type,
-        });
+      if (currentDevices.length === 0) {
+        console.warn('🕒 Devices not loaded yet, but event received. Buffering not implemented.');
+        return;
       }
 
+      let foundAttr = null;
+      let foundCluster = null;
+      let foundEp = null;
+      let foundDevice = null;
+      let isCustomReport = false;
+
+      for (const device of currentDevices) {
+        for (const ep of device.endpoints || []) {
+          for (const cluster of [...(ep.standard_clusters || []), ...(ep.custom_clusters || [])]) {
+            // Поиск в attributes
+            foundAttr = cluster.attributes?.find(a => a.guid === guid);
+            if (foundAttr) {
+              foundCluster = cluster;
+              foundEp = ep;
+              foundDevice = device;
+              isCustomReport = false;
+              break;
+            }
+
+            // Поиск в custom_reports
+            foundAttr = cluster.custom_reports?.find(r => r.guid === guid);
+            if (foundAttr) {
+              foundCluster = cluster;
+              foundEp = ep;
+              foundDevice = device;
+              isCustomReport = true;
+              break;
+            }
+          }
+          if (foundAttr) break;
+        }
+        if (foundAttr) break;
+      }
+
+      if (!foundAttr || !foundCluster || !foundEp || !foundDevice) {
+        console.warn('❌ Attribute not found by GUID:', guid);
+        return;
+      }
+
+      // Удобные строки
+      const short = foundDevice.short_addr.replace('0x', '').toUpperCase();
+      const clusterId = `0x${foundCluster.id.toString(16).padStart(4, '0')}`;
+      const attrId = `0x${foundAttr.id.toString(16).padStart(4, '0')}`;
+
+      // 🔁 Обновляем состояние
       setDevices(prev => {
         const updated = JSON.parse(JSON.stringify(prev));
         let found = false;
@@ -124,15 +212,27 @@ export const useDevices = ({ onAttributeUpdate } = {}) => {
         updated.forEach(device => {
           device.endpoints?.forEach(ep => {
             [...(ep.standard_clusters || []), ...(ep.custom_clusters || [])].forEach(cluster => {
-              [...(cluster.attributes || []), ...(cluster.custom_reports || [])].forEach(attr => {
+              (cluster.attributes || []).forEach(attr => {
                 if (attr.guid === guid) {
-                  console.log('🎯 Updated:', attr.name || friendlyName, '→', formattedValue);
                   attr.value_bytes = value_bytes;
                   try {
                     const buffer = new Uint8Array(value_bytes);
-                    attr.value = fromZigbeeType(type, buffer);
+                    attr.value = String(fromZigbeeType(type, buffer));
                   } catch (err) {
                     attr.value = `<parse error: ${err.message}>`;
+                  }
+                  found = true;
+                }
+              });
+
+              (cluster.custom_reports || []).forEach(report => {
+                if (report.guid === guid) {
+                  report.value_bytes = value_bytes;
+                  try {
+                    const buffer = new Uint8Array(value_bytes);
+                    report.value = String(fromZigbeeType(type, buffer));
+                  } catch (err) {
+                    report.value = `<parse error: ${err.message}>`;
                   }
                   found = true;
                 }
@@ -143,27 +243,31 @@ export const useDevices = ({ onAttributeUpdate } = {}) => {
 
         return found ? updated : prev;
       });
-    };
 
-    function findAttributeName(devices, guid) {
-      for (const device of devices) {
-        for (const ep of device.endpoints || []) {
-          for (const cluster of [...(ep.standard_clusters || []), ...(ep.custom_clusters || [])]) {
-            for (const attr of [...(cluster.attributes || []), ...(cluster.custom_reports || [])]) {
-              if (attr.guid === guid) {
-                return attr.name || `0x${attr.id.toString(16).padStart(4, '0')}`;
-              }
-            }
-          }
-        }
+      // ✅ Вызываем внешний колбэк (например, для тостов)
+      if (onAttributeUpdateRef.current) {
+        onAttributeUpdateRef.current({
+          guid,
+          value: formattedValue,
+          rawValue: value_bytes,
+          type,
+          device: foundDevice,
+          endpoint: foundEp,
+          cluster: foundCluster,
+          attribute: foundAttr,
+          short,
+          ep: foundEp.id,
+          clusterId,
+          attrId,
+          isCustomReport
+        });
       }
-      return null;
-    }
+    };
 
     return () => {
       if (ws) ws.close();
     };
-  }, [wsRetry]); // ❌ Убрали onAttributeUpdate из зависимостей
+  }, [wsRetry]); // Не добавляй devices или onAttributeUpdate сюда!
 
   return { devices, loading, error };
 };

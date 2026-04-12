@@ -13,7 +13,7 @@ typedef enum {
 typedef struct zbm_coordinator_s {
     char*                       friendly_name;
     uint16_t                    zb_short_address;
-    uint8_t                     zb_ieee_addr[8];
+    uint8_t                     zb_ieee_addr[8]; // ieee адрес координатор
     uint16_t                    zb_pan_id;
     uint8_t                     zb_extended_pan_id[8];
     uint8_t                     zb_radio_channel;

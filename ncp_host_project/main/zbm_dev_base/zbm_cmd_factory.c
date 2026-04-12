@@ -7,8 +7,9 @@
 #include "zbm_clusters_type.h"
 #include "zbm_attr_factory_basic.h"
 #include "zbm_attr_factory_on_off.h"
+#include "esp_log.h"
 
-
+static const char* TAG = "zbm_cmd_factory";
 bool zbm_free_cluster_cmd_param(zbm_cluster_cmd_param_t* param)
 {
     if (!param) return false;
@@ -77,6 +78,7 @@ zbm_cluster_standart_cmd_t** zbm_create_standard_command_array(uint16_t cluster_
 
     *count = 0;
 
+    ESP_LOGI(TAG, "Creating CMD for 0x%4x", cluster_id);
     switch (cluster_id) {
         case ZBM_CLUSTER_ID_BASIC:
             return zbm_create_basic_cmd_array(role_mask, count);

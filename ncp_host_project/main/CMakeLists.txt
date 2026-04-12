@@ -1,5 +1,5 @@
 set(PRIV_REQ_var
-    esp_timer esp_wifi esp_http_server nvs_flash spiffs vfs driver  
+    esp_timer esp_wifi esp_http_server nvs_flash spiffs vfs driver esp_psram
 )
 
 set(SRCS_var main.c)

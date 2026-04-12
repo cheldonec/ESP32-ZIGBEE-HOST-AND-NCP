@@ -97,6 +97,8 @@ void zbm_generate_attr_guid(char* out_guid, uint8_t len,uint16_t short_addr, uin
 
 bool zbm_is_valid_data_size(zbm_attr_data_types_t type, uint16_t size) {
     switch (type) {
+        case ZBM_ATTR_TYPE_TNULL:
+            return size == 0;
         case ZBM_ATTR_TYPE_T8BIT:
         case ZBM_ATTR_TYPE_BOOL:
         case ZBM_ATTR_TYPE_U8:

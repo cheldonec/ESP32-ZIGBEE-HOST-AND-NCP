@@ -9,7 +9,7 @@
 
 static const char* TAG = "GUID_DB";
 
-#define ZBM_GUID_HASH_SIZE 128
+#define ZBM_GUID_HASH_SIZE 1024
 
 // === NEW: Обобщённая структура узла ================================
 typedef struct guid_node {
@@ -80,6 +80,7 @@ static bool zbm_guid_db_register_generic(void** pp_ptr,
                                          const char* type_prefix,
                                          const char* custom_guid)
 {
+    //ESP_LOGI(TAG, "TRY Registering GUID for %s", type_prefix); // ← Добавляем тип префикса в лог
     if (!pp_ptr || !*pp_ptr) {
         ESP_LOGE(TAG, "Invalid pointer for registration");
         return false;
@@ -96,7 +97,7 @@ static bool zbm_guid_db_register_generic(void** pp_ptr,
 
     // === Проверяем, не зарегистрирован ли уже этот GUID ===
     if (zbm_guid_db_contains_guid(guid)) {
-        // ESP_LOGD(TAG, "GUID already exists, skipping: %s", guid);
+        ESP_LOGI(TAG, "GUID already exists, skipping: %s", guid);
         return true;  // ← ВАЖНО: возвращаем true, чтобы продолжить работу
     }
 
@@ -112,7 +113,7 @@ static bool zbm_guid_db_register_generic(void** pp_ptr,
     uint8_t idx = hash_guid(guid);
     node->next = hash_table[idx];
     hash_table[idx] = node;
-
+    //ESP_LOGI(TAG, "✅ ADDED GUID: %s (bucket %d)", guid, idx);
     return true;
 }
 
@@ -241,6 +242,7 @@ bool zbm_guid_db_unregister_by_short_addr(uint16_t short_addr) {
 // === GENERIC HELPERS ===============================================
 
 static void* zbm_find_by_generic_guid(const char* guid) {
+    ESP_LOGI(TAG,"try find CMD By GUID %s",guid);
     if (!guid) return NULL;
     uint8_t idx = hash_guid(guid);
     guid_node_t* node = hash_table[idx];
@@ -313,6 +315,8 @@ bool zbm_guid_db_register_cmd(
     // === Записываем ВСЕГДА ===
     strlcpy(cmd->guid, guid, sizeof(cmd->guid));
 
+    ESP_LOGI(TAG, "🔧 Registering CMD: %s → %p", guid, *cmd_ptr);
+
     return zbm_guid_db_register_generic(
         (void**)cmd_ptr,
         short_addr,
@@ -327,6 +331,7 @@ bool zbm_guid_db_register_cmd(
 
 zbm_cluster_standart_cmd_t* zbm_find_cmd_by_guid(const char* guid) {
     return (zbm_cluster_standart_cmd_t*)zbm_find_by_generic_guid(guid);
+    
 }
 
 zbm_cluster_standart_cmd_t* zbm_find_cmd_by_key(uint16_t short_addr,
@@ -585,15 +590,17 @@ void zbm_guid_db_update_custom_report_ptrs(uint16_t short_addr,
 
 bool zbm_guid_db_update_device_guids(zbm_dev_t* dev)
 {
+    ESP_LOGI("GUID_UPDATE", "Updating GUIDs for dev %p: last=%04X, current=%04X",
+         dev, dev->last_guid_update_short_addr, dev->short_addr);
     bool result = false;
     if (!dev) return result;
 
     
 
     // предотвращает множественный апдэйт хэш записей
-    if (dev->last_guid_update_short_addr == dev->short_addr) {
+    /*if (dev->last_guid_update_short_addr == dev->short_addr) {
         return true; // Уже актуально — ничего не делаем
-    }
+    }*/
 
     // Удаляем все старые записи по short_addr
     result = zbm_guid_db_unregister_by_short_addr(dev->short_addr);
@@ -612,7 +619,7 @@ bool zbm_guid_db_update_device_guids(zbm_dev_t* dev)
                 zbm_cluster_standart_cmd_t* cmd = cl->standart_cmd_array[i];
                 if (cmd) {
                     zbm_guid_db_register_cmd(
-                        &cmd,
+                        &cl->standart_cmd_array[i],
                         dev->short_addr,
                         ep->id,
                         cl->id,
@@ -642,7 +649,7 @@ bool zbm_guid_db_update_device_guids(zbm_dev_t* dev)
                 zbm_cluster_custom_report_cmd_t* rep = cl->custom_report_cmd_array[i];
                 if (rep) {
                     zbm_guid_db_register_custom_report(
-                        &rep,
+                        &cl->custom_report_cmd_array[i],
                         dev->short_addr,
                         ep->id,
                         cl->id,
@@ -678,7 +685,7 @@ bool zbm_guid_db_update_device_guids(zbm_dev_t* dev)
                 zbm_cluster_custom_report_cmd_t* rep = cl->custom_report_cmd_array[i];
                 if (rep) {
                     zbm_guid_db_register_custom_report(
-                        &rep,
+                        &cl->custom_report_cmd_array[i],
                         dev->short_addr,
                         ep->id,
                         cl->id,
@@ -692,4 +699,33 @@ bool zbm_guid_db_update_device_guids(zbm_dev_t* dev)
     dev->last_guid_update_short_addr = dev->short_addr;
     result = true;
     return result;
+}
+
+// === DEBUG: Вывод всех зарегистрированных GUID ===
+void zbm_guid_db_dump_all(void)
+{
+    ESP_LOGI(TAG, "🔍 DUMPING ALL GUID ENTRIES (%d buckets)", ZBM_GUID_HASH_SIZE);
+
+    int total_count = 0;
+    for (int i = 0; i < ZBM_GUID_HASH_SIZE; i++) {
+        guid_node_t* node = hash_table[i];
+        if (!node) continue;
+
+        ESP_LOGI(TAG, "  Bucket %d:", i);
+        while (node) {
+            // Попробуем определить тип по префиксу GUID
+            const char* type = "unknown";
+            if (strstr(node->guid, ":attr:")) type = "ATTR";
+            else if (strstr(node->guid, ":cmd:")) type = "CMD ";
+            else if (strstr(node->guid, ":rep:")) type = "REP ";
+
+            void* ptr = *(node->pp_ptr);
+            ESP_LOGI(TAG, "    [%s] %s → %p", type, node->guid, ptr);
+
+            total_count++;
+            node = node->next;
+        }
+    }
+
+    ESP_LOGI(TAG, "🔍 TOTAL GUIDs REGISTERED: %d", total_count);
 }

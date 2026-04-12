@@ -169,6 +169,8 @@ void zbm_guid_db_update_cluster_cmd_ptrs(uint16_t short_addr,
 // Обновляет все GUID устройств в базе данных в том числе записи в zbm_guid_db
 bool zbm_guid_db_update_device_guids(zbm_dev_t* dev);
 
+void zbm_guid_db_dump_all(void);
+
 #ifdef __cplusplus
 }
 #endif

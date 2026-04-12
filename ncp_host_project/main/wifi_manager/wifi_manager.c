@@ -47,6 +47,12 @@ static const int BUTTON_DEBOUNCE_MS = 50;
 static const int BUTTON_LONG_PRESS_MS = 3000;
 static void button_check_task(void *pvParameters);
 
+typedef enum {
+    WIFI_MANAGER_EVENT_GOT_IP,
+    WIFI_MANAGER_EVENT_CONNECTION_TIMEOUT, 
+} wifi_manager_internal_event_t;
+
+
 static void button_init(void)
 {
     gpio_config_t io_conf = {
@@ -107,10 +113,7 @@ static QueueHandle_t s_mode_event_queue = NULL;
 static TaskHandle_t s_mode_task_handle = NULL;
 static TimerHandle_t s_connection_timeout_timer = NULL;
 
-// Новая очередь для внутренних событий
-typedef enum {
-    WIFI_MANAGER_EVENT_GOT_IP,
-} wifi_manager_internal_event_t;
+
 
 static QueueHandle_t s_internal_event_queue = NULL;
 
@@ -282,9 +285,9 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
 // ============ ТАЙМЕР ПОДКЛЮЧЕНИЯ ============
 static void connection_timeout_callback(TimerHandle_t xTimer)
 {
-    ESP_LOGW(TAG, "STA connection timeout! No IP in 15s → switching to AP mode");
-    zbm_coordinator.is_sta_valid = 0;
-    wifi_manager_post_event(WIFI_MODE_EVENT_SWITCH_TO_AP);
+    //ESP_LOGW(TAG, "STA connection timeout! Posting event to internal queue");
+    wifi_manager_internal_event_t evt = WIFI_MANAGER_EVENT_CONNECTION_TIMEOUT;
+    xQueueSendFromISR(s_internal_event_queue, &evt, NULL);  // ← безопасно из ISR
 }
 
 // ============ ПЕРЕКЛЮЧЕНИЕ РЕЖИМОВ ============
@@ -393,12 +396,13 @@ static void internal_event_task(void *pvParameters)
         if (xQueueReceive(s_internal_event_queue, &event, portMAX_DELAY) == pdTRUE) {
             switch (event) {
                 case WIFI_MANAGER_EVENT_GOT_IP:
-                    ESP_LOGI(TAG, "Internal task: handling GOT_IP event");
+                    ESP_LOGI(TAG, "Handling GOT_IP");
                     start_mdns_service(esp_netif_sta);
-                    //stop_ssdp_server();
-                    //start_ssdp_server();
                     break;
-                default:
+
+                case WIFI_MANAGER_EVENT_CONNECTION_TIMEOUT:
+                    ESP_LOGI(TAG, "Handling CONNECTION_TIMEOUT in task context");
+                    wifi_manager_post_event(WIFI_MODE_EVENT_SWITCH_TO_AP);  // ← теперь безопасно
                     break;
             }
         }

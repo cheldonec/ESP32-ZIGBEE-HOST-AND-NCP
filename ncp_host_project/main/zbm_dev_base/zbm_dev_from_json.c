@@ -41,19 +41,23 @@ zbm_dev_t* restore_device_from_json(cJSON* json) {
         return NULL;
     }
 
-    dev = zbm_dev_create_and_add_to_devdb_by_ieee_safe(ieee_addr); // создаёт с short = 0xFFFE
-    //dev = zbm_find_device_in_devdb_by_ieee_safe(ieee_addr);
+    //dev = zbm_dev_create_and_add_to_devdb_by_ieee_safe(ieee_addr); // создаёт с short = 0xFFFE
+
+    dev = zbm_create_device_obj_by_ieee(ieee_addr);
     if (!dev) return NULL;
 
     uint16_t new_short_addr = 0xFFFE;
+    dev->last_guid_update_short_addr = 0x0000;
     cJSON* j_short = cJSON_GetObjectItem(json, "short_addr");
     if (j_short && cJSON_IsString(j_short)) {
         new_short_addr = parse_hex16(j_short->valuestring);
     }
 
     bool short_updated = false;
-    short_updated = zbm_dev_update_short_addr_safe(dev, new_short_addr, ieee_addr);
-
+    //short_updated = zbm_dev_update_short_addr_safe(dev, new_short_addr, ieee_addr);
+    dev->short_addr = new_short_addr;
+    short_updated = true;
+    //zbm_guid_db_update_device_guids_safe(dev);
 
     // Опциональные поля
     cJSON* j_fn = cJSON_GetObjectItem(json, "friendly_name");
@@ -944,7 +948,11 @@ zbm_dev_t* restore_device_from_json(cJSON* json) {
         dev->endpoints_array[ep_i] = ep;
     }
 
-    zbm_guid_db_update_device_guids_safe(dev);
+    if (zbm_device_add_to_devdb_safe(dev))
+    {
+        dev->last_guid_update_short_addr = dev->short_addr;
+    }
+    //zbm_guid_db_update_device_guids_safe(dev);
     return dev;
 
 error:

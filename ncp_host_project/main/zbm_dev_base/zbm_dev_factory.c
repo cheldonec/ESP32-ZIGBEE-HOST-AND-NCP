@@ -69,6 +69,7 @@ zbm_dev_t* zbm_create_device_obj_by_ieee(const uint8_t* ieee_addr)
     dev->endpoints_count = 0;
     dev->endpoints_array = NULL;
     dev->last_guid_update_short_addr = 0xffff;
+    dev->device_registered_status = 0;
 
     // Генерим имя: "Device D0:CF:5E:XX:XX:XX:XX:XX"
     char temp_name[32];

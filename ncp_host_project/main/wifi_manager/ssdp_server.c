@@ -99,18 +99,45 @@ void update_ip_from_event_extern_call_and_send_notify(uint32_t newIP) {
 
 static void send_packet(const char* msg, size_t len, bool multicast, struct sockaddr_in* dest_addr) {
     int sock = socket(AF_INET, SOCK_DGRAM, 0);
-    if (sock < 0) return;
+    if (sock < 0) {
+        ESP_LOGE(TAG, "Failed to create socket for SSDP");
+        return;
+    }
 
     struct sockaddr_in addr = {.sin_family = AF_INET, .sin_port = htons(SSDP_PORT)};
     if (multicast) {
         addr.sin_addr.s_addr = inet_addr(SSDP_MCAST_ADDR);
     } else {
-        if (dest_addr == NULL) { close(sock); return; }
+        if (dest_addr == NULL) {
+            close(sock);
+            return;
+        }
         addr.sin_addr.s_addr = dest_addr->sin_addr.s_addr;
     }
 
+    // ⚠️ Добавим проверку: а есть ли сеть?
+    /*struct netif *net = netif_list;
+    bool interface_up = false;
+    while (net != NULL) {
+        if (ip_addr_cmp(&net->ip_addr, IP4_ADDR_ANY) == 0) {
+            net = net->next;
+            continue;
+        }
+        if (netif_is_up(net) && netif_is_link_up(net)) {
+            interface_up = true;
+            break;
+        }
+        net = net->next;
+    }
+
+    if (!interface_up) {
+        ESP_LOGW(TAG, "No network interface up → skipping SSDP send");
+        close(sock);
+        return;
+    }*/
+
     if (sendto(sock, msg, len, 0, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
-        ESP_LOGE(TAG, "sendto failed");
+        ESP_LOGE(TAG, "sendto failed: errno=%d", errno);
     } else {
         ESP_LOGD(TAG, "Sent %s to %s:%d", multicast ? "multicast" : "unicast", inet_ntoa(addr.sin_addr), SSDP_PORT);
     }

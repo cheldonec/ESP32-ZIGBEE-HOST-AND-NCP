@@ -45,6 +45,7 @@ uint8_t zbm_device_apply_reported_value(
 
     dev_obj->last_seen_ms = get_ms();
     dev_obj->is_online = true;
+    bool created = false;
     // Поиск или создание эндпоинта
     zbm_dev_endpoint_t* endpoint = NULL;
     for (uint8_t i = 0; i < dev_obj->endpoints_count; i++) {
@@ -68,6 +69,7 @@ uint8_t zbm_device_apply_reported_value(
         }
         dev_obj->endpoints_array = new_array;
         dev_obj->endpoints_array[dev_obj->endpoints_count++] = endpoint;
+        created = true;
     }
 
     // Поиск кластера
@@ -215,6 +217,7 @@ uint8_t zbm_device_apply_reported_value(
             endpoint->custom_cluster_array = new_array;
             endpoint->custom_cluster_array[endpoint->custom_cluster_count++] = custom_cluster;
         }
+        created = true;
     }
 
     // Работа с атрибутом
@@ -237,7 +240,7 @@ uint8_t zbm_device_apply_reported_value(
         }
     }
 
-    bool created = false;
+    //bool created = false;
     if (!attr) {
         attr = calloc(1, sizeof(zbm_cluster_attribute_t));
         if (!attr) return 0xFF;
@@ -333,7 +336,7 @@ uint8_t zbm_device_apply_reported_value(
     attr->last_update_ms = get_ms();
 
     //отправляем в web socet
-    zbm_ws_send_update(attr->guid, attr->data_type, new_value, data_size);
+    zbm_ws_send_data_update_notify(attr->guid, attr->data_type, new_value, data_size);
     return created ? 1 : 0;
 }
 
@@ -560,7 +563,7 @@ uint8_t zbm_update_cluster_custom_report(
 
     memcpy(report_cmd->p_value, new_value, data_size);
     //отправляем в web socet
-    zbm_ws_send_update(report_cmd->guid, report_cmd->data_type, new_value, data_size);
+    zbm_ws_send_data_update_notify(report_cmd->guid, report_cmd->data_type, new_value, data_size);
     return created ? 1 : 0;
 }
 

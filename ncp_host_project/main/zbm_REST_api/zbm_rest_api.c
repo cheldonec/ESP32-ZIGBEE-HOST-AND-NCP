@@ -6,10 +6,15 @@
 #include "zbm_web_server.h"
 #include "esp_log.h"
 #include "zbm_coordinator.h"
+#include "zbm_ncp_connect.h"
+#include "ncp_host_zb_api_to_ncp.h"
+#include "esp_random.h"
 
 static const char* TAG = "ZBM_REST_API";
 
 static zbm_coordinator_t* g_zbm_coordinator = &zbm_coordinator;
+
+static char g_session_token[9]; // уникальный идентификатор сессии, создаётся при перезагрузке, нужен для того, чтобы web клиенты могли отловить перезапуск и обновиться
 
 // === Вспомогательная функция: форматирование IEEE-адреса в строку ===
 /*static void format_ieee_addr(char* buf, size_t size, const uint8_t* ieee_addr) {
@@ -18,9 +23,34 @@ static zbm_coordinator_t* g_zbm_coordinator = &zbm_coordinator;
              ieee_addr[4], ieee_addr[5], ieee_addr[6], ieee_addr[7]);
 }*/
 
+// Генерация токена при старте
+void generate_session_token() {
+    uint32_t rand = esp_random();
+    snprintf(g_session_token, sizeof(g_session_token), "%08x", (unsigned int)(rand & 0xFFFFFFFF));
+    ESP_LOGW(TAG, "Session token generated: %s", g_session_token);
+}
 
+esp_err_t zbm_rest_api_get_status_handler(httpd_req_t* req) {
+    cJSON* json = cJSON_CreateObject();
+    cJSON_AddStringToObject(json, "status", "online");
+    cJSON_AddStringToObject(json, "session_token", g_session_token);
+    cJSON_AddStringToObject(json, "version", "1.0.0");
 
+    char* json_str = cJSON_PrintUnformatted(json);
+    cJSON_Delete(json);
 
+    if (!json_str) {
+        httpd_resp_send_500(req);
+        return ESP_OK;
+    }
+
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    httpd_resp_send(req, json_str, HTTPD_RESP_USE_STRLEN);
+    free(json_str);
+
+    return ESP_OK;
+}
 
 // === Статическая функция-коллбэк для перебора устройств ===
 static void collect_device_to_json(zbm_dev_t* dev, void* ctx) {
@@ -381,5 +411,147 @@ esp_err_t zbm_rest_api_post_coordinator_handler(httpd_req_t* req) {
     httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
     httpd_resp_send(req, response, HTTPD_RESP_USE_STRLEN);
 
+    return ESP_OK;
+}
+
+esp_err_t zbm_rest_api_post_open_close_zigbee_network_handler(httpd_req_t* req)
+{
+    char *buf = NULL;
+    int total_len = req->content_len;
+    int cur_len = 0;
+    esp_err_t ret = ESP_OK;
+    cJSON *root = NULL;
+    const char *resp_msg = NULL;
+
+    if (total_len <= 0) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Empty body");
+        return ESP_FAIL;
+    }
+
+    buf = calloc(1, total_len + 1);
+    if (!buf) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "No memory");
+        ESP_LOGI(TAG, "No memory");
+        return ESP_ERR_NO_MEM;
+    }
+
+    while (cur_len < total_len) {
+        int r = httpd_req_recv(req, buf + cur_len, total_len - cur_len);
+        if (r <= 0) {
+            if (r == HTTPD_SOCK_ERR_TIMEOUT || r == HTTPD_SOCK_ERR_FAIL) continue;
+            ret = ESP_FAIL;
+            goto _end;
+        }
+        cur_len += r;
+    }
+
+    root = cJSON_Parse(buf);
+    if (!root) {
+        resp_msg = "Invalid JSON";
+        ret = ESP_ERR_INVALID_ARG;
+        goto _end;
+    }
+
+    cJSON *cmd = cJSON_GetObjectItem(root, "cmd");
+    if (!cmd || !cJSON_IsString(cmd)) {
+        resp_msg = "Missing or invalid 'cmd'";
+        ret = ESP_ERR_INVALID_ARG;
+        goto _end;
+    }
+
+    if (strcmp(cmd->valuestring, "toggle_permit_join") == 0) {
+        cJSON *duration_obj = cJSON_GetObjectItem(root, "duration");
+        uint8_t duration = duration_obj ? (uint8_t)duration_obj->valuedouble : 60;
+
+        ESP_LOGI(TAG, "Toggle permit join: isZigbeeNetworkOpened=%s, duration=%d",
+                isZigbeeNetworkOpened ? "true" : "false", duration);
+
+        if (isZigbeeNetworkOpened == true) {
+            ret = zbm_to_ncp_cmd_close_zigbee_network();
+            resp_msg = "Permit join close command sent";
+            ESP_LOGI(TAG, "✅ Zigbee network closed for joining");
+        } else {
+            ret = zbm_to_ncp_cmd_open_zigbee_network(duration);
+            resp_msg = "Permit join open command sent";
+            
+            ESP_LOGI(TAG, "✅ Zigbee network opened for joining (duration=%d)", duration);
+        }
+               
+    } else {
+        resp_msg = "Unknown command";
+        ret = ESP_ERR_NOT_SUPPORTED;
+        ESP_LOGW(TAG, "Unknown command: %s", cmd->valuestring);
+    }
+
+_end:
+{
+    // Создаём JSON-ответ
+    cJSON *response = cJSON_CreateObject();
+    if (ret == ESP_OK) {
+        cJSON_AddStringToObject(response, "status", "success");
+    } else {
+        cJSON_AddStringToObject(response, "status", "error");
+    }
+    // Если resp_msg не задано — подстрахуемся
+    if (!resp_msg) {
+        resp_msg = ret == ESP_OK ? "Success" : "Unknown error";
+    }
+    cJSON_AddStringToObject(response, "message", resp_msg);
+
+    // Генерируем строку
+    char *json_str = cJSON_PrintUnformatted(response);
+    cJSON_Delete(response);  // ⚠️ response больше не нужен
+
+    // Устанавливаем заголовки
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+
+    if (ret == ESP_OK) {
+        httpd_resp_set_status(req, "200 OK");
+    } else {
+        httpd_resp_set_status(req, "500 Internal Server Error");
+    }
+    ESP_LOGI(TAG,"zbm_rest_api_post_open_close_zigbee_network_handler ret = %d", ret);
+    // Отправляем ответ
+    if (json_str) {
+        httpd_resp_send(req, json_str, HTTPD_RESP_USE_STRLEN);
+        free(json_str);  // Освобождаем строку JSON
+    } else {
+        // Фолбэк на случай нехватки памяти
+        httpd_resp_sendstr(req, "{\"status\":\"error\",\"message\":\"JSON generation failed\"}");
+    }
+}
+
+    cJSON_Delete(root);
+    free(buf);
+    return ESP_OK;
+}
+
+// === Обработчик: GET /api/get/zigbee_network/status — статус сети Zigbee ===
+esp_err_t zbm_rest_api_get_zigbee_network_status_handler(httpd_req_t* req) {
+    ESP_LOGI(TAG, "REQ /api/get/zigbee_network/status");
+
+    cJSON* json = cJSON_CreateObject();
+    if (!json) {
+        httpd_resp_send_500(req);
+        return ESP_OK;
+    }
+
+    cJSON_AddBoolToObject(json, "is_open", isZigbeeNetworkOpened);
+    cJSON_AddStringToObject(json, "status", isZigbeeNetworkOpened ? "open" : "closed");
+
+
+    char* json_str = cJSON_PrintUnformatted(json);
+    cJSON_Delete(json);
+
+    if (!json_str) {
+        httpd_resp_send_500(req);
+        return ESP_OK;
+    }
+
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    httpd_resp_send(req, json_str, HTTPD_RESP_USE_STRLEN);
+    free(json_str);
     return ESP_OK;
 }

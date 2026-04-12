@@ -3,6 +3,77 @@ import { fromZigbeeType, ZigbeeTypes, ZigbeeTypeNames } from '../utils/zigbeeTyp
 import { useState } from 'react';
 
 export default function DeviceDetails({ device }) {
+  // ✅ Перенесены внутрь компонента
+  const [inputValues, setInputValues] = useState({});
+
+  // Функция обновления значения параметра
+  const handleParamChange = (cmdId, paramIndex, value) => {
+    setInputValues(prev => ({
+      ...prev,
+      [`${cmdId}-${paramIndex}`]: value
+    }));
+  };
+
+  // === Функция отправки команды ===
+  const handleSendCommand = (cmd, ep, cluster) => {
+    const cmdGuid = cmd.guid;
+    const clusterId = cluster.id;
+    const endpointId = ep.id;
+
+    // Собираем параметры
+    const params = (cmd.params || []).map((param, i) => {
+      const key = `${cmd.id}-${i}`;
+      const rawValue = inputValues[key] || '';
+      let value;
+
+      // Пробуем распознать тип
+      switch (param.type) {
+        case 16: // bool
+          value = rawValue.toLowerCase() === 'true' || rawValue === '1';
+          break;
+        case 32: // uint8
+        case 33: // uint16
+        case 35: // uint32
+          value = parseInt(rawValue, 10);
+          if (isNaN(value)) value = 0;
+          break;
+        case 66: // string
+          value = String(rawValue);
+          break;
+        case 48: // enum8
+          value = parseInt(rawValue, 10);
+          if (isNaN(value)) value = 0;
+          break;
+        default:
+          value = rawValue;
+      }
+
+      return {
+        name: param.name,
+        type: param.type,
+        value
+      };
+    });
+
+    // Формируем сообщение
+    const message = {
+      cmd: 'send_zcl_command',
+      guid: cmdGuid,
+      cluster_id: clusterId,
+      endpoint_id: endpointId,
+      params
+    };
+
+    // Отправляем через WebSocket
+    if (window.ws && window.ws.readyState === WebSocket.OPEN) {
+      window.ws.send(JSON.stringify(message));
+      console.log('Command sent:', message);
+    } else {
+      alert('WebSocket не подключён');
+    }
+  };
+
+  // Остальная часть остаётся без изменений
   if (!device) {
     return (
       <div className="flex-1 p-8 text-gray-500 flex items-center justify-center">
@@ -14,8 +85,6 @@ export default function DeviceDetails({ device }) {
       </div>
     );
   }
-
-  const ep = device.endpoints?.[0];
 
   const formatValue = (attr) => {
     if (attr.value !== undefined && attr.value !== null) {
@@ -71,7 +140,7 @@ export default function DeviceDetails({ device }) {
         </div>
       </div>
 
-       {/* Эндпоинты */}
+      {/* Эндпоинты */}
       {device.endpoints && device.endpoints.length > 0 ? (
         device.endpoints.map((ep, idx) => (
           <div className="panel" key={ep.id}>
@@ -154,6 +223,8 @@ export default function DeviceDetails({ device }) {
                                               placeholder="значение"
                                               className="form-input text-xs px-2 py-1 h-6"
                                               style={{ fontSize: '11px', padding: '1px 4px' }}
+                                              onChange={(e) => handleParamChange(cmd.id, i, e.target.value)}
+                                              defaultValue=""
                                             />
                                           </td>
                                         </tr>
@@ -163,7 +234,10 @@ export default function DeviceDetails({ device }) {
                                 ) : (
                                   <p className="text-gray-500 text-xs italic">Нет параметров</p>
                                 )}
-                                <button className="btn-primary mt-1 text-xs px-2 py-0.5">
+                                <button
+                                  className="btn-primary mt-1 text-xs px-2 py-0.5"
+                                  onClick={() => handleSendCommand(cmd, ep, cluster)}
+                                >
                                   Отправить
                                 </button>
                               </div>
@@ -218,18 +292,16 @@ export default function DeviceDetails({ device }) {
                 </div>
               )}
 
-                            {/* Кастомные кластеры (если есть) */}
+              {/* Кастомные кластеры */}
               {ep.custom_clusters?.length > 0 && (
                 <div className="mt-3 pt-3 border-t border-gray-700">
-                  {/*<h4 className="text-sm font-semibold text-orange-300 mb-2">🔧 Кастомные кластеры</h4>*/}
                   {ep.custom_clusters.map(cluster => (
                     <div key={cluster.id} className="panel mb-3 bg-gray-800/40 border border-gray-700">
                       <div className="panel-header bg-gray-800 text-orange-200">
                         🧩 {cluster.name} (0x{cluster.id.toString(16).padStart(4, '0')}) | EP {ep.id}
                       </div>
                       <div className="panel-body flex flex-col gap-3">
-
-                        {/* Атрибуты кастомного кластера */}
+                        {/* Атрибуты */}
                         {cluster.attributes?.length > 0 && (
                           <div className="table-container">
                             <h5 className="text-xs font-medium text-gray-400 mb-1">Атрибуты</h5>
@@ -245,9 +317,7 @@ export default function DeviceDetails({ device }) {
                                 {cluster.attributes.map(attr => (
                                   <tr key={attr.guid || attr.id}>
                                     <td className="text-gray-300">
-                                      <span>
-                                        (0x{attr.id.toString(16).padStart(4, '0')}) {attr.name || 'UnknownAttr'}
-                                      </span>
+                                      (0x{attr.id.toString(16).padStart(4, '0')}) {attr.name || 'UnknownAttr'}
                                     </td>
                                     <td className="text-xs text-gray-500">
                                       {ZigbeeTypeNames[Number(attr.type)] || `0x${attr.type.toString(16).padStart(2, '0')}`}
@@ -264,7 +334,7 @@ export default function DeviceDetails({ device }) {
                           </div>
                         )}
 
-                        {/* Команды кастомного кластера */}
+                        {/* Команды */}
                         {cluster.commands?.length > 0 && (
                           <div>
                             <h5 className="text-xs font-medium text-gray-400 mb-1">Команды</h5>
@@ -296,6 +366,8 @@ export default function DeviceDetails({ device }) {
                                                 placeholder="значение"
                                                 className="form-input text-xs px-2 py-1 h-6"
                                                 style={{ fontSize: '11px', padding: '1px 4px' }}
+                                                onChange={(e) => handleParamChange(cmd.id, i, e.target.value)}
+                                                defaultValue=""
                                               />
                                             </td>
                                           </tr>
@@ -305,46 +377,14 @@ export default function DeviceDetails({ device }) {
                                   ) : (
                                     <p className="text-gray-500 text-xs italic">Нет параметров</p>
                                   )}
-                                  <button className="btn-primary mt-1 text-xs px-2 py-0.5">
+                                  <button
+                                    className="btn-primary mt-1 text-xs px-2 py-0.5"
+                                    onClick={() => handleSendCommand(cmd, ep, cluster)}
+                                  >
                                     Отправить
                                   </button>
                                 </div>
                               ))}
-                            </div>
-                          </div>
-                        )}
-
-                        {/* Custom Reports в кастомных кластерах */}
-                        {cluster.custom_reports?.length > 0 && (
-                          <div>
-                            <h5 className="text-xs font-medium text-gray-400 mb-1">Custom Reports</h5>
-                            <div className="table-container">
-                              <table className="attribute-table">
-                                <thead>
-                                  <tr>
-                                    <th>Репорт</th>
-                                    <th>Тип</th>
-                                    <th>Значение</th>
-                                  </tr>
-                                </thead>
-                                <tbody>
-                                  {cluster.custom_reports.map(report => (
-                                    <tr key={report.guid || report.id}>
-                                      <td className="text-gray-300">
-                                        {report.name || `Report 0x${report.id.toString(16).padStart(2, '0')}`}
-                                      </td>
-                                      <td className="text-xs text-gray-500">
-                                        {ZigbeeTypeNames[Number(report.type)] || `0x${report.type.toString(16).padStart(2, '0')}`}
-                                      </td>
-                                      <td>
-                                        <code className="text-yellow-300 bg-gray-800 px-2 py-0.5 rounded text-xs font-mono">
-                                          {formatValue(report)}
-                                        </code>
-                                      </td>
-                                    </tr>
-                                  ))}
-                                </tbody>
-                              </table>
                             </div>
                           </div>
                         )}
@@ -353,7 +393,6 @@ export default function DeviceDetails({ device }) {
                   ))}
                 </div>
               )}
-
             </div>
           </div>
         ))

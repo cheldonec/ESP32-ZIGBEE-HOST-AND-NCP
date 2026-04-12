@@ -56,11 +56,11 @@ zbm_dev_t* zbm_dev_create_and_add_to_devdb_by_ieee_safe(const uint8_t* ieee_addr
     zbm_core_sync_lock();
 
     // Проверяем, нет ли уже устройства с таким IEEE
-    zbm_dev_t* existing = zbm_find_device_in_devdb_by_ieee(ieee_addr);
+    /*zbm_dev_t* existing = zbm_find_device_in_devdb_by_ieee(ieee_addr);
     if (existing) {
         zbm_core_sync_unlock();
         return existing;
-    }
+    }*/
 
     // Создаём новое устройство
     zbm_dev_t* dev = zbm_create_device_obj_by_ieee(ieee_addr);
@@ -78,6 +78,16 @@ zbm_dev_t* zbm_dev_create_and_add_to_devdb_by_ieee_safe(const uint8_t* ieee_addr
 
     zbm_core_sync_unlock();
     return dev;
+}
+
+bool zbm_device_add_to_devdb_safe(zbm_dev_t* dev)
+{
+    if (!dev) return false;
+    bool result = false;
+    zbm_core_sync_lock();
+    result = zbm_device_add_to_devdb(dev);
+    zbm_core_sync_unlock();
+    return result;
 }
 
 // ===================================================================
@@ -227,7 +237,7 @@ zbm_dev_t* zbm_find_device_in_devdb_by_ieee_safe(const uint8_t* ieee_addr) {
     return dev;
 }
 
-bool zbm_remove_device_from_devdb_and_guiddb_by_short_self(uint16_t short_addr) {
+bool zbm_remove_device_from_devdb_and_guiddb_by_short_safe(uint16_t short_addr) {
     bool result = false;
     zbm_core_sync_lock();
     // Сначала удаляем все GUID, связанные с устройством
@@ -291,6 +301,24 @@ zbm_cluster_attribute_t* zbm_find_attr_by_key_safe(uint16_t short_addr,
     zbm_cluster_attribute_t* attr = zbm_find_attr_by_key(short_addr, endpoint, cluster_id, attr_id);
     zbm_core_sync_unlock();
     return attr;
+}
+
+
+zbm_cluster_standart_cmd_t* zbm_find_cmd_by_guid_safe(const char* guid)
+{
+    zbm_core_sync_lock();
+    zbm_cluster_standart_cmd_t* cmd = zbm_find_cmd_by_guid(guid);
+    zbm_core_sync_unlock();
+    return cmd;
+}
+
+
+zbm_cluster_standart_cmd_t* zbm_find_cmd_by_key_safe(uint16_t short_addr,uint8_t endpoint,uint16_t cluster_id,uint8_t cmd_id)
+{
+    zbm_core_sync_lock();
+    zbm_cluster_standart_cmd_t* cmd = zbm_find_cmd_by_key(short_addr,endpoint,cluster_id,cmd_id);
+    zbm_core_sync_unlock();
+    return cmd;
 }
 
 void zbm_guid_db_unregister_by_guid_safe(const char* guid) {

@@ -10,14 +10,14 @@
  * @brief Создаёт атрибут OnOff для On/Off кластера
  */
 static zbm_cluster_attribute_t* create_attr_onoff(void) {
-    return create_attr(0x0000, "OnOff", ZBM_ATTR_TYPE_BOOL, sizeof(uint8_t));
+    return create_attr(0x0000, "OnOff", ZBM_ATTR_TYPE_BOOL, sizeof(bool));
 }
 
 /**
  * @brief Создаёт атрибут GlobalSceneControl
  */
 static zbm_cluster_attribute_t* create_attr_global_scene_control(void) {
-    return create_attr(0x4000, "Global Scene Control", ZBM_ATTR_TYPE_BOOL, sizeof(uint8_t));
+    return create_attr(0x4000, "Global Scene Control", ZBM_ATTR_TYPE_BOOL, sizeof(bool));
 }
 
 /**

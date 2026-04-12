@@ -7,6 +7,9 @@ import DeviceSidebar from './components/DeviceSidebar';
 import DeviceDetails from './components/DeviceDetails';
 import Settings from './components/Settings';
 import NotificationProvider from './components/NotificationProvider';
+import { useNotification } from './context/NotificationContext';
+import { useServerHealth } from './hooks/useServerHealth';
+import Navbar from './components/Navbar'; 
 // ✅ Импортируем useDevices с WebSocket
 import { useDevices } from './hooks/useDevices';
 
@@ -37,66 +40,70 @@ const useCoordinator = () => {
 
 
 
+// src/App.js
+
 function App() {
   const [currentPath, setCurrentPath] = useState(window.location.hash || '#/');
   const { coordinator } = useCoordinator();
+  const { addToast } = useNotification(); // ✅ Глобальный addToast
 
-  // ✅ Сначала получаем устройства
+  // ✅ Список устройств с WebSocket
   const { devices: fullDevices } = useDevices({
-  onAttributeUpdate: ({ short, ep, clusterId, attrId, attributeName, value }) => {
-  // Время
-  const now = new Date();
-  const timeStr = now.toLocaleTimeString('ru-RU', {
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit'
+    onAttributeUpdate: ({ attribute, value, isCustomReport, short, ep, clusterId, attrId }) => {
+      const { name } = attribute;
+
+      const iconMap = {
+        OnOff: value === '1' || value === 'true' ? '💡' : '⚫️',
+        Voltage: '🔋',
+        Battery: '⚡',
+        Temperature: '🌡️',
+        Humidity: '💧',
+        Pressure: '📊',
+        LinkQuality: '📶',
+        Default: '📡'
+      };
+
+      const emoji = iconMap[name] || iconMap.Default;
+
+      let readableValue = value;
+      if (name === 'OnOff') {
+        readableValue = value === '1' || value === 'true' ? 'включено' : 'выключено';
+      } else if (name === 'Temperature') {
+        readableValue = `${parseFloat(value).toFixed(1)}°C`;
+      } else if (name === 'Humidity') {
+        readableValue = `${value}%`;
+      } else if (name === 'Voltage') {
+        readableValue = `${parseFloat(value).toFixed(2)} В`;
+      } else if (name === 'Battery') {
+        readableValue = `${value}%`;
+      }
+
+      const source = isCustomReport ? 'репорт' : 'атрибут';
+      const timeStr = new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+      const technical = `[${short}/${ep}] Cl: ${clusterId}, ${source}: ${attrId}`;
+      const message = `${emoji} ${name} → ${readableValue}\n${technical} (${timeStr})`;
+
+      addToast(message);
+    },
+
+    // ✅ Новый колбэк: реакция на системные события
+    onSystemNotify: ({ type, message, emoji }) => {
+      let userMessage = message;
+
+      if (type === 'zigbee_permit_join_started') {
+        userMessage = '🌐 Сеть Zigbee открыта для новых устройств';
+      } else if (type === 'zigbee_permit_join_stopped') {
+        userMessage = '🛑 Сеть Zigbee закрыта';
+      }
+
+      addToast(`${emoji} ${userMessage}`, 5000);
+    }
   });
-
-  // Иконка
-  const icon = {
-    OnOff: value === '1' || value === 'true' ? '💡' : '⚫️',
-    Temperature: '🌡️',
-    Humidity: '💧',
-    Voltage: '🔋',
-    Pressure: '📊',
-    Battery: '⚡',
-    LinkQuality: '📶',
-    Default: '📡'
-  };
-
-  const emoji = icon[attributeName] || icon.Default;
-
-  // Читаемое значение
-  let readableValue = value;
-  if (attributeName === 'OnOff') {
-    readableValue = value === '1' || value === 'true' ? 'включено' : 'выключено';
-  } else if (attributeName === 'Temperature') {
-    readableValue = `${parseFloat(value).toFixed(1)}°C`;
-  } else if (attributeName === 'Humidity') {
-    readableValue = `${value}%`;
-  } else if (attributeName === 'Voltage') {
-    readableValue = `${parseFloat(value).toFixed(2)} В`;
-  } else if (attributeName === 'Battery') {
-    readableValue = `${value}%`;
-  }
-
-  // Формируем подпись с техническими данными
-  const technical = `[${short}/${ep}] Cl: ${clusterId}, Attr: ${attrId}`;
-
-  // Полное сообщение
-  const message = `${emoji} ${attributeName} → ${readableValue}\n${technical} (${timeStr})`;
-
-  addToast(message);
-}
-});
 
   // 🔁 Храним только IEEE выбранного устройства
   const [selectedIEEE, setSelectedIEEE] = useState(null);
-
-  // ✅ Всегда получаем актуальное устройство из свежего списка
   const selectedDevice = fullDevices.find(d => d.ieee_addr === selectedIEEE) || null;
 
-  // Краткий список для сайдбара
   const briefList = fullDevices.map(dev => ({
     ieee: dev.ieee_addr,
     short: parseInt(dev.short_addr.replace('0x', ''), 16),
@@ -105,33 +112,13 @@ function App() {
     linkquality: dev.lqi
   }));
 
-  // Обработчик выбора устройства
   const handleSelectDevice = (briefDev) => {
     setSelectedIEEE(briefDev.ieee);
   };
 
-  // Состояние для тостов
-  const [toasts, setToasts] = useState([]);
-
-  // Функция добавления уведомления
-  const addToast = (message) => {
-    const id = Date.now() + Math.random();
-    setToasts(prev => [...prev, { id, message }]);
-    setTimeout(() => {
-      setToasts(prev => prev.filter(t => t.id !== id));
-    }, 5000);
-  };
-
-  // Удаление тоста
-  const removeToast = (id) => {
-    setToasts(prev => prev.filter(t => t.id !== id));
-  };
-
   // Следим за хэшем URL
   useEffect(() => {
-    const onHashChange = () => {
-      setCurrentPath(window.location.hash || '#/');
-    };
+    const onHashChange = () => setCurrentPath(window.location.hash || '#/');
     window.addEventListener('hashchange', onHashChange);
     return () => window.removeEventListener('hashchange', onHashChange);
   }, []);
@@ -171,23 +158,7 @@ function App() {
       </header>
 
       {/* Навигация */}
-      <nav className="navbar">
-        <a href="#/" className={`nav-link ${currentPath === '#/' ? 'active' : ''}`}>
-          🔌 Устройства
-        </a>
-        <a href="#/links" className={`nav-link ${currentPath === '#/links' ? 'active' : ''}`}>
-          🔗 Связи
-        </a>
-        <a href="#/scenes" className={`nav-link ${currentPath === '#/scenes' ? 'active' : ''}`}>
-          🎬 Сценарии
-        </a>
-        <a href="#/settings" className={`nav-link ${currentPath === '#/settings' ? 'active' : ''}`}>
-          ⚙️ Настройки
-        </a>
-        <a href="#/monitor" className={`nav-link ${currentPath === '#/monitor' ? 'active' : ''}`}>
-          📊 Мониторинг
-        </a>
-      </nav>
+      <Navbar />
 
       {/* Основной макет */}
       <div className="main-layout">
@@ -215,26 +186,16 @@ function App() {
         <span>🗜️ Frag: 14%</span>
       </footer>
 
-      {/* Всплывающие уведомления */}
-      <div className="toast-container">
-        {toasts.map(toast => (
-          <div key={toast.id} className="toast-item">
-            <span className="toast-message">{toast.message}</span>
-            <button
-              onClick={() => removeToast(toast.id)}
-              className="toast-close"
-            >
-              ✕
-            </button>
-          </div>
-        ))}
-      </div>
+      {/* ❌ Убираем локальные тосты — они теперь в NotificationProvider */}
+      {/* <div className="toast-container">...</div> */}
     </div>
   );
 }
 
 // ✅ Оборачиваем App в NotificationProvider
 export default function AppWithNotifications() {
+  useServerHealth(); // ← автоматически следит за состоянием
+
   return (
     <NotificationProvider>
       <App />

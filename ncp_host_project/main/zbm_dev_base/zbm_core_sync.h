@@ -47,6 +47,7 @@ void zbm_core_sync_unlock(void);
  */
 zbm_dev_t* zbm_dev_create_and_add_to_devdb_by_ieee_safe(const uint8_t* ieee_addr);
 
+bool zbm_device_add_to_devdb_safe(zbm_dev_t* dev);
 /**
  * @brief Безопасное обновление короткого адреса устройства
  * @param dev Указатель на устройство
@@ -128,6 +129,19 @@ zbm_cluster_attribute_t* zbm_find_attr_by_key_safe(uint16_t short_addr,
                                                    uint8_t endpoint,
                                                    uint16_t cluster_id,
                                                    uint16_t attr_id);
+
+/**
+ * @brief Найти стандартную команду по GUID
+ */
+zbm_cluster_standart_cmd_t* zbm_find_cmd_by_guid_safe(const char* guid);
+
+/**
+ * @brief Найти стандартную команду по ключу
+ */
+zbm_cluster_standart_cmd_t* zbm_find_cmd_by_key_safe(uint16_t short_addr,
+                                                uint8_t endpoint,
+                                                uint16_t cluster_id,
+                                                uint8_t cmd_id);
 
 /**
  * @brief Безопасное удаление записи по GUID

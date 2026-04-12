@@ -78,6 +78,7 @@ typedef struct zbm_dev_s {
     uint8_t                                 endpoints_count;
     zbm_dev_endpoint_t**                    endpoints_array;
     uint16_t                                last_guid_update_short_addr; // для оптимизации при регистрации в хэш, например при смене адреса
+    uint8_t                                 device_registered_status; // 0 - не зарегистрировано, 1 - зарегистрировано используется при сопряжении/пересопряжении
 } zbm_dev_t;
 
 /**

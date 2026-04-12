@@ -9,6 +9,7 @@
 #include "zbm_coordinator.h"
 #include "ssdp_server.h"
 #include "socket.h"
+#include "ncp_host_zb_api_to_ncp.h"
 
 static const char *TAG = "ZBM_WEB_SERVER";
 
@@ -19,9 +20,11 @@ static char json_buffer_for_response[8192]; // буфер для cJSON
 static SemaphoreHandle_t json_buffer_mutex = NULL; // мьютекс для потокобезопасности
 
 // === Глобальные переменные ===
-static QueueHandle_t ws_update_queue = NULL;
+static QueueHandle_t ws_update_queue = NULL; // очередь для уведомлений об обновлении атрибутов
+static QueueHandle_t ws_sys_notify_queue = NULL; // очередь для системных уведомлений
 static TaskHandle_t ws_update_task_handle = NULL;
 #define ZBM_WS_UPDATE_QUEUE_SIZE 32
+#define ZBM_WS_SYS_NOTIFY_QUEUE_SIZE 16
 
 
 // MIME-типы
@@ -47,63 +50,106 @@ void ws_send_async_task(void *arg);
 esp_err_t get_index_html_req_handler(httpd_req_t *req);
 esp_err_t get_from_ws_handler(httpd_req_t *req);
 
+// отправка JSON
+static void send_json_event_to_ws_safe(cJSON* event) {
+    if (xSemaphoreTake(json_buffer_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+        int len = cJSON_PrintPreallocated(event, json_buffer_for_response, sizeof(json_buffer_for_response), false);
+        if (len > 0) {
+            cJSON_Minify(json_buffer_for_response);
+            ws_async_data_t *async_data = malloc(sizeof(ws_async_data_t));
+            if (async_data) {
+                async_data->hd = server_handle;
+                async_data->payload = (uint8_t*)strdup(json_buffer_for_response);
+                async_data->len = strlen(json_buffer_for_response);
+                httpd_queue_work(server_handle, ws_send_async_task, async_data);
+            }
+        } else {
+            ESP_LOGE(TAG, "Failed to print JSON into buffer (too large?)");
+        }
+        xSemaphoreGive(json_buffer_mutex);
+    } else {
+        ESP_LOGE(TAG, "Timeout waiting for JSON buffer mutex");
+    }
+}
 //задача для приёма атрибутов и отправки их в UI
 void ws_update_task(void *pvParameters) {
-    zbm_ws_update_msg_t msg;
+    zbm_ws_update_msg_t msg_attr;
+    zbm_ws_sys_notify_msg_t msg_sys;
     static const char* TAG = "WS_UPDATE_TASK";
 
     ESP_LOGI(TAG, "WS Update Task started");
 
     while (1) {
-        if (xQueueReceive(ws_update_queue, &msg, portMAX_DELAY) == pdTRUE) {
-            ESP_LOGD(TAG, "Received update for GUID: %s", msg.guid);
+        BaseType_t attr_received = xQueueReceive(ws_update_queue, &msg_attr, pdMS_TO_TICKS(10));
+        if (attr_received == pdTRUE) {
+            ESP_LOGD(TAG, "Received attribute update for GUID: %s", msg_attr.guid);
 
-            // === Формируем событие для UI ===
             cJSON *event = cJSON_CreateObject();
             cJSON_AddStringToObject(event, "event", "attribute_updated");
-            cJSON_AddStringToObject(event, "guid", msg.guid);
-            cJSON_AddNumberToObject(event, "type", msg.type);
-
-            // Добавляем value_bytes как массив
-            cJSON *j_value_bytes = cJSON_CreateIntArray((int*)msg.value, msg.value_len);
+            cJSON_AddStringToObject(event, "guid", msg_attr.guid);
+            cJSON_AddNumberToObject(event, "type", msg_attr.data_type);
+            cJSON *j_value_bytes = cJSON_CreateIntArray((int*)msg_attr.value, msg_attr.value_len);
             cJSON_AddItemToObject(event, "value_bytes", j_value_bytes);
 
-            // Отправляем через WebSocket
-            if (xSemaphoreTake(json_buffer_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
-                int len = cJSON_PrintPreallocated(event, json_buffer_for_response, sizeof(json_buffer_for_response), false);
-                if (len > 0) {
-                    cJSON_Minify(json_buffer_for_response);
-                    ws_async_data_t *async_data = malloc(sizeof(ws_async_data_t));
-                    if (async_data) {
-                        async_data->hd = server_handle;
-                        async_data->payload = (uint8_t*)strdup(json_buffer_for_response);
-                        async_data->len = strlen(json_buffer_for_response);
-                        httpd_queue_work(server_handle, ws_send_async_task, async_data);
-                    }
-                }
-                xSemaphoreGive(json_buffer_mutex);
+            send_json_event_to_ws_safe(event);
+            cJSON_Delete(event);
+        }
+
+        BaseType_t sys_received = xQueueReceive(ws_sys_notify_queue, &msg_sys, pdMS_TO_TICKS(10));
+        if (sys_received == pdTRUE) {
+            ESP_LOGI(TAG, "📤 SysNotify: %s — %s", msg_sys.event_type, msg_sys.message);
+
+            cJSON *event = cJSON_CreateObject();
+            cJSON_AddStringToObject(event, "event", "system_notify");
+            cJSON_AddStringToObject(event, "type", msg_sys.event_type);
+            cJSON_AddStringToObject(event, "message", msg_sys.message);
+            if (msg_sys.data) {
+                cJSON_AddItemToObject(event, "data", msg_sys.data); // владение передаётся
             }
 
-            cJSON_Delete(event);
+            send_json_event_to_ws_safe(event);
+            cJSON_Delete(event); // data уже удалится здесь
+
+            memset(&msg_sys, 0, sizeof(msg_sys)); // очистка указателя data
         }
     }
 }
 
-bool zbm_ws_send_update(const char* guid, uint8_t type, const void* value, size_t value_len) {
+bool zbm_ws_send_data_update_notify(const char* guid, uint8_t data_type, const void* value, size_t value_len) {
     if (!guid || !value || value_len == 0 || value_len > 256) {
         return false;
     }
 
-    ESP_LOGI(TAG, "📤 Sending WS update: GUID=%s, type=%d, len=%d", guid, type, value_len);
+    ESP_LOGI(TAG, "📤 Sending WS update: GUID=%s, type=%d, len=%d", guid, data_type, value_len);
     zbm_ws_update_msg_t msg = {0};
     strlcpy(msg.guid, guid, sizeof(msg.guid));
-    msg.type = type;
+    msg.data_type = data_type;
     msg.value_len = value_len;
     memcpy(msg.value, value, value_len);
 
     BaseType_t ret = xQueueSendToBack(ws_update_queue, &msg, pdMS_TO_TICKS(10));
     if (ret != pdTRUE) {
         ESP_LOGW(TAG, "WS queue full, dropping update for %s", guid);
+        return false;
+    }
+
+    return true;
+}
+
+bool zbm_ws_send_sys_notify(const char* event_type, const char* message, cJSON* data) {
+    if (!event_type || !message) {
+        return false;
+    }
+
+    zbm_ws_sys_notify_msg_t msg = {0};
+    strlcpy(msg.event_type, event_type, sizeof(msg.event_type));
+    strlcpy(msg.message, message, sizeof(msg.message));
+    msg.data = data; // может быть NULL
+
+    BaseType_t ret = xQueueSendToBack(ws_sys_notify_queue, &msg, pdMS_TO_TICKS(10));
+    if (ret != pdTRUE) {
+        ESP_LOGW(TAG, "SysNotify queue full, dropping: %s", event_type);
+        cJSON_Delete(data); // если не вошёл — освобождаем
         return false;
     }
 
@@ -370,6 +416,34 @@ esp_err_t get_from_ws_handler(httpd_req_t *req)
 
         cJSON_Delete(response);
     }
+    else if (strcmp(cmd->valuestring, "send_zcl_command") == 0) {
+        ESP_LOGI(TAG, "Received ZCL command request via JSON");
+        cJSON *guid_obj = cJSON_GetObjectItem(req_json, "guid");
+        uint8_t tsn = zbm_to_ncp_req_send_zcl_cmd_from_ws_json(req_json);
+
+        // === Ответ клиенту ===
+        cJSON *resp = cJSON_CreateObject();
+        cJSON_AddStringToObject(resp, "event", "command_sent");
+        cJSON_AddStringToObject(resp, "guid", guid_obj ? guid_obj->valuestring : "unknown");
+        cJSON_AddStringToObject(resp, "status", tsn != 0xFF ? "success" : "failed");
+        cJSON_AddNumberToObject(resp, "tsn", tsn);
+
+        if (xSemaphoreTake(json_buffer_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+            int len = cJSON_PrintPreallocated(resp, json_buffer_for_response, sizeof(json_buffer_for_response), false);
+            if (len > 0) {
+                cJSON_Minify(json_buffer_for_response);
+                httpd_ws_frame_t frame = {
+                    .type = HTTPD_WS_TYPE_TEXT,
+                    .payload = (uint8_t*)json_buffer_for_response,
+                    .len = strlen(json_buffer_for_response)
+                };
+                httpd_ws_send_frame(req, &frame);
+            }
+            xSemaphoreGive(json_buffer_mutex);
+        }
+
+        cJSON_Delete(resp);
+    }
     else {
         ESP_LOGW(TAG, "Unknown command: %s", cmd->valuestring);
     }
@@ -474,6 +548,31 @@ httpd_uri_t uri_zbm_rest_api_get_device_by_ieee = {
     .uri       = "/api/device/by_ieee",
     .method    = HTTP_GET,
     .handler   = zbm_rest_api_get_device_by_ieee_handler,
+    .user_ctx  = NULL
+};
+
+// network open/close
+httpd_uri_t uri_zbm_rest_api_post_open_close_zigbee_network = {
+    .uri       = "/api/post/zbnetwork/open_close",
+    .method    = HTTP_POST,
+    .handler   = zbm_rest_api_post_open_close_zigbee_network_handler,
+    .user_ctx  = NULL
+};
+
+// GET /api/get/zigbee_network/status
+httpd_uri_t uri_get_zigbee_network_status = {
+    .uri       = "/api/get/zigbee_network/status",
+    .method    = HTTP_GET,
+    .handler   = zbm_rest_api_get_zigbee_network_status_handler,
+    .user_ctx  = NULL
+};
+
+// GET /api/get_server_status  запрос токена сессии, если поменялся то клиент узнает, что ему надо ребутнуться
+// токен меняется если esp перезагрузилась
+httpd_uri_t uri_get_server_status = {
+    .uri       = "/api/get_server_status",
+    .method    = HTTP_GET,
+    .handler   = zbm_rest_api_get_status_handler,
     .user_ctx  = NULL
 };
 
@@ -634,6 +733,8 @@ httpd_uri_t get_ssdp_description_xml = {
 
 void start_webserver(void)
 {
+    // создаём токен сессии
+    generate_session_token();
     // Создаём очередь
     if (!ws_update_queue) {
         ws_update_queue = xQueueCreate(ZBM_WS_UPDATE_QUEUE_SIZE, sizeof(zbm_ws_update_msg_t));
@@ -641,6 +742,14 @@ void start_webserver(void)
             ESP_LOGE(TAG, "Failed to create WS update queue");
             vSemaphoreDelete(json_buffer_mutex);
             json_buffer_mutex = NULL;
+            return;
+        }
+    }
+
+     if (!ws_sys_notify_queue) {
+        ws_sys_notify_queue = xQueueCreate(ZBM_WS_SYS_NOTIFY_QUEUE_SIZE, sizeof(zbm_ws_sys_notify_msg_t));
+        if (!ws_sys_notify_queue) {
+            ESP_LOGE(TAG, "Failed to create WS sys notify queue");
             return;
         }
     }
@@ -701,7 +810,9 @@ void start_webserver(void)
         httpd_register_uri_handler(server_handle, &uri_zbm_rest_api_get_device_by_ieee);
         httpd_register_uri_handler(server_handle, &api_coordinator_get);
         httpd_register_uri_handler(server_handle, &api_coordinator_post);
-
+        httpd_register_uri_handler(server_handle, &uri_zbm_rest_api_post_open_close_zigbee_network);
+        httpd_register_uri_handler(server_handle, &uri_get_zigbee_network_status);
+        httpd_register_uri_handler(server_handle, &uri_get_server_status);
         // === SPIFFS API ===
         // config
         httpd_register_uri_handler(server_handle, &uri_spiffs_config_ls);

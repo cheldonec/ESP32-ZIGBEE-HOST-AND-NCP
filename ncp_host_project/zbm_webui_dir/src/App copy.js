@@ -6,6 +6,7 @@ import './App.css';
 import DeviceSidebar from './components/DeviceSidebar';
 import DeviceDetails from './components/DeviceDetails';
 import Settings from './components/Settings';
+import NotificationProvider from './components/NotificationProvider';
 // ✅ Импортируем useDevices с WebSocket
 import { useDevices } from './hooks/useDevices';
 
@@ -39,7 +40,55 @@ const useCoordinator = () => {
 function App() {
   const [currentPath, setCurrentPath] = useState(window.location.hash || '#/');
   const { coordinator } = useCoordinator();
-  const { devices: fullDevices } = useDevices(); // ← глобальный список устройств
+
+  // ✅ Сначала получаем устройства
+  const { devices: fullDevices } = useDevices({
+  onAttributeUpdate: ({ short, ep, clusterId, attrId, attributeName, value }) => {
+  // Время
+  const now = new Date();
+  const timeStr = now.toLocaleTimeString('ru-RU', {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit'
+  });
+
+  // Иконка
+  const icon = {
+    OnOff: value === '1' || value === 'true' ? '💡' : '⚫️',
+    Temperature: '🌡️',
+    Humidity: '💧',
+    Voltage: '🔋',
+    Pressure: '📊',
+    Battery: '⚡',
+    LinkQuality: '📶',
+    Default: '📡'
+  };
+
+  const emoji = icon[attributeName] || icon.Default;
+
+  // Читаемое значение
+  let readableValue = value;
+  if (attributeName === 'OnOff') {
+    readableValue = value === '1' || value === 'true' ? 'включено' : 'выключено';
+  } else if (attributeName === 'Temperature') {
+    readableValue = `${parseFloat(value).toFixed(1)}°C`;
+  } else if (attributeName === 'Humidity') {
+    readableValue = `${value}%`;
+  } else if (attributeName === 'Voltage') {
+    readableValue = `${parseFloat(value).toFixed(2)} В`;
+  } else if (attributeName === 'Battery') {
+    readableValue = `${value}%`;
+  }
+
+  // Формируем подпись с техническими данными
+  const technical = `[${short}/${ep}] Cl: ${clusterId}, Attr: ${attrId}`;
+
+  // Полное сообщение
+  const message = `${emoji} ${attributeName} → ${readableValue}\n${technical} (${timeStr})`;
+
+  addToast(message);
+}
+});
 
   // 🔁 Храним только IEEE выбранного устройства
   const [selectedIEEE, setSelectedIEEE] = useState(null);
@@ -58,7 +107,24 @@ function App() {
 
   // Обработчик выбора устройства
   const handleSelectDevice = (briefDev) => {
-    setSelectedIEEE(briefDev.ieee); // ← сохраняем только IEEE
+    setSelectedIEEE(briefDev.ieee);
+  };
+
+  // Состояние для тостов
+  const [toasts, setToasts] = useState([]);
+
+  // Функция добавления уведомления
+  const addToast = (message) => {
+    const id = Date.now() + Math.random();
+    setToasts(prev => [...prev, { id, message }]);
+    setTimeout(() => {
+      setToasts(prev => prev.filter(t => t.id !== id));
+    }, 5000);
+  };
+
+  // Удаление тоста
+  const removeToast = (id) => {
+    setToasts(prev => prev.filter(t => t.id !== id));
   };
 
   // Следим за хэшем URL
@@ -127,13 +193,13 @@ function App() {
       <div className="main-layout">
         <DeviceSidebar
           devices={briefList}
-          selectedIEEE={selectedIEEE} // ← передаём IEEE
+          selectedIEEE={selectedIEEE}
           onSelect={handleSelectDevice}
         />
 
         <div className="content-area">
           {currentPath === '#/settings' && <Settings />}
-          {currentPath === '#/' && <DeviceDetails device={selectedDevice} />}
+          {currentPath === '#/' && <DeviceDetails key={selectedIEEE} device={selectedDevice} />}
           {currentPath !== '#/' && currentPath !== '#/settings' && (
             <div className="p-8 text-gray-500">
               <h2 className="text-xl font-semibold">🚧 Страница в разработке</h2>
@@ -148,8 +214,30 @@ function App() {
         <span>💾 Heap: 28 KB</span>
         <span>🗜️ Frag: 14%</span>
       </footer>
+
+      {/* Всплывающие уведомления */}
+      <div className="toast-container">
+        {toasts.map(toast => (
+          <div key={toast.id} className="toast-item">
+            <span className="toast-message">{toast.message}</span>
+            <button
+              onClick={() => removeToast(toast.id)}
+              className="toast-close"
+            >
+              ✕
+            </button>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
 
-export default App;
+// ✅ Оборачиваем App в NotificationProvider
+export default function AppWithNotifications() {
+  return (
+    <NotificationProvider>
+      <App />
+    </NotificationProvider>
+  );
+}

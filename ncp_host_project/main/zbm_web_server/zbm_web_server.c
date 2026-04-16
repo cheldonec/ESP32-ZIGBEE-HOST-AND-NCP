@@ -598,6 +598,22 @@ httpd_uri_t uri_active_endpoint = {
     .handler   = zbm_rest_api_post_active_endpoint_handler,
     .user_ctx  = NULL
 };
+
+httpd_uri_t uri_simple_desc = {
+    .uri       = "/api/zdo/simple_desc",
+    .method    = HTTP_POST,
+    .handler   = zbm_rest_api_post_simple_descriptor_handler,
+    .user_ctx  = NULL
+};
+
+//Обработчик: POST /api/device/update_friendly_name — изменить friendly_name устройства
+httpd_uri_t uri_update_dev_friendly_name = {
+    .uri       = "/api/device/update_friendly_name",
+    .method    = HTTP_POST,
+    .handler   = zbm_rest_api_post_update_dev_friendly_name_handler,
+    .user_ctx  = NULL
+};
+
 // === SPIFFS API ===
 // === Для /api/spiffs/config ===
 // === Для config ===
@@ -822,6 +838,8 @@ void start_webserver(void)
         httpd_register_uri_handler(server_handle, &uri_get_zigbee_network_status);
         httpd_register_uri_handler(server_handle, &uri_get_server_status);
         httpd_register_uri_handler(server_handle, &uri_active_endpoint);
+        httpd_register_uri_handler(server_handle, &uri_simple_desc);
+        httpd_register_uri_handler(server_handle, &uri_update_dev_friendly_name);
         // === SPIFFS API ===
         // config
         httpd_register_uri_handler(server_handle, &uri_spiffs_config_ls);

@@ -719,6 +719,88 @@ static esp_err_t zb_manager_active_ep_resp_fn(const uint8_t *input, uint16_t inl
     return ESP_OK;
 }
 
+static esp_err_t zb_manager_simple_desc_resp_fn(const uint8_t *input, uint16_t inlen)
+{
+    ESP_LOGW(TAG, "zb_manager_simple_desc_resp_fn");
+    typedef struct {
+        local_esp_zb_zdp_status_t zdo_status;
+        esp_zb_user_cb_t    find_usr;
+        local_esp_zb_af_simple_desc_1_1_t simple_desc; 
+    } ESP_ZNSP_ZB_PACKED_STRUCT zb_manager_simple_desc_resp_pack_t;
+
+    zb_manager_simple_desc_resp_pack_t *pkg  = (zb_manager_simple_desc_resp_pack_t *)input;
+    // 1. Вызываем callback (user_cb) с user_ctx
+    if (pkg ->find_usr.user_cb) {
+        local_esp_zb_zdo_simple_desc_callback_t zdo_simple_desc_callback = (local_esp_zb_zdo_simple_desc_callback_t)pkg ->find_usr.user_cb;
+        zdo_simple_desc_callback(pkg ->zdo_status, (local_esp_zb_af_simple_desc_1_1_t*)(&pkg ->simple_desc), (void *)pkg ->find_usr.user_ctx);
+    }
+
+    // === Пропускаем ошибки ===
+    if (pkg->zdo_status != 0x00) {
+        ESP_LOGW(TAG, "ZDO Simple Desc failed: status=0x%02x", pkg->zdo_status);
+        return ESP_OK;
+    }
+
+    // === Извлекаем short_addr из user_ctx ===
+    uint16_t* short_addr = (uint16_t*)pkg->find_usr.user_ctx;
+    if (short_addr == 0 || short_addr == 0xFFFF || short_addr == 0xFFFE) {
+        ESP_LOGW(TAG, "Invalid short_addr in user_ctx: 0x%04X", short_addr);
+        return ESP_OK;
+    }
+
+    // === Находим устройство ===
+    zbm_dev_t* dev = zbm_find_device_in_devdb_by_short_safe(*short_addr);
+    if (!dev) {
+        ESP_LOGW(TAG, "Device not found by short_addr=0x%04X", *short_addr);
+        return ESP_OK;
+    }
+
+    // === Извлекаем данные из simple_desc ===
+    local_esp_zb_af_simple_desc_1_1_t* desc = &pkg->simple_desc;
+    uint8_t  endpoint_id     = desc->endpoint;
+    uint16_t device_id       = desc->app_device_id;
+    uint8_t  in_count        = desc->app_input_cluster_count;
+    uint8_t  out_count       = desc->app_output_cluster_count;
+    uint16_t* input_clusters = desc->app_cluster_list;
+    uint16_t* output_clusters = in_count > 0 ? &desc->app_cluster_list[in_count] : NULL;
+
+    // Если out_count == 0, то output_clusters может быть не определён
+    if (out_count == 0) {
+        output_clusters = NULL;
+    }
+
+    // === Проверим: есть ли вообще кластеры? ===
+    if (in_count == 0 && out_count == 0) {
+        ESP_LOGD(TAG, "No clusters in Simple Descriptor for ep=%d", endpoint_id);
+        return ESP_OK;
+    }
+
+    // === Применяем дескриптор ===
+    // Функция сама под мьютексом → можно вызывать напрямую
+    zbm_device_apply_simple_descriptor_safe(
+        dev,
+        endpoint_id,
+        device_id,
+        input_clusters, in_count,
+        output_clusters, out_count
+    );
+
+     // Даже если эндпоинт был, могли добавиться кластеры
+    zbm_save_device_to_spiffs_safe(dev);
+
+    cJSON *data = cJSON_CreateObject();
+    char short_str[16];
+    snprintf(short_str, sizeof(short_str), "0x%04X", dev->short_addr);
+    cJSON_AddStringToObject(data, "short_addr", short_str);
+
+    zbm_ws_send_sys_notify("device_updated", "Device structure updated from Simple Descriptor", data);
+
+    ESP_LOGI(TAG, "✅ Applied Simple Descriptor for dev=0x%04X, ep=%d, in=%d, out=%d",
+             short_addr, endpoint_id, in_count, out_count);
+
+    return ESP_OK;
+}
+
 const esp_host_zb_func_t host_zb_api_from_ncp_func_table[] = {
     {ESP_NCP_NETWORK_FORMNETWORK, esp_host_zb_form_network_fn},
     /*{ESP_NCP_NETWORK_JOINNETWORK, esp_host_zb_joining_network_fn},*/
@@ -734,8 +816,8 @@ const esp_host_zb_func_t host_zb_api_from_ncp_func_table[] = {
     {ZB_MANAGER_DEV_UPDATE_EVENT, zb_manager_dev_update_event_fn},
     {ZB_MANAGER_DEV_AUTH_EVENT, zb_manager_dev_auth_event_fn},
     {ZB_MANAGER_ACTIVE_EP_RESP, zb_manager_active_ep_resp_fn},
-    /*{ZB_MANAGER_SIMPLE_DESC_RESP, zb_manager_simple_desc_resp_fn},
-    {ZB_MANAGER_NODE_DESC_RSP, zb_manager_node_desc_resp_fn},
+    {ZB_MANAGER_SIMPLE_DESC_RESP, zb_manager_simple_desc_resp_fn},
+    /*{ZB_MANAGER_NODE_DESC_RSP, zb_manager_node_desc_resp_fn},
     {ZB_MANAGER_REPORT_CONFIG_RESP, zb_manager_report_config_resp_fn},
     {ZB_MANAGER_CUSTOM_CLUSTER_REPORT , zb_manager_custom_cluster_rep_event_fn }, 
     {ZB_MANAGER_DISCOVERY_ATTR_RESP, zb_manager_disc_attr_resp_fn},*/

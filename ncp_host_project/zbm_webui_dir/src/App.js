@@ -87,12 +87,18 @@ function App() {
     },
 
     // ✅ Новый колбэк: реакция на системные события
-    onSystemNotify: ({ type, message, emoji }) => {
+    onSystemNotify: ({ type, message, emoji, data }) => {
       let userMessage = message;
+      if (type === 'device_renamed') {
+        const friendlyName = data.friendly_name || 'Без имени';
+        userMessage = `🔄 Устройство переименовано: ${friendlyName}`;
+      }
 
-      if (type === 'zigbee_permit_join_started') {
+      else if (type === 'zigbee_permit_join_started') {
         userMessage = '🌐 Сеть Zigbee открыта для новых устройств';
-      } else if (type === 'zigbee_permit_join_stopped') {
+      } 
+      
+      else if (type === 'zigbee_permit_join_stopped') {
         userMessage = '🛑 Сеть Zigbee закрыта';
       }
 

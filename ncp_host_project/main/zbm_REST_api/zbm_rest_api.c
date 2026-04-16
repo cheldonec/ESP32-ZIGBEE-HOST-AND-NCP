@@ -639,3 +639,252 @@ _end:
 
     return ESP_OK;
 }
+
+// === Обработчик: POST /api/zdo/simple_desc — запрос Simple Descriptor ===
+esp_err_t zbm_rest_api_post_simple_descriptor_handler(httpd_req_t* req) {
+    ESP_LOGI(TAG, "REQ /api/zdo/simple_desc");
+
+    char *buf = NULL;
+    int total_len = req->content_len;
+    esp_err_t ret = ESP_OK;
+    cJSON *root = NULL;
+
+    if (total_len <= 0 || total_len > 512) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Empty or large body");
+        return ESP_OK;
+    }
+
+    buf = calloc(1, total_len + 1);
+    if (!buf) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "No memory");
+        return ESP_ERR_NO_MEM;
+    }
+
+    int received = httpd_req_recv(req, buf, total_len);
+    if (received <= 0) {
+        free(buf);
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Recv failed");
+        return ESP_OK;
+    }
+    buf[received] = '\0';
+
+    root = cJSON_Parse(buf);
+    if (!root) {
+        ret = ESP_ERR_INVALID_ARG;
+        goto _end;
+    }
+
+    // Извлекаем short_addr
+    cJSON *short_obj = cJSON_GetObjectItem(root, "short_addr");
+    if (!short_obj || !cJSON_IsNumber(short_obj)) {
+        ret = ESP_ERR_INVALID_ARG;
+        goto _end;
+    }
+    uint16_t short_addr = (uint16_t)short_obj->valuedouble;
+
+    // Извлекаем endpoint_id
+    cJSON *ep_obj = cJSON_GetObjectItem(root, "endpoint_id");
+    if (!ep_obj || !cJSON_IsNumber(ep_obj)) {
+        ret = ESP_ERR_INVALID_ARG;
+        goto _end;
+    }
+    uint8_t endpoint_id = (uint8_t)ep_obj->valuedouble;
+
+    // Проверим, существует ли устройство
+    zbm_dev_t* dev = zbm_find_device_in_devdb_by_short_safe(short_addr);
+    if (!dev) {
+        ESP_LOGW(TAG, "Device not found for 0x%04X", short_addr);
+        ret = ESP_ERR_NOT_FOUND;
+        goto _end;
+    }
+
+    // Отправляем ZDO Simple Descriptor Request
+    ESP_LOGI(TAG, "ZDO: Send Simple Descriptor Request to 0x%04X, EP=%d", short_addr, endpoint_id);
+
+    ret = zbm_to_ncp_req_simple_desc_req(
+        short_addr,
+        endpoint_id,
+        NULL,                           // user_cb
+        &dev->short_addr     // user_ctx
+    );
+
+    if (ret == ESP_OK) {
+        ESP_LOGI(TAG, "✅ Simple Descriptor Request sent to 0x%04X, EP=%d", short_addr, endpoint_id);
+    } else {
+        ESP_LOGE(TAG, "❌ Failed to send Simple Descriptor Request");
+    }
+
+_end:
+    cJSON_Delete(root);
+    free(buf);
+
+    // Формируем JSON-ответ
+    cJSON *resp = cJSON_CreateObject();
+    if (ret == ESP_OK) {
+        cJSON_AddStringToObject(resp, "status", "success");
+        cJSON_AddStringToObject(resp, "message", "Simple Descriptor request sent");
+    } else {
+        const char* msg = "Send failed";
+        if (ret == ESP_ERR_NOT_FOUND) {
+            msg = "Device not found";
+        } else if (ret == ESP_ERR_INVALID_ARG) {
+            msg = "Invalid parameters";
+        }
+        cJSON_AddStringToObject(resp, "status", "error");
+        cJSON_AddStringToObject(resp, "message", msg);
+    }
+
+    char *json_str = cJSON_PrintUnformatted(resp);
+    cJSON_Delete(resp);
+
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+
+    if (ret == ESP_OK) {
+        httpd_resp_set_status(req, "200 OK");
+    } else {
+        httpd_resp_set_status(req, "400 Bad Request");
+    }
+
+    if (json_str) {
+        httpd_resp_send(req, json_str, strlen(json_str));
+        free(json_str);
+    } else {
+        httpd_resp_sendstr(req, "{\"status\":\"error\",\"message\":\"JSON alloc failed\"}");
+    }
+
+    return ESP_OK;
+}
+
+// === Обработчик: POST /api/device/update_friendly_name ===
+esp_err_t zbm_rest_api_post_update_dev_friendly_name_handler(httpd_req_t* req) {
+    ESP_LOGI(TAG, "REQ /api/device/update_friendly_name");
+
+    char *buf = NULL;
+    int total_len = req->content_len;
+    esp_err_t ret = ESP_OK;
+    cJSON *root = NULL;
+
+    if (total_len <= 0 || total_len > 512) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Empty or large body");
+        return ESP_OK;
+    }
+
+    buf = calloc(1, total_len + 1);
+    if (!buf) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "No memory");
+        return ESP_ERR_NO_MEM;
+    }
+
+    int received = httpd_req_recv(req, buf, total_len);
+    if (received <= 0) {
+        free(buf);
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Recv failed");
+        return ESP_OK;
+    }
+    buf[received] = '\0';
+
+    root = cJSON_Parse(buf);
+    if (!root) {
+        ret = ESP_ERR_INVALID_ARG;
+        goto _end;
+    }
+
+    // Извлекаем IEEE и новое имя
+    cJSON *ieee_obj = cJSON_GetObjectItem(root, "ieee_addr");
+    cJSON *name_obj = cJSON_GetObjectItem(root, "friendly_name");
+
+    if (!ieee_obj || !cJSON_IsString(ieee_obj)) {
+        ret = ESP_ERR_INVALID_ARG;
+        goto _end;
+    }
+    if (!name_obj || !cJSON_IsString(name_obj)) {
+        ret = ESP_ERR_INVALID_ARG;
+        goto _end;
+    }
+
+    const char* ieee_str = ieee_obj->valuestring;
+    const char* new_name = name_obj->valuestring;
+
+    // Парсим IEEE
+    uint8_t ieee_addr[8];
+    int count = sscanf(ieee_str, "%hhx:%hhx:%hhx:%hhx:%hhx:%hhx:%hhx:%hhx",
+                       &ieee_addr[0], &ieee_addr[1], &ieee_addr[2], &ieee_addr[3],
+                       &ieee_addr[4], &ieee_addr[5], &ieee_addr[6], &ieee_addr[7]);
+    if (count != 8) {
+        ret = ESP_ERR_INVALID_ARG;
+        goto _end;
+    }
+
+    // Найдём устройство
+    zbm_dev_t* dev = zbm_find_device_in_devdb_by_ieee_safe(ieee_addr);
+    if (!dev) {
+        ret = ESP_ERR_NOT_FOUND;
+        goto _end;
+    }
+
+    // Обновим имя
+    if (dev->friendly_name) {
+        free(dev->friendly_name);
+        dev->friendly_name = NULL;
+    }
+    if (new_name && strlen(new_name) > 0) {
+        dev->friendly_name = strdup(new_name);
+    } else {
+        dev->friendly_name = NULL; // можно оставить пустым
+    }
+
+    // Сохраним в SPIFFS
+    if (!zbm_save_device_to_spiffs_safe(dev)) {
+        ESP_LOGE(TAG, "Failed to save device after friendly_name update");
+        ret = ESP_FAIL;
+        goto _end;
+    }
+
+    // Отправим уведомление: устройство переименовано
+    cJSON *data = cJSON_CreateObject();
+    cJSON_AddStringToObject(data, "ieee_addr", ieee_str);
+    cJSON_AddStringToObject(data, "friendly_name", dev->friendly_name ? dev->friendly_name : "");
+    zbm_ws_send_sys_notify("device_renamed", "Device renamed", data);
+
+    ESP_LOGI(TAG, "✅ Device %s renamed to '%s'", ieee_str, dev->friendly_name ? dev->friendly_name : "(no name)");
+
+_end:
+    cJSON_Delete(root);
+    free(buf);
+
+    // Ответ клиенту
+    cJSON *resp = cJSON_CreateObject();
+    if (ret == ESP_OK) {
+        cJSON_AddStringToObject(resp, "status", "success");
+        cJSON_AddStringToObject(resp, "message", "Name updated");
+    } else {
+        const char* msg = "Update failed";
+        if (ret == ESP_ERR_NOT_FOUND) msg = "Device not found";
+        else if (ret == ESP_ERR_INVALID_ARG) msg = "Invalid parameters";
+
+        cJSON_AddStringToObject(resp, "status", "error");
+        cJSON_AddStringToObject(resp, "message", msg);
+    }
+
+    char *json_str = cJSON_PrintUnformatted(resp);
+    cJSON_Delete(resp);
+
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+
+    if (ret == ESP_OK) {
+        httpd_resp_set_status(req, "200 OK");
+    } else {
+        httpd_resp_set_status(req, "400 Bad Request");
+    }
+
+    if (json_str) {
+        httpd_resp_send(req, json_str, strlen(json_str));
+        free(json_str);
+    } else {
+        httpd_resp_sendstr(req, "{\"status\":\"error\",\"message\":\"JSON alloc failed\"}");
+    }
+
+    return ESP_OK;
+}

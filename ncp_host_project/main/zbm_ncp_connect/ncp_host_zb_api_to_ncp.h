@@ -37,6 +37,8 @@ esp_err_t zbm_to_ncp_cmd_get_local_long_addr(esp_zb_ieee_addr_t ieee_addr);
 
 esp_err_t zbm_to_ncp_req_active_endpoint_req(uint16_t  addr_of_interest, local_esp_zb_zdo_active_ep_callback_t user_cb, void *user_ctx);
 
+esp_err_t zbm_to_ncp_req_simple_desc_req(uint16_t addr_of_interest, uint8_t endpoint, local_esp_zb_zdo_simple_desc_callback_t user_cb, void *user_ctx);
+
 
 // ===============================  ZCL ==========================================
 //return the transaction sequence number

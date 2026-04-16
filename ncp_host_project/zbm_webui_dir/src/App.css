@@ -283,12 +283,22 @@ body {
 .device-text {
   display: flex;
   flex-direction: column;
+  min-width: 0; /* ← добавлено */
 }
 
 .device-name {
   font-weight: 500;
   color: white;
   font-size: 14px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.device-name > span,
+.device-name > .edit-button {
+  flex-shrink: 0;
 }
 
 .device-meta {
@@ -317,6 +327,49 @@ body {
   background: #400505;
   color: #f87171;
   border: 1px solid #5c0a0a;
+}
+
+/* Кнопка редактирования — чистая иконка, появляется при наведении */
+.edit-button {
+  /* Убираем фон и кружок */
+  background: none;
+  border: none;
+  border-radius: 0;
+
+  /* Размер и внешний вид */
+  width: auto;
+  height: auto;
+  padding: 2px 4px;
+  font-size: 1em; /* Соответствует размеру текста */
+  line-height: 1;
+
+  /* Цвет */
+  color: #777;
+  opacity: 0;
+  transition: all 0.2s ease;
+
+  /* Курсор */
+  cursor: pointer;
+
+  /* Чтобы не ломать строку */
+  flex-shrink: 0;
+}
+
+/* Показываем при наведении на весь элемент */
+.device-item:hover .edit-button,
+.device-name:focus-within .edit-button {
+  opacity: 1;
+}
+
+/* Эффект при наведении на саму кнопку */
+.edit-button:hover {
+  color: #93c5fd; /* светло-синий — акцентный цвет */
+  transform: scale(1.1);
+}
+
+/* Показываем кнопку при фокусе на имени (для доступности) */
+.device-name:focus-within {
+  outline: none;
 }
 
 /* Панели (для DeviceDetails и Settings) */

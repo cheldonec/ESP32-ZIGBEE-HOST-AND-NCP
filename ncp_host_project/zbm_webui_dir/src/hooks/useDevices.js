@@ -123,6 +123,29 @@ export const useDevices = ({ onAttributeUpdate, onSystemNotify } = {}) => {
           refreshDeviceByShort(short_addr);
         }
       }
+
+      // ✅ Обработка переименования устройства
+    else if (data.event === 'system_notify' && data.type === 'device_renamed') {
+      const { ieee_addr, friendly_name } = data.data || {};
+      if (!ieee_addr) return;
+
+      console.log('🔄 Device renamed:', ieee_addr, '→', friendly_name);
+
+      // Обновляем только имя в состоянии
+      setDevices(prev =>
+        prev.map(device =>
+          device.ieee_addr === ieee_addr
+            ? { ...device, name: friendly_name, friendly_name } // поддержка обоих полей
+            : device
+        )
+      );
+
+      // Необязательно: триггер onSystemNotify
+      if (onSystemNotifyRef.current) {
+        onSystemNotifyRef.current(data);
+      }
+    }
+
         // ✅ Обработка системных уведомлений
       else if (data.event === 'system_notify') {
         const { type, message } = data;

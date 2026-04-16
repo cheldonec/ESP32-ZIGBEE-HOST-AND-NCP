@@ -60,7 +60,7 @@ zbm_dev_t* restore_device_from_json(cJSON* json) {
     //zbm_guid_db_update_device_guids_safe(dev);
 
     // Опциональные поля
-    cJSON* j_fn = cJSON_GetObjectItem(json, "friendly_name");
+    cJSON* j_fn = cJSON_GetObjectItem(json, "name");
     if (j_fn && cJSON_IsString(j_fn)) {
         dev->friendly_name = safe_strdup(j_fn->valuestring);
     }
@@ -149,7 +149,7 @@ zbm_dev_t* restore_device_from_json(cJSON* json) {
             ep->is_use_on_device = cJSON_IsTrue(j_is_use);
         }
 
-        cJSON* j_fn_ep = cJSON_GetObjectItem(j_ep, "friendlyname");
+        cJSON* j_fn_ep = cJSON_GetObjectItem(j_ep, "name");
         if (j_fn_ep && cJSON_IsString(j_fn_ep)) {
             ep->friendlyname = safe_strdup(j_fn_ep->valuestring);
         }
@@ -198,7 +198,7 @@ zbm_dev_t* restore_device_from_json(cJSON* json) {
                 zbm_standart_cluster_t* cluster = (zbm_standart_cluster_t*)create_cluster(cluster_id, role_mask, false);
                 if (!cluster) continue;
 
-                cJSON* j_friendly = cJSON_GetObjectItem(j_cl, "friendlyname");
+                cJSON* j_friendly = cJSON_GetObjectItem(j_cl, "name");
                 if (j_friendly && cJSON_IsString(j_friendly)) {
                     free(cluster->friendlyname);
                     cluster->friendlyname = safe_strdup(j_friendly->valuestring);
@@ -592,7 +592,7 @@ zbm_dev_t* restore_device_from_json(cJSON* json) {
                 cluster->custom_report_cmd_array = NULL;
                 cluster->friendlyname = NULL;
 
-                cJSON* j_friendly = cJSON_GetObjectItem(j_cl, "friendlyname");
+                cJSON* j_friendly = cJSON_GetObjectItem(j_cl, "name");
                 if (j_friendly && cJSON_IsString(j_friendly)) {
                     free(cluster->friendlyname);
                     cluster->friendlyname = safe_strdup(j_friendly->valuestring);

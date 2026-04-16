@@ -181,8 +181,44 @@ export default function DeviceDetails({ device }) {
       {device.endpoints && device.endpoints.length > 0 ? (
         device.endpoints.map((ep, idx) => (
           <div className="panel" key={ep.id}>
-            <div className="panel-header">
-              📡 EP {ep.id} | {ep.device_type || 'Unknown'} ({ep.profile_id ? `0x${ep.profile_id.toString(16).padStart(4, '0')}` : '—'})
+            <div className="panel-header flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                📡 <strong>EP {ep.id}</strong> | {ep.device_type || 'Unknown'} 
+                {ep.profile_id && (
+                  <span className="text-xs text-gray-400">
+                    (0x{ep.profile_id.toString(16).padStart(4, '0')})
+                  </span>
+                )}
+              </div>
+              <button
+                className="btn-primary text-xs px-3 py-1.5 mt-1"
+                onClick={async (e) => {
+                  e.stopPropagation();
+                  const short = parseInt(device.short_addr.replace('0x', ''), 16);
+                  try {
+                    const res = await fetch('/api/zdo/simple_desc', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({
+                        short_addr: short,
+                        endpoint_id: ep.id
+                      })
+                    });
+
+                    const data = await res.json();
+                    if (data.status === 'success') {
+                      alert(`✅ Запрос отправлен: Simple Descriptor для EP ${ep.id}, 0x${short.toString(16).toUpperCase()}`);
+                    } else {
+                      alert(`❌ Ошибка: ${data.message}`);
+                    }
+                  } catch (err) {
+                    alert(`Ошибка сети: ${err.message}`);
+                  }
+                }}
+                title={`Запросить Simple Descriptor для EP ${ep.id}`}
+              >
+                📥 Запросить кластеры (Simple Desc)
+              </button>
             </div>
             <div className="panel-body flex flex-col gap-4">
               {/* Стандартные кластеры */}

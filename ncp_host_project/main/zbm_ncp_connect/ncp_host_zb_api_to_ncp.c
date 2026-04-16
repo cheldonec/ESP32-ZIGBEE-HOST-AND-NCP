@@ -182,6 +182,35 @@ esp_err_t zbm_to_ncp_req_active_endpoint_req(uint16_t  addr_of_interest, local_e
     return ret;    
 }
 
+esp_err_t zbm_to_ncp_req_simple_desc_req(uint16_t addr_of_interest, uint8_t endpoint, local_esp_zb_zdo_simple_desc_callback_t user_cb, void *user_ctx)
+{
+    esp_err_t ret = ESP_FAIL;
+    uint8_t output = 0;
+    uint16_t outlen = sizeof(uint8_t);
+    typedef struct {
+        esp_zb_user_cb_t user_data;
+        uint16_t addr_of_interest;
+        uint8_t endpoint;
+    }  __attribute__ ((packed)) zb_manager_simple_desc_pack_req_t;
+    
+    zb_manager_simple_desc_pack_req_t zdo_data = {
+        .user_data = {
+            .user_cb = (uint32_t)user_cb,
+            .user_ctx = (uint32_t)user_ctx,
+        },
+        .addr_of_interest = addr_of_interest,
+        .endpoint = endpoint,
+    };
+    uint16_t inlen = sizeof(zb_manager_simple_desc_pack_req_t);
+    uint8_t  *input = calloc(1, inlen);
+    if (input) {
+        memcpy(input, &zdo_data, sizeof(zb_manager_simple_desc_pack_req_t));
+        ret =  esp_host_zb_output(ZB_MANAGER_SIMPLE_DESC_REQ_CMD, input, inlen, &output, &outlen);
+        free(input);
+        input = NULL;
+    }
+    return ret;
+}
 
 uint8_t zbm_to_ncp_req_read_attributes(esp_zb_zcl_read_attr_cmd_t *cmd_req)
 {

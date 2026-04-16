@@ -56,5 +56,23 @@ typedef enum {
 
 typedef void (*local_esp_zb_zdo_active_ep_callback_t)(local_esp_zb_zdp_status_t zdo_status, uint8_t ep_count, uint8_t *ep_id_list, void *user_ctx);
 
+/*****************************************************************************************************************************
+ * @brief Structure of simple descriptor request of ZCL command
+ */
+typedef struct local_esp_zb_af_simple_desc_1_1_t {
+    uint8_t    endpoint;                        /*!< Endpoint */
+    uint16_t   app_profile_id;                  /*!< Application profile identifier */
+    uint16_t   app_device_id;                   /*!< Application device identifier */
+    uint32_t    app_device_version: 4;          /*!< Application device version */
+    uint32_t    reserved: 4;                    /*!< Reserved */
+    uint8_t    app_input_cluster_count;         /*!< Application input cluster count */
+    uint8_t    app_output_cluster_count;        /*!< Application output cluster count */
+    uint16_t   app_cluster_list[2];             /*!< Application input and output cluster list */
+} __attribute__ ((packed)) local_esp_zb_af_simple_desc_1_1_t;
+/**
+ * @brief A ZDO simple descriptor request callback for user to get simple desc info.
+ */
+typedef void (*local_esp_zb_zdo_simple_desc_callback_t)(local_esp_zb_zdp_status_t zdo_status, local_esp_zb_af_simple_desc_1_1_t *simple_desc, void *user_ctx);
+
 
 #endif

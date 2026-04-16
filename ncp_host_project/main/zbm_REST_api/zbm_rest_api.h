@@ -45,4 +45,18 @@ esp_err_t zbm_rest_api_get_zigbee_network_status_handler(httpd_req_t* req);
 
 // === Обработчик: POST /api/zdo/active_endpoint — запрос Active Endpoint ===
 esp_err_t zbm_rest_api_post_active_endpoint_handler(httpd_req_t* req);
+
+/**
+ * @brief Обработчик: POST /api/zdo/simple_desc — запрос Simple Descriptor от устройства
+ * @param req HTTP-запрос
+ * @return esp_err_t
+ */
+esp_err_t zbm_rest_api_post_simple_descriptor_handler(httpd_req_t* req);
+
+/**
+ * @brief Обработчик: POST /api/device/update_friendly_name — изменить friendly_name устройства
+ * @param req HTTP-запрос
+ * @return esp_err_t
+ */
+esp_err_t zbm_rest_api_post_update_dev_friendly_name_handler(httpd_req_t* req);
 #endif

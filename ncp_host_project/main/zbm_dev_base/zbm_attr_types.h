@@ -69,13 +69,17 @@ typedef enum {
 typedef struct zbm_cluster_attribute_s {
     uint16_t                                id;
     char*                                   friendlyname; 
-    uint8_t                                 acces;      /*!< Attribute access options according to esp_zb_zcl_attr_access_t */
+    uint8_t                                 acces;
     uint64_t                                last_update_ms;
-    zbm_attr_data_types_t                   data_type;       /*!< Attribute type see zcl_attr_type */
+    zbm_attr_data_types_t                   data_type;
     uint16_t                                data_size;
     void*                                   p_value;
     char                                    guid[64];
-}zbm_cluster_attribute_t;
+
+    // === Поведение (реакция) ===
+    char                                    behavior_id[37];   // UUID модуля поведения
+    bool                                    behavior_enabled;  // включено ли поведение
+} zbm_cluster_attribute_t;
 
 void zbm_generate_attr_guid(char* out_guid, uint8_t len,uint16_t short_addr, uint8_t endpoint,uint16_t cluster_id, uint16_t attr_id);
 

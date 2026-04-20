@@ -20,6 +20,15 @@
 // список сопряжённых устройств
 #define ZBM_DEV_INDEX_FILE                      SPIFFS_ZBM_CONF_MOUNT_POINT    "/zbm_devices_index.json"
 
+// Пути к файлам правил
+#define ZBM_RULES_INDEX_FILE                    SPIFFS_ZBM_CONF_MOUNT_POINT    "/zbm_rules_index.json"
+
+// Пути к файлам поведения (готовые контейнеры с реакциями)
+#define BEHAVIORS_INDEX_FILE                     SPIFFS_ZBM_CONF_MOUNT_POINT   "/zbm_behaviors_index.json"
+
+// переменные для правил
+#define ZBM_RULES_VARS_FILE                     SPIFFS_ZBM_CONF_MOUNT_POINT "/zbm_rules_vars.json"
+
 // web server root
 #define ZBM_WEB_SERVER_HOME_PAGE                SPIFFS_ZBM_UI_MOUNT_POINT      "/index.html"
 
@@ -38,5 +47,9 @@ esp_err_t init_spiffs(void);
 // Utils
 bool spiffs_file_exists(const char* path);
 cJSON* spiffs_list_directory(const char* dir_path);
+
+cJSON* read_json_from_file(const char* path);
+
+bool write_json_to_file(const char* path, cJSON* json);
 
 #endif

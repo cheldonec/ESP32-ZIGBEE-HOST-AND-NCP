@@ -97,6 +97,9 @@ typedef struct zbm_cluster_custom_report_cmd_s {
     uint16_t                                data_size;
     void*                                   p_value;
     char                                    guid[64];
+    // === Поведение (реакция) ===
+    char                                    behavior_id[37];   // UUID поведения
+    bool                                    behavior_enabled;  // включено ли поведение
 }zbm_cluster_custom_report_cmd_t;
 
 bool zbm_free_cluster_cmd_param(zbm_cluster_cmd_param_t* param);

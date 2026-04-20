@@ -16,6 +16,8 @@
 #include "zbm_spiffs_helper.h"
 #include "zbm_dev_storage_spiffs.h"
 #include "zbm_web_server.h"
+#include "zbm_automation_v2.h"
+
 
 static const char* TAG = "zbm_dev_simple_func";
 
@@ -335,6 +337,7 @@ uint8_t zbm_device_apply_reported_value(
     memcpy(attr->p_value, new_value, data_size);
     attr->last_update_ms = get_ms();
 
+    zb_automation_v2_on_data_change(ZBM_DATA_SRC_ATTR, attr->guid, attr->data_type, new_value, data_size);
     //отправляем в web socet
     zbm_ws_send_data_update_notify(attr->guid, attr->data_type, new_value, data_size);
     return created ? 1 : 0;
@@ -562,6 +565,7 @@ uint8_t zbm_update_cluster_custom_report(
     }
 
     memcpy(report_cmd->p_value, new_value, data_size);
+    zb_automation_v2_on_data_change(ZBM_DATA_SRC_CUSTOM_REPORT, report_cmd->guid, report_cmd->data_type, new_value, data_size);
     //отправляем в web socet
     zbm_ws_send_data_update_notify(report_cmd->guid, report_cmd->data_type, new_value, data_size);
     return created ? 1 : 0;

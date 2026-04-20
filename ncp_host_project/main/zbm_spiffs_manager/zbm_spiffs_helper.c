@@ -180,3 +180,78 @@ cJSON* spiffs_list_directory(const char* dir_path) {
     closedir(dir);
     return files;
 }
+
+// === Чтение JSON из файла ===
+cJSON* read_json_from_file(const char* path) {
+    ESP_LOGI(TAG, "🔍 Attempting to read: %s", path);
+
+    if (!spiffs_file_exists(path)) {
+        ESP_LOGE(TAG, "❌ File does not exist: %s", path);
+        return NULL;
+    }
+
+    FILE* f = fopen(path, "r");
+    if (!f) {
+        ESP_LOGE(TAG, "❌ fopen failed: %s ", path);
+        return NULL;
+    }
+
+    fseek(f, 0, SEEK_END);
+    long size = ftell(f);
+    ESP_LOGI(TAG, "📊 File size: %ld bytes", size);
+    if (size <= 0 || size > 8 * 1024) {
+        ESP_LOGE(TAG, "❌ Invalid size: %ld", size);
+        fclose(f);
+        return NULL;
+    }
+    fseek(f, 0, SEEK_SET);
+
+    char* buffer = malloc(size + 1);
+    if (!buffer) {
+        ESP_LOGE(TAG, "❌ malloc failed for size: %ld", size);
+        fclose(f);
+        return NULL;
+    }
+
+    size_t read = fread(buffer, 1, size, f);
+    fclose(f);
+
+    if (read != size) {
+        ESP_LOGE(TAG, "❌ Partial read: %zu of %ld", read, size);
+        free(buffer);
+        return NULL;
+    }
+
+    buffer[size] = '\0';
+    //ESP_LOGI(TAG, "📄 Read: %s", buffer);  // ← можно временно
+
+    cJSON* json = cJSON_Parse(buffer);
+    if (!json) {
+        ESP_LOGE(TAG, "❌ Parse error in: %s", path);
+        ESP_LOGE(TAG, "Content: %s", buffer);
+    }
+
+    free(buffer);
+    return json;
+}
+
+// === Запись JSON в файл ===
+bool write_json_to_file(const char* path, cJSON* json) {
+    char* str = cJSON_PrintUnformatted(json);
+    if (!str) {
+        return false;
+    }
+
+    FILE* f = fopen(path, "w");
+    if (!f) {
+        free(str);
+        return false;
+    }
+
+    fwrite(str, 1, strlen(str), f);
+    fclose(f);
+    free(str);
+
+    ESP_LOGI(TAG, "Saved: %s", path);
+    return true;
+}

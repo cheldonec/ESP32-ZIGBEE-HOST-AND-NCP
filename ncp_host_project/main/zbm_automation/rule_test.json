@@ -1,0 +1,29 @@
+{
+  "id": "rule_1",
+  "name": "Включение света при движении",
+  "enabled": true,
+  "priority": 10,
+  "exec_mode": 0,
+  "allowing_logic_op": 0,
+  "cause_trigger": {
+    "guid": "0xAB2D:1:rep:0006:FD",
+    "cond": 0,
+    "expected_type": 1,
+    "value": 1
+  },
+  "allowing_triggers": [
+    {
+      "guid": "var_0",
+      "cond": 2,
+      "expected_type": 1,
+      "value": 0
+    }
+  ],
+  "actions": [
+    {
+      "type": 0,
+      "cmd_guid": "0x7169:1:cmd:0006:0000",
+      "params": { "value": 1 }
+    }
+  ]
+}

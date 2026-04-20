@@ -130,6 +130,12 @@ zbm_cluster_attribute_t* zbm_find_attr_by_key_safe(uint16_t short_addr,
                                                    uint16_t cluster_id,
                                                    uint16_t attr_id);
 
+                                                   /**
+ * @brief Безопасный поиск кастомного репорта по GUID
+ */
+zbm_cluster_custom_report_cmd_t* zbm_find_custom_report_by_guid_safe(const char* guid);
+
+
 /**
  * @brief Найти стандартную команду по GUID
  */

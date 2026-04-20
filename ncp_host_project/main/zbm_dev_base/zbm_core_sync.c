@@ -303,6 +303,14 @@ zbm_cluster_attribute_t* zbm_find_attr_by_key_safe(uint16_t short_addr,
     return attr;
 }
 
+zbm_cluster_custom_report_cmd_t* zbm_find_custom_report_by_guid_safe(const char* guid) {
+    if (!guid) return NULL;
+    zbm_core_sync_lock();
+    zbm_cluster_custom_report_cmd_t* result = zbm_find_custom_report_by_guid(guid);
+    zbm_core_sync_unlock();
+    return result;
+}
+
 
 zbm_cluster_standart_cmd_t* zbm_find_cmd_by_guid_safe(const char* guid)
 {

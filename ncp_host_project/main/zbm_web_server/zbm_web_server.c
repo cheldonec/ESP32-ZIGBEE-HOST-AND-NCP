@@ -50,12 +50,31 @@ void ws_send_async_task(void *arg);
 esp_err_t get_index_html_req_handler(httpd_req_t *req);
 esp_err_t get_from_ws_handler(httpd_req_t *req);
 
+void sanitize_utf8(char* str) {
+    while (*str) {
+        if ((*str & 0x80) == 0) { // ASCII
+            str++;
+        } else if ((*str & 0xE0) == 0xC0 && (str[1] & 0xC0) == 0x80) { // 2-byte
+            str += 2;
+        } else if ((*str & 0xF0) == 0xE0 && (str[1] & 0xC0) == 0x80 && (str[2] & 0xC0) == 0x80) { // 3-byte
+            str += 3;
+        } else if ((*str & 0xF8) == 0xF0 && (str[1] & 0xC0) == 0x80 && (str[2] & 0xC0) == 0x80 && (str[3] & 0xC0) == 0x80) { // 4-byte
+            str += 4;
+        } else {
+            *str = '?'; // Заменяем битый символ
+            str++;
+        }
+    }
+}
+
 // отправка JSON
 static void send_json_event_to_ws_safe(cJSON* event) {
     if (xSemaphoreTake(json_buffer_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
         int len = cJSON_PrintPreallocated(event, json_buffer_for_response, sizeof(json_buffer_for_response), false);
         if (len > 0) {
             cJSON_Minify(json_buffer_for_response);
+            // ✅ Санитизация
+            sanitize_utf8(json_buffer_for_response);
             ws_async_data_t *async_data = malloc(sizeof(ws_async_data_t));
             if (async_data) {
                 async_data->hd = server_handle;
@@ -73,6 +92,51 @@ static void send_json_event_to_ws_safe(cJSON* event) {
 }
 //задача для приёма атрибутов и отправки их в UI
 void ws_update_task(void *pvParameters) {
+    zbm_ws_update_msg_t msg_attr;
+    zbm_ws_sys_notify_msg_t msg_sys;
+    static const char* TAG = "WS_UPDATE_TASK";
+
+    ESP_LOGI(TAG, "WS Update Task started");
+
+    while (1) {
+        BaseType_t attr_received = xQueueReceive(ws_update_queue, &msg_attr, pdMS_TO_TICKS(10));
+        if (attr_received == pdTRUE) {
+            ESP_LOGD(TAG, "Received attribute update for GUID: %s", msg_attr.guid);
+
+            cJSON *event = cJSON_CreateObject();
+            cJSON_AddStringToObject(event, "event", "attribute_updated");
+            cJSON_AddStringToObject(event, "guid", msg_attr.guid);
+            cJSON_AddNumberToObject(event, "type", msg_attr.data_type);
+            cJSON *j_value_bytes = cJSON_CreateIntArray((int*)msg_attr.value, msg_attr.value_len);
+            cJSON_AddItemToObject(event, "value_bytes", j_value_bytes);
+
+            send_json_event_to_ws_safe(event);
+            cJSON_Delete(event);
+        }
+
+        BaseType_t sys_received = xQueueReceive(ws_sys_notify_queue, &msg_sys, pdMS_TO_TICKS(10));
+        if (sys_received == pdTRUE) {
+            ESP_LOGI(TAG, "📤 SysNotify: %s — %s", msg_sys.event_type, msg_sys.message);
+
+            cJSON *event = cJSON_CreateObject();
+            cJSON_AddStringToObject(event, "event", "system_notify");
+            cJSON_AddStringToObject(event, "type", msg_sys.event_type);
+            cJSON_AddStringToObject(event, "message", msg_sys.message);
+            if (msg_sys.data) {
+                // ✅ Дублируем, не передаём владение!
+                cJSON_AddItemToObject(event, "data", cJSON_Duplicate(msg_sys.data, true));
+            }
+
+            send_json_event_to_ws_safe(event);
+            cJSON_Delete(event); // ✅ Теперь безопасно
+
+            // ❌ Не обнуляем msg_sys.data — он не владеет памятью
+            // memset(&msg_sys, 0, sizeof(msg_sys)); // ← УДАЛИ ЭТУ СТРОКУ!
+        }
+    }
+}
+
+void ws_update_task_old(void *pvParameters) {
     zbm_ws_update_msg_t msg_attr;
     zbm_ws_sys_notify_msg_t msg_sys;
     static const char* TAG = "WS_UPDATE_TASK";
@@ -154,6 +218,19 @@ bool zbm_ws_send_sys_notify(const char* event_type, const char* message, cJSON* 
     }
 
     return true;
+}
+
+void ws_notify_automation_rule_fired(const char* rule_id, const char* trigger_guid) {
+    if (!rule_id) return;
+
+    cJSON* data = cJSON_CreateObject();
+    cJSON_AddStringToObject(data, "rule_id", rule_id);
+    if (trigger_guid) {
+        cJSON_AddStringToObject(data, "trigger_guid", trigger_guid);
+    }
+
+    zbm_ws_send_sys_notify("automation", "rule_fired", data);
+    // владение data передаётся в zbm_ws_send_sys_notify, будет удалено автоматически
 }
 
 // Асинхронная отправка WS
@@ -614,6 +691,115 @@ httpd_uri_t uri_update_dev_friendly_name = {
     .user_ctx  = NULL
 };
 
+//====                 RULES                 ====
+
+httpd_uri_t api_rules_get_vars = {
+    .uri       = "/api/vars",
+    .method    = HTTP_GET,
+    .handler   = zbm_rest_api_get_vars_handler
+};
+
+httpd_uri_t api_rules_post_vars = {
+    .uri       = "/api/var/:idx",
+    .method    = HTTP_POST,
+    .handler   = zbm_rest_api_post_var_handler
+};
+
+httpd_uri_t api_rules_get = {
+    .uri       = "/api/rules",
+    .method    = HTTP_GET,
+    .handler   = zbm_rest_api_get_rules_handler
+};
+
+
+httpd_uri_t api_rule_get = {
+    .uri       = "/api/rule/*",  // wildcard
+    .method    = HTTP_GET,
+    .handler   = zbm_rest_api_get_rule_by_id_handler
+};
+
+
+httpd_uri_t api_rule_post = {
+    .uri       = "/api/rule",
+    .method    = HTTP_POST,
+    .handler   = zbm_rest_api_post_rule_handler
+};
+
+
+httpd_uri_t api_rule_delete = {
+    .uri       = "/api/rule/*",
+    .method    = HTTP_DELETE,
+    .handler   = zbm_rest_api_delete_rule_handler
+};
+
+
+httpd_uri_t api_rule_enable = {
+    .uri       = "/api/rule/*/enable",
+    .method    = HTTP_POST,
+    .handler   = zbm_rest_api_post_rule_enable_handler
+};
+
+
+httpd_uri_t api_rule_disable = {
+    .uri       = "/api/rule/*/disable",
+    .method    = HTTP_POST,
+    .handler   = zbm_rest_api_post_rule_disable_handler
+};
+
+httpd_uri_t api_rule_run = {
+    .uri       = "/api/rule/*/run",
+    .method    = HTTP_POST,
+    .handler   = zbm_rest_api_post_rule_run_handler
+};
+
+//====                 END RULES             ====
+
+//====                 BEHAVIORS                 ====
+
+static httpd_uri_t api_behaviors_get = {
+    .uri       = "/api/behaviors",
+    .method    = HTTP_GET,
+    .handler   = zbm_rest_api_get_behaviors_handler
+};
+
+static httpd_uri_t api_behavior_get = {
+    .uri       = "/api/behavior/*",
+    .method    = HTTP_GET,
+    .handler   = zbm_rest_api_get_behavior_by_id_handler
+};
+
+static httpd_uri_t api_behavior_post = {
+    .uri       = "/api/behavior",
+    .method    = HTTP_POST,
+    .handler   = zbm_rest_api_post_behavior_handler
+};
+
+static httpd_uri_t api_behavior_delete = {
+    .uri       = "/api/behavior/*",
+    .method    = HTTP_DELETE,
+    .handler   = zbm_rest_api_delete_behavior_handler
+};
+
+static httpd_uri_t api_behavior_enable = {
+    .uri       = "/api/behavior/*/enable",
+    .method    = HTTP_POST,
+    .handler   = zbm_rest_api_post_behavior_enable_handler
+};
+
+static httpd_uri_t api_behavior_disable = {
+    .uri       = "/api/behavior/*/disable",
+    .method    = HTTP_POST,
+    .handler   = zbm_rest_api_post_behavior_disable_handler
+};
+
+static httpd_uri_t api_behavior_run = {
+    .uri       = "/api/behavior/*/run",
+    .method    = HTTP_POST,
+    .handler   = zbm_rest_api_post_behavior_run_handler
+};
+
+//===                  END BEHAVIORS             ===
+
 // === SPIFFS API ===
 // === Для /api/spiffs/config ===
 // === Для config ===
@@ -798,14 +984,14 @@ void start_webserver(void)
     }
 
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
-    config.stack_size = 16384;
-    config.core_id = 1;
+    config.stack_size = 17408;
+    config.core_id = 0;
     config.send_wait_timeout = 5;
     config.recv_wait_timeout = 5;
     config.task_priority = 5;
     config.lru_purge_enable = true;
     config.uri_match_fn = httpd_uri_match_wildcard;
-    config.max_uri_handlers = 40;
+    config.max_uri_handlers = 56;
     config.max_open_sockets = 8;
 
     if (httpd_start(&server_handle, &config) == ESP_OK) {
@@ -840,6 +1026,23 @@ void start_webserver(void)
         httpd_register_uri_handler(server_handle, &uri_active_endpoint);
         httpd_register_uri_handler(server_handle, &uri_simple_desc);
         httpd_register_uri_handler(server_handle, &uri_update_dev_friendly_name);
+        httpd_register_uri_handler(server_handle, &api_rules_get);
+        httpd_register_uri_handler(server_handle, &api_rule_get);
+        httpd_register_uri_handler(server_handle, &api_rule_post);
+        httpd_register_uri_handler(server_handle, &api_rule_delete);//22
+        httpd_register_uri_handler(server_handle, &api_rule_enable);
+        httpd_register_uri_handler(server_handle, &api_rule_disable);
+        httpd_register_uri_handler(server_handle, &api_rule_run);
+        httpd_register_uri_handler(server_handle, &api_rules_get_vars);
+        httpd_register_uri_handler(server_handle, &api_rules_post_vars);
+        // === Behaviors API ===
+        httpd_register_uri_handler(server_handle, &api_behaviors_get);
+        httpd_register_uri_handler(server_handle, &api_behavior_get);
+        httpd_register_uri_handler(server_handle, &api_behavior_post);
+        httpd_register_uri_handler(server_handle, &api_behavior_delete);
+        httpd_register_uri_handler(server_handle, &api_behavior_enable);
+        httpd_register_uri_handler(server_handle, &api_behavior_disable);
+        httpd_register_uri_handler(server_handle, &api_behavior_run);
         // === SPIFFS API ===
         // config
         httpd_register_uri_handler(server_handle, &uri_spiffs_config_ls);
@@ -863,7 +1066,7 @@ void start_webserver(void)
         httpd_register_uri_handler(server_handle, &uri_spiffs_webui_ls);
         httpd_register_uri_handler(server_handle, &uri_spiffs_webui_get_file);
         httpd_register_uri_handler(server_handle, &uri_spiffs_webui_save_file);
-        httpd_register_uri_handler(server_handle, &uri_spiffs_webui_delete_file);
+        httpd_register_uri_handler(server_handle, &uri_spiffs_webui_delete_file);//40
 
         // backup/restore
         httpd_register_uri_handler(server_handle, &uri_spiffs_backup);

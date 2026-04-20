@@ -7,6 +7,7 @@ const tabs = [
   { name: 'Устройства', path: '/', icon: '🔌' },
   { name: 'Связи', path: '/links', icon: '🔗' },
   { name: 'Сценарии', path: '/scenes', icon: '🎬' },
+  { name: 'Правила', path: '/rules', icon: '📋' },
   { name: 'Настройки', path: '/settings', icon: '⚙️' },
   { name: 'Мониторинг', path: '/monitor', icon: '📊' },
 ];

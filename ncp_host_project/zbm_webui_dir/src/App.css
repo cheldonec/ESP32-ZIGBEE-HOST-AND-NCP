@@ -544,20 +544,32 @@ code {
   border-radius: 6px;
 }
 
+/* На мобильных — одно поле в строке */
+@media (max-width: 768px) {
+  .form-row {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 6px;
+  }
+}
+
 .form-label {
   width: 140px;
   font-size: 13px;
   color: #ccc;
 }
 
+/* === Формы в настройках === */
 .form-input {
   flex: 1;
-  padding: 8px 12px;
+  padding: 8px 12px;           /* ← стандартные отступы */
   background: #242424;
   border: 1px solid #444;
   border-radius: 4px;
   color: #fff;
   font-size: 13px;
+  min-height: 36px;            /* ← фиксируем высоту */
+  transition: border-color 0.2s;
 }
 
 .form-input:focus {
@@ -572,6 +584,22 @@ code {
   cursor: not-allowed;
   font-style: normal;
   opacity: 1;
+}
+
+/* Фокус — только для активных */
+.form-input:focus:not([disabled]) {
+  outline: none;
+  border-color: #2563eb;
+}
+
+/* Явно задаём курсор для активных select */
+.form-input:not([disabled]) {
+  cursor: pointer;
+}
+
+/* Для select — особенно важно */
+.form-input:not([disabled]):hover {
+  border-color: #555;
 }
 
 .form-static-value {

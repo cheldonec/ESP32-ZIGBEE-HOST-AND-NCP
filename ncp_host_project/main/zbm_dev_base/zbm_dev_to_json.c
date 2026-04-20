@@ -78,7 +78,11 @@ cJSON* device_to_json(zbm_dev_t* dev) {
                 cJSON_AddStringToObject(jattr, "guid", attr->guid);
                 cJSON_AddNumberToObject(jattr, "type", attr->data_type);
                 cJSON_AddNumberToObject(jattr, "size", attr->data_size);
-
+                // === Поведение ===
+                if (strlen(attr->behavior_id) > 0) {
+                    cJSON_AddStringToObject(jattr, "behavior_id", attr->behavior_id);
+                }
+                cJSON_AddBoolToObject(jattr, "behavior_enabled", attr->behavior_enabled);
                 // === Обработка значения атрибута в зависимости от типа ===
                 switch (attr->data_type) {
                     // ===== Булево =====
@@ -345,6 +349,11 @@ cJSON* device_to_json(zbm_dev_t* dev) {
                 cJSON_AddStringToObject(jrep, "guid", rep->guid);
                 cJSON_AddNumberToObject(jrep, "type", rep->data_type);
                 cJSON_AddNumberToObject(jrep, "size", rep->data_size);
+                // === Поведение ===
+                if (strlen(rep->behavior_id) > 0) {
+                    cJSON_AddStringToObject(jrep, "behavior_id", rep->behavior_id);
+                }
+                cJSON_AddBoolToObject(jrep, "behavior_enabled", rep->behavior_enabled);
 
                 if (rep->data_size == 1) {
                     cJSON_AddNumberToObject(jrep, "value", *(uint8_t*)rep->p_value);
@@ -385,7 +394,11 @@ cJSON* device_to_json(zbm_dev_t* dev) {
                 cJSON_AddStringToObject(jattr, "guid", attr->guid);
                 cJSON_AddNumberToObject(jattr, "type", attr->data_type);
                 cJSON_AddNumberToObject(jattr, "size", attr->data_size);
-
+                // === Поведение ===
+                if (strlen(attr->behavior_id) > 0) {
+                    cJSON_AddStringToObject(jattr, "behavior_id", attr->behavior_id);
+                }
+                cJSON_AddBoolToObject(jattr, "behavior_enabled", attr->behavior_enabled);
                 // === Копируем обработку значения из оригинала ===
                 switch (attr->data_type) {
                     case ZBM_ATTR_TYPE_BOOL: {
@@ -589,7 +602,11 @@ cJSON* device_to_json(zbm_dev_t* dev) {
                 cJSON_AddStringToObject(jrep, "guid", rep->guid);
                 cJSON_AddNumberToObject(jrep, "type", rep->data_type);
                 cJSON_AddNumberToObject(jrep, "size", rep->data_size);
-
+                // === Поведение ===
+                if (strlen(rep->behavior_id) > 0) {
+                    cJSON_AddStringToObject(jrep, "behavior_id", rep->behavior_id);
+                }
+                cJSON_AddBoolToObject(jrep, "behavior_enabled", rep->behavior_enabled);
                 if (rep->data_size == 1) {
                     cJSON_AddNumberToObject(jrep, "value", *(uint8_t*)rep->p_value);
                 } else {

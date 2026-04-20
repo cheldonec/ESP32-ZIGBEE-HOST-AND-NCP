@@ -9,6 +9,7 @@
 #include "zbm_spiffs_helper.h"
 #include "zbm_core_sync.h" 
 #include "zbm_ncp_connect.h"
+#include "zbm_automation_v2.h"
 
 void app_main(void)
 {
@@ -28,6 +29,9 @@ void app_main(void)
 
     // Подгружаем сохранённые устройства и координатор
     zbm_load_all_devices_from_spiffs_and_restore();
+
+    zb_automation_v2_init();  // инициализируем движок правил
+
 
     ret = zbm_ncp_connect_start();
 

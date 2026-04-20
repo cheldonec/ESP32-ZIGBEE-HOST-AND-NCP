@@ -1,8 +1,8 @@
+// src/components/Settings.js
 import { useState, useEffect } from 'react';
 
-export default function Settings() {
+export default function Settings({ activeSection = 'network' }) {
   const [config, setConfig] = useState({
-    // Zigbee & WiFi
     pan_id: '',
     radio_channel: '',
     coordinator_name: '',
@@ -13,7 +13,6 @@ export default function Settings() {
     wifi_sta_ssid: '',
     wifi_sta_password: '',
 
-    // SSDP — только для чтения
     ssdp_manufacturer: 'CheldonecCo',
     ssdp_model_name: 'Zigbee NCP Host',
     ssdp_model_number: '1.0',
@@ -42,7 +41,6 @@ export default function Settings() {
           wifi_sta_ssid: data.wifi_sta_ssid || '',
           wifi_sta_password: data.wifi_sta_password || '',
 
-          // Загружаем SSDP-настройки (только для просмотра)
           ssdp_manufacturer: data.ssdp_manufacturer || prev.ssdp_manufacturer,
           ssdp_model_name: data.ssdp_model_name || prev.ssdp_model_name,
           ssdp_model_number: data.ssdp_model_number || prev.ssdp_model_number,
@@ -59,7 +57,6 @@ export default function Settings() {
   const handleChange = (e) => {
     const { name, value } = e.target;
     if (name === 'hostname') {
-      // Удаляем .local, если вдруг введено
       const clean = value.replace(/\.local$/i, '');
       setConfig(prev => ({ ...prev, [name]: clean }));
     } else {
@@ -82,8 +79,6 @@ export default function Settings() {
       wifi_ap_password: config.wifi_ap_password,
       wifi_sta_ssid: config.wifi_sta_ssid,
       wifi_sta_password: config.wifi_sta_password,
-
-      // SSDP — только для информации
       ssdp_manufacturer: config.ssdp_manufacturer,
       ssdp_model_name: config.ssdp_model_name,
       ssdp_model_number: config.ssdp_model_number,
@@ -137,105 +132,81 @@ export default function Settings() {
     }
   };
 
-  return (
-    <div className="settings-page">
-      {status && (
-        <div className={`mb-4 p-3 rounded text-sm ${status.includes('Ошибка') ? 'bg-red-900/30 text-red-300' : 'bg-green-900/30 text-green-300'}`}>
-          {status}
-        </div>
-      )}
-
-      {/*<div className="settings-scroll-container">*/}
-        {/*<div className="settings-grid">*/}
-          
-          {/* === Карточка: Zigbee & Wi-Fi === */}
-          <div className="panel">
-            <div className="panel-header">📶 Параметры сети</div>
-            <div className="panel-body">
-              <form onSubmit={handleSubmit} className="form-fields">
-
-                {/* Сервер (mDNS) */}
-                <div className="form-row">
+  const renderSection = () => {
+    if (activeSection === 'network') {
+      return (
+        <div className="panel">
+          <div className="panel-header">📶 Параметры сети</div>
+          <div className="panel-body">
+            <form onSubmit={handleSubmit} className="form-fields">
+              <div className="form-row">
                 <label className="form-label">Сервер</label>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flex: 1 }}>
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <input
-                        type="text"
-                        name="hostname"
-                        value={config.hostname}
-                        onChange={handleChange}
-                        placeholder="Например: zigbee-gw"
-                        className="form-input"
-                        style={{ width: '100%', minWidth: 0 }}
-                      />
-                    </div>
-                    <span style={{ whiteSpace: 'nowrap', fontSize: '11px', color: '#666' }}>
-                      <code>http://{config.hostname}.local</code>
-                    </span>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flex: 1 }}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <input
+                      type="text"
+                      name="hostname"
+                      value={config.hostname}
+                      onChange={handleChange}
+                      placeholder="Например: zigbee-gw"
+                      className="form-input"
+                      style={{ width: '100%', minWidth: 0 }}
+                    />
                   </div>
-                  {/*<p className="form-hint" style={{ gridColumn: 'span 2' }}>
-                    Адрес для доступа: <code>http://{config.hostname}.local</code>
-                  </p>*/}
+                  <span style={{ whiteSpace: 'nowrap', fontSize: '11px', color: '#666' }}>
+                    <code>http://{config.hostname}.local</code>
+                  </span>
                 </div>
-
-                {/* PAN ID */}
-                <div className="form-row">
-                  <label className="form-label">PAN ID</label>
-                  <input
-                    type="number"
-                    name="pan_id"
-                    value={config.pan_id}
-                    onChange={handleChange}
-                    min="0"
-                    max="65535"
-                    className="form-input"
-                    required
-                  />
-                </div>
-
-                {/* Radio Channel */}
-                <div className="form-row">
-                  <label className="form-label">Канал Zigbee</label>
-                  <select
-                    name="radio_channel"
-                    value={config.radio_channel}
-                    onChange={handleChange}
-                    className="form-input"
-                    required
-                  >
-                    {[11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26].map(ch => (
-                      <option key={ch} value={ch}>Канал {ch}</option>
-                    ))}
-                  </select>
-                </div>
-
-                {/* Имя координатора */}
-                <div className="form-row">
-                  <label className="form-label">Имя координатора</label>
-                  <input
-                    type="text"
-                    name="coordinator_name"
-                    value={config.coordinator_name}
-                    onChange={handleChange}
-                    placeholder="Например: Main Coordinator"
-                    className="form-input"
-                  />
-                </div>
-
-                {/* Текущий режим Wi-Fi */}
-                <div className="form-row">
-                  <label className="form-label">Режим Wi-Fi</label>
-                  <div className="form-static-value">
-                    <div className="form-static-text">
-                      {config.wifi_mode === 'ap' && 'Точка доступа (AP)'}
-                      {config.wifi_mode === 'sta' && 'Клиент (STA)'}
-                      {config.wifi_mode === 'ap+sta' && 'AP + STA'}
-                      {!['ap', 'sta', 'ap+sta'].includes(config.wifi_mode) && 'Неизвестно'}
-                    </div>
+              </div>
+              <div className="form-row">
+                <label className="form-label">PAN ID</label>
+                <input
+                  type="number"
+                  name="pan_id"
+                  value={config.pan_id}
+                  onChange={handleChange}
+                  min="0"
+                  max="65535"
+                  className="form-input"
+                  required
+                />
+              </div>
+              <div className="form-row">
+                <label className="form-label">Канал Zigbee</label>
+                <select
+                  name="radio_channel"
+                  value={config.radio_channel}
+                  onChange={handleChange}
+                  className="form-input"
+                  required
+                >
+                  {[11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26].map(ch => (
+                    <option key={ch} value={ch}>Канал {ch}</option>
+                  ))}
+                </select>
+              </div>
+              <div className="form-row">
+                <label className="form-label">Имя координатора</label>
+                <input
+                  type="text"
+                  name="coordinator_name"
+                  value={config.coordinator_name}
+                  onChange={handleChange}
+                  placeholder="Например: Main Coordinator"
+                  className="form-input"
+                />
+              </div>
+              <div className="form-row">
+                <label className="form-label">Режим Wi-Fi</label>
+                <div className="form-static-value">
+                  <div className="form-static-text">
+                    {config.wifi_mode === 'ap' && 'Точка доступа (AP)'}
+                    {config.wifi_mode === 'sta' && 'Клиент (STA)'}
+                    {config.wifi_mode === 'ap+sta' && 'AP + STA'}
+                    {!['ap', 'sta', 'ap+sta'].includes(config.wifi_mode) && 'Неизвестно'}
                   </div>
                 </div>
-
-                {/* Настройки AP */}
+              </div>
               <div className="form-row">
                 <label className="form-label">Настройки AP</label>
                 <div className="form-ap-info">
@@ -268,8 +239,6 @@ export default function Settings() {
                   </div>
                 </div>
               </div>
-
-                {/* Настройки STA */}
               <div className="form-row">
                 <label className="form-label">Настройки STA</label>
                 <div className="form-ap-info">
@@ -302,94 +271,71 @@ export default function Settings() {
                   </div>
                 </div>
               </div>
-
-                {/* Кнопки */}
-                <div className="form-actions">
-                  <button
-                    type="submit"
-                    disabled={isSaving}
-                    className={`btn-primary ${isSaving ? 'btn-disabled' : ''}`}
-                  >
-                    {isSaving ? 'Сохранение...' : 'Сохранить'}
-                  </button>
-                  <button type="button" onClick={handleReboot} className="btn-danger">
-                    Перезагрузить
-                  </button>
-                </div>
-              </form>
-            </div>
+              <div className="form-actions">
+                <button
+                  type="submit"
+                  disabled={isSaving}
+                  className={`btn-primary ${isSaving ? 'btn-disabled' : ''}`}
+                >
+                  {isSaving ? 'Сохранение...' : 'Сохранить'}
+                </button>
+                <button type="button" onClick={handleReboot} className="btn-danger">
+                  Перезагрузить
+                </button>
+              </div>
+            </form>
           </div>
+        </div>
+      );
+    }
 
-          {/* === Карточка: SSDP (UPnP) === */}
-          <div className="panel">
-            <div className="panel-header">🌐 Информация о SSDP</div>
-            <div className="panel-body">
-              <div className="form-fields">
-                <div className="form-row">
-                  <label className="form-label">Имя в сети</label>
-                  <input
-                    type="text"
-                    value={config.coordinator_name}
-                    disabled
-                    className="form-input"
-                  />
-                </div>
-
-                <div className="form-row">
-                  <label className="form-label">Производитель</label>
-                  <input
-                    type="text"
-                    value={config.ssdp_manufacturer}
-                    disabled
-                    className="form-input"
-                  />
-                </div>
-
-                <div className="form-row">
-                  <label className="form-label">Модель</label>
-                  <input
-                    type="text"
-                    value={config.ssdp_model_name}
-                    disabled
-                    className="form-input"
-                  />
-                </div>
-
-                <div className="form-row">
-                  <label className="form-label">Номер модели</label>
-                  <input
-                    type="text"
-                    value={config.ssdp_model_number}
-                    disabled
-                    className="form-input"
-                  />
-                </div>
-
-                <div className="form-row">
-                  <label className="form-label">Серийный номер</label>
-                  <input
-                    type="text"
-                    value={config.ssdp_serial_number}
-                    disabled
-                    className="form-input"
-                  />
-                </div>
-
-                <div className="form-row">
-                  <label className="form-label">Server Name</label>
-                  <input
-                    type="text"
-                    value={config.ssdp_server_name}
-                    disabled
-                    className="form-input"
-                  />
-                </div>
+    if (activeSection === 'ssdp') {
+      return (
+        <div className="panel">
+          <div className="panel-header">🌐 Информация о SSDP</div>
+          <div className="panel-body">
+            <div className="form-fields">
+              <div className="form-row">
+                <label className="form-label">Имя в сети</label>
+                <input type="text" value={config.coordinator_name} disabled className="form-input" />
+              </div>
+              <div className="form-row">
+                <label className="form-label">Производитель</label>
+                <input type="text" value={config.ssdp_manufacturer} disabled className="form-input" />
+              </div>
+              <div className="form-row">
+                <label className="form-label">Модель</label>
+                <input type="text" value={config.ssdp_model_name} disabled className="form-input" />
+              </div>
+              <div className="form-row">
+                <label className="form-label">Номер модели</label>
+                <input type="text" value={config.ssdp_model_number} disabled className="form-input" />
+              </div>
+              <div className="form-row">
+                <label className="form-label">Серийный номер</label>
+                <input type="text" value={config.ssdp_serial_number} disabled className="form-input" />
+              </div>
+              <div className="form-row">
+                <label className="form-label">Server Name</label>
+                <input type="text" value={config.ssdp_server_name} disabled className="form-input" />
               </div>
             </div>
           </div>
-        {/*</div>*/}
-      {/*</div>*/}
+        </div>
+      );
+    }
 
+    return <div>Раздел не найден</div>;
+  };
+
+  return (
+    <div className="settings-page">
+      {status && (
+        <div className={`mb-4 p-3 rounded text-sm ${status.includes('Ошибка') ? 'bg-red-900/30 text-red-300' : 'bg-green-900/30 text-green-300'}`}>
+          {status}
+        </div>
+      )}
+      {renderSection()}
       <div className="settings-footer">
         <p>После сохранения может потребоваться переподключение к точке доступа.</p>
       </div>

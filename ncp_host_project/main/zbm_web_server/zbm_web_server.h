@@ -66,6 +66,11 @@ zbm_ws_send_sys_notify("wifi_mode_changed", "Switched to AP mode for setup", dat
 */
 bool zbm_ws_send_sys_notify(const char* event_type, const char* message, cJSON* data);
 
+/**
+ * @brief Отправить уведомление через WebSocket о срабатывании правила
+ */
+void ws_notify_automation_rule_fired(const char* rule_id, const char* trigger_guid);
+
 
 
 #endif

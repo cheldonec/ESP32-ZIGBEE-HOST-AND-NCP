@@ -1,0 +1,27 @@
+{
+  "id": "bhv_light_dim",
+  "name": "Dim light after 30s",
+  "enabled": true,
+  "conditions": [
+    {
+      "guid": "var_1",
+      "cond": 0,
+      "expected_type": 33,
+      "value": 100
+    }
+  ],
+  "logic_op": 0,
+  "actions": [
+    {
+      "type": 0,
+      "cmd_guid": "dev_DE:AD:BE:EF:00:01:02:03_ep_1_cl_0x0008_cmd_0",
+      "params": {
+        "value": 50
+      }
+    },
+    {
+      "type": 7,
+      "var_idx": 1
+    }
+  ]
+}

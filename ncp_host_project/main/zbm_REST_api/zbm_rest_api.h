@@ -59,4 +59,81 @@ esp_err_t zbm_rest_api_post_simple_descriptor_handler(httpd_req_t* req);
  * @return esp_err_t
  */
 esp_err_t zbm_rest_api_post_update_dev_friendly_name_handler(httpd_req_t* req);
+
+// Правила
+esp_err_t zbm_rest_api_get_vars_handler(httpd_req_t* req);
+
+esp_err_t zbm_rest_api_post_var_handler(httpd_req_t* req);
+/**
+ * @brief Получить список правил (кратко)
+ */
+esp_err_t zbm_rest_api_get_rules_handler(httpd_req_t* req);
+
+/**
+ * @brief Получить полное правило по ID
+ */
+esp_err_t zbm_rest_api_get_rule_by_id_handler(httpd_req_t* req);
+
+/**
+ * @brief Создать или обновить правило
+ */
+esp_err_t zbm_rest_api_post_rule_handler(httpd_req_t* req);
+
+/**
+ * @brief Удалить правило
+ */
+esp_err_t zbm_rest_api_delete_rule_handler(httpd_req_t* req);
+
+/**
+ * @brief Включить правило
+ */
+esp_err_t zbm_rest_api_post_rule_enable_handler(httpd_req_t* req);
+
+/**
+ * @brief Выключить правило
+ */
+esp_err_t zbm_rest_api_post_rule_disable_handler(httpd_req_t* req);
+
+/**
+ * @brief Ручной запуск правила
+ */
+// POST /api/rule/{id}/run
+esp_err_t zbm_rest_api_post_rule_run_handler(httpd_req_t* req);
+
+// === Behaviors API ===
+
+/**
+ * @brief GET /api/behaviors — получить список поведений
+ */
+esp_err_t zbm_rest_api_get_behaviors_handler(httpd_req_t* req);
+
+/**
+ * @brief GET /api/behavior/{id} — получить полное поведение
+ */
+esp_err_t zbm_rest_api_get_behavior_by_id_handler(httpd_req_t* req);
+
+/**
+ * @brief POST /api/behavior — создать или обновить поведение
+ */
+esp_err_t zbm_rest_api_post_behavior_handler(httpd_req_t* req);
+
+/**
+ * @brief DELETE /api/behavior/{id} — удалить поведение
+ */
+esp_err_t zbm_rest_api_delete_behavior_handler(httpd_req_t* req);
+
+/**
+ * @brief POST /api/behavior/{id}/enable — включить поведение
+ */
+esp_err_t zbm_rest_api_post_behavior_enable_handler(httpd_req_t* req);
+
+/**
+ * @brief POST /api/behavior/{id}/disable — выключить поведение
+ */
+esp_err_t zbm_rest_api_post_behavior_disable_handler(httpd_req_t* req);
+
+/**
+ * @brief POST /api/behavior/{id}/run — ручной запуск поведения
+ */
+esp_err_t zbm_rest_api_post_behavior_run_handler(httpd_req_t* req);
 #endif

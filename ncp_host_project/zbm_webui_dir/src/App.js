@@ -3,15 +3,18 @@ import { useState, useEffect } from 'react';
 import './App.css';
 
 // Компоненты
-import DeviceSidebar from './components/DeviceSidebar';
+import Sidebar from './components/Sidebar';
+import Header from './components/Header';
+import Footer from './components/Footer';
 import DeviceDetails from './components/DeviceDetails';
 import Settings from './components/Settings';
 import NotificationProvider from './components/NotificationProvider';
 import { useNotification } from './context/NotificationContext';
 import { useServerHealth } from './hooks/useServerHealth';
-import Navbar from './components/Navbar'; 
-// ✅ Импортируем useDevices с WebSocket
+import Navbar from './components/Navbar';
 import { useDevices } from './hooks/useDevices';
+import BehaviorsPanel from './components/BehaviorsPanel';
+import RuleEditor from './components/RuleEditor';
 
 // Хук для координатора
 const useCoordinator = () => {
@@ -38,16 +41,12 @@ const useCoordinator = () => {
   return { coordinator, loading };
 };
 
-
-
-// src/App.js
-
 function App() {
   const [currentPath, setCurrentPath] = useState(window.location.hash || '#/');
+  const [selectedItem, setSelectedItem] = useState(null); // { type: 'device', id: '...' }
   const { coordinator } = useCoordinator();
-  const { addToast } = useNotification(); // ✅ Глобальный addToast
+  const { addToast } = useNotification();
 
-  // ✅ Список устройств с WebSocket
   const { devices: fullDevices } = useDevices({
     onAttributeUpdate: ({ attribute, value, isCustomReport, short, ep, clusterId, attrId }) => {
       const { name } = attribute;
@@ -86,19 +85,14 @@ function App() {
       addToast(message);
     },
 
-    // ✅ Новый колбэк: реакция на системные события
     onSystemNotify: ({ type, message, emoji, data }) => {
       let userMessage = message;
       if (type === 'device_renamed') {
         const friendlyName = data.friendly_name || 'Без имени';
         userMessage = `🔄 Устройство переименовано: ${friendlyName}`;
-      }
-
-      else if (type === 'zigbee_permit_join_started') {
+      } else if (type === 'zigbee_permit_join_started') {
         userMessage = '🌐 Сеть Zigbee открыта для новых устройств';
-      } 
-      
-      else if (type === 'zigbee_permit_join_stopped') {
+      } else if (type === 'zigbee_permit_join_stopped') {
         userMessage = '🛑 Сеть Zigbee закрыта';
       }
 
@@ -106,30 +100,14 @@ function App() {
     }
   });
 
-  // 🔁 Храним только IEEE выбранного устройства
-  const [selectedIEEE, setSelectedIEEE] = useState(null);
-  const selectedDevice = fullDevices.find(d => d.ieee_addr === selectedIEEE) || null;
+  const selectedDevice = fullDevices.find(d => d.ieee_addr === selectedItem?.id) || null;
 
-  const briefList = fullDevices.map(dev => ({
-    ieee: dev.ieee_addr,
-    short: parseInt(dev.short_addr.replace('0x', ''), 16),
-    friendly_name: dev.name || dev.friendly_name,
-    online: dev.is_online,
-    linkquality: dev.lqi
-  }));
-
-  const handleSelectDevice = (briefDev) => {
-    setSelectedIEEE(briefDev.ieee);
-  };
-
-  // Следим за хэшем URL
   useEffect(() => {
     const onHashChange = () => setCurrentPath(window.location.hash || '#/');
     window.addEventListener('hashchange', onHashChange);
     return () => window.removeEventListener('hashchange', onHashChange);
   }, []);
 
-  // Пока нет координатора
   if (!coordinator) {
     return (
       <div className="app-container">
@@ -140,7 +118,7 @@ function App() {
           <div className="device-list">
             <p>Загрузка данных...</p>
           </div>
-          <div className="device-details">
+          <div className="content-area">
             <p>Ожидание подключения к шлюзу...</p>
           </div>
         </div>
@@ -150,7 +128,6 @@ function App() {
 
   return (
     <div className="app-container">
-      {/* Шапка */}
       <header className="header">
         <div className="left">
           <div>
@@ -163,21 +140,32 @@ function App() {
         <div className="ieee">{coordinator.ieee_addr}</div>
       </header>
 
-      {/* Навигация */}
       <Navbar />
 
-      {/* Основной макет */}
       <div className="main-layout">
-        <DeviceSidebar
-          devices={briefList}
-          selectedIEEE={selectedIEEE}
-          onSelect={handleSelectDevice}
+        <Sidebar
+          currentTab={currentPath.replace('#', '')}
+          selectedItem={selectedItem}
+          onSelectItem={(type, id) => setSelectedItem({ type, id })}
         />
 
         <div className="content-area">
-          {currentPath === '#/settings' && <Settings />}
-          {currentPath === '#/' && <DeviceDetails key={selectedIEEE} device={selectedDevice} />}
-          {currentPath !== '#/' && currentPath !== '#/settings' && (
+          {currentPath === '#/settings' && selectedItem?.type === 'settings' && (
+            <Settings activeSection={selectedItem.id} />
+          )}
+          {currentPath === '#/' && selectedItem?.type === 'device' && (
+            <DeviceDetails key={selectedItem.id} device={selectedDevice} />
+          )}
+
+          {currentPath === '#/scenes' && selectedItem?.type === 'scene' && (
+            <BehaviorsPanel sceneId={selectedItem.id} />
+          )}
+
+          {currentPath === '#/rules' && selectedItem?.type === 'rule' && (
+            <RuleEditor ruleId={selectedItem.id} />  // ✅ Теперь используем модульный редактор
+          )}
+
+          {![ '/', '/settings', '/scenes', '/rules'].includes(currentPath.replace('#', '')) && (
             <div className="p-8 text-gray-500">
               <h2 className="text-xl font-semibold">🚧 Страница в разработке</h2>
               <p>{currentPath}</p>
@@ -191,17 +179,12 @@ function App() {
         <span>💾 Heap: 28 KB</span>
         <span>🗜️ Frag: 14%</span>
       </footer>
-
-      {/* ❌ Убираем локальные тосты — они теперь в NotificationProvider */}
-      {/* <div className="toast-container">...</div> */}
     </div>
   );
 }
 
-// ✅ Оборачиваем App в NotificationProvider
 export default function AppWithNotifications() {
-  useServerHealth(); // ← автоматически следит за состоянием
-
+  useServerHealth();
   return (
     <NotificationProvider>
       <App />

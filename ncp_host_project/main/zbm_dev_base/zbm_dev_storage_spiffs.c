@@ -18,9 +18,6 @@ static const char* TAG = "DEV_STORAGE";
 #define DEVICE_FILE_FORMAT SPIFFS_ZBM_CONF_MOUNT_POINT "/dev_0x%04X.json"
 
 
-
-static cJSON* read_json_from_file(const char* path);
-
 static uint8_t hex_char_to_byte(char c) {
     if (c >= '0' && c <= '9') return c - '0';
     if (c >= 'A' && c <= 'F') return c - 'A' + 10;
@@ -376,65 +373,9 @@ static void get_filename_by_ieee(char* buf, size_t size, const uint8_t* ieee) {
 }
 
 
-// === Чтение JSON из файла ===
-static cJSON* read_json_from_file(const char* path) {
-    if (!spiffs_file_exists(path)) {
-        return NULL;
-    }
 
-    FILE* f = fopen(path, "r");
-    if (!f) {
-        return NULL;
-    }
 
-    fseek(f, 0, SEEK_END);
-    long size = ftell(f);
-    if (size <= 0 || size > 8 * 1024) {
-        fclose(f);
-        return NULL;
-    }
-    fseek(f, 0, SEEK_SET);
 
-    char* buffer = malloc(size + 1);
-    if (!buffer) {
-        fclose(f);
-        return NULL;
-    }
-
-    fread(buffer, 1, size, f);
-    buffer[size] = '\0';
-    fclose(f);
-
-    cJSON* json = cJSON_Parse(buffer);
-    free(buffer);
-
-    if (!json) {
-        ESP_LOGE(TAG, "Parse error: %s", path);
-    }
-
-    return json;
-}
-
-// === Запись JSON в файл ===
-static bool write_json_to_file(const char* path, cJSON* json) {
-    char* str = cJSON_PrintUnformatted(json);
-    if (!str) {
-        return false;
-    }
-
-    FILE* f = fopen(path, "w");
-    if (!f) {
-        free(str);
-        return false;
-    }
-
-    fwrite(str, 1, strlen(str), f);
-    fclose(f);
-    free(str);
-
-    ESP_LOGI(TAG, "Saved: %s", path);
-    return true;
-}
 
 // === Удаление старого файла устройства по IEEE ===
 static void remove_device_file_by_ieee(const uint8_t* ieee_addr) {

@@ -460,7 +460,16 @@ zbm_dev_t* restore_device_from_json(cJSON* json) {
                                     break;
                             }
                         }
+                        // === Чтение behavior_id и behavior_enabled ===
+                        cJSON* j_behavior_id = cJSON_GetObjectItem(j_attr, "behavior_id");
+                        if (j_behavior_id && cJSON_IsString(j_behavior_id)) {
+                            strncpy(attr->behavior_id, j_behavior_id->valuestring, sizeof(attr->behavior_id) - 1);
+                        } else {
+                            attr->behavior_id[0] = '\0';  // пусто
+                        }
 
+                        cJSON* j_behavior_enabled = cJSON_GetObjectItem(j_attr, "behavior_enabled");
+                        attr->behavior_enabled = !cJSON_IsFalse(j_behavior_enabled);  // default: true
                         cluster->attr_array[a_i] = attr;
                     }
                 }
@@ -535,7 +544,16 @@ zbm_dev_t* restore_device_from_json(cJSON* json) {
                             uint8_t v = (uint8_t)j_val->valueint;
                             memcpy(rep->p_value, &v, 1);
                         }
+                        // === Чтение behavior_id и behavior_enabled ===
+                        cJSON* j_behavior_id = cJSON_GetObjectItem(j_rep, "behavior_id");
+                        if (j_behavior_id && cJSON_IsString(j_behavior_id)) {
+                            strncpy(rep->behavior_id, j_behavior_id->valuestring, sizeof(rep->behavior_id) - 1);
+                        } else {
+                            rep->behavior_id[0] = '\0';
+                        }
 
+                        cJSON* j_behavior_enabled = cJSON_GetObjectItem(j_rep, "behavior_enabled");
+                        rep->behavior_enabled = !cJSON_IsFalse(j_behavior_enabled);
                         cluster->custom_report_cmd_array[r_i] = rep;
                     }
                 }
@@ -853,7 +871,16 @@ zbm_dev_t* restore_device_from_json(cJSON* json) {
                                     break;
                             }
                         }
+                        // === Чтение behavior_id и behavior_enabled ===
+                        cJSON* j_behavior_id = cJSON_GetObjectItem(j_attr, "behavior_id");
+                        if (j_behavior_id && cJSON_IsString(j_behavior_id)) {
+                            strncpy(attr->behavior_id, j_behavior_id->valuestring, sizeof(attr->behavior_id) - 1);
+                        } else {
+                            attr->behavior_id[0] = '\0';  // пусто
+                        }
 
+                        cJSON* j_behavior_enabled = cJSON_GetObjectItem(j_attr, "behavior_enabled");
+                        attr->behavior_enabled = !cJSON_IsFalse(j_behavior_enabled);  // default: true
                         cluster->attr_array[a_i] = attr;
                     }
                 }
@@ -937,7 +964,16 @@ zbm_dev_t* restore_device_from_json(cJSON* json) {
                             }
                         }
                     
+                        // === Чтение behavior_id и behavior_enabled ===
+                        cJSON* j_behavior_id = cJSON_GetObjectItem(j_rep, "behavior_id");
+                        if (j_behavior_id && cJSON_IsString(j_behavior_id)) {
+                            strncpy(rep->behavior_id, j_behavior_id->valuestring, sizeof(rep->behavior_id) - 1);
+                        } else {
+                            rep->behavior_id[0] = '\0';
+                        }
 
+                        cJSON* j_behavior_enabled = cJSON_GetObjectItem(j_rep, "behavior_enabled");
+                        rep->behavior_enabled = !cJSON_IsFalse(j_behavior_enabled);
                         cluster->custom_report_cmd_array[r_i] = rep;
                     }
                 }

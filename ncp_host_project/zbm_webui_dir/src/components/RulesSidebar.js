@@ -2,18 +2,53 @@
 import { useRules } from '../hooks/useRules';
 
 export default function RulesSidebar({ selectedRuleId, onSelect, onAddRule }) {
-  const { rules, loading } = useRules();
+  const { rules, loading, reload } = useRules(); // добавили reload
 
-  const handleAdd = () => {
-    onSelect('rule', 'new'); // или 'temp_' + Date.now()
-    onAddRule?.('new');
+  const handleAdd = async () => {
+    const newRuleTemplate = {
+      name: 'Новое правило',
+      enabled: true,
+      priority: 0,
+      exec_mode: 0, // ZB_RULE_EXEC_FIRST
+      allowing_logic_op: 0, // OR
+      cause_trigger: {
+        guid: '',
+        cond: 0,
+        expected_type: 1,
+        value: 1
+      },
+      allowing_triggers: [],
+      actions: []
     };
+
+    try {
+      const res = await fetch('/api/rule', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(newRuleTemplate)
+      });
+
+      if (!res.ok) throw new Error('Save failed');
+
+      const result = await res.json();
+      const newId = result.id;
+
+      // Перезагружаем список правил, чтобы обновить индекс
+      reload();
+
+      // Переходим к редактированию
+      onSelect('rule', newId);
+    } catch (err) {
+      alert('Ошибка создания правила');
+      console.error(err);
+    }
+  };
 
   const handleDelete = async (id) => {
     if (!window.confirm('Удалить правило?')) return;
     try {
       await fetch(`/api/rule/${id}`, { method: 'DELETE' });
-      // useRules подписывается на удаление через WebSocket → автоматом обновится
+      reload(); // обновляем список
     } catch (err) {
       alert('Ошибка удаления');
     }
@@ -42,10 +77,7 @@ export default function RulesSidebar({ selectedRuleId, onSelect, onAddRule }) {
           <p className="device-list-empty">Нет правил</p>
         ) : (
           rules.map((rule) => (
-            <div
-              key={rule.id}
-              className={`device-item ${selectedRuleId === rule.id ? 'selected' : ''}`}
-            >
+            <div key={rule.id} className={`device-item ${selectedRuleId === rule.id ? 'selected' : ''}`}>
               <div className="device-item-content" onClick={() => onSelect('rule', rule.id)}>
                 <div className="device-text">
                   <div className="device-name">{rule.name}</div>

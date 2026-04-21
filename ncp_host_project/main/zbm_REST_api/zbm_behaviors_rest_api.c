@@ -191,7 +191,7 @@ esp_err_t zbm_rest_api_post_behavior_handler(httpd_req_t* req) {
     cJSON_AddStringToObject(notify, "id", id);
     cJSON_AddStringToObject(notify, "action", "behavior_saved");
     zbm_ws_send_sys_notify("behavior_saved", "Behavior saved", notify);
-
+    cJSON_Delete(notify);
     char resp[128];
     snprintf(resp, sizeof(resp), "{\"success\":true,\"id\":\"%s\"}", id);
     httpd_resp_set_type(req, "application/json");
@@ -253,7 +253,7 @@ esp_err_t zbm_rest_api_delete_behavior_handler(httpd_req_t* req) {
     cJSON_AddStringToObject(notify, "id", id);
     cJSON_AddStringToObject(notify, "action", "behavior_deleted");
     zbm_ws_send_sys_notify("behavior_deleted", "Behavior deleted", notify);
-
+    cJSON_Delete(notify);
     httpd_resp_sendstr(req, "{\"success\":true}");
     return ESP_OK;
 }
@@ -341,7 +341,7 @@ static esp_err_t set_behavior_enabled_state(httpd_req_t* req, bool enabled) {
     cJSON_AddStringToObject(notify, "id", id);
     cJSON_AddBoolToObject(notify, "enabled", enabled);
     zbm_ws_send_sys_notify("behavior_toggled", enabled ? "Behavior enabled" : "Behavior disabled", notify);
-
+    cJSON_Delete(notify);
     httpd_resp_sendstr(req, "{\"success\":true}");
     return ESP_OK;
 }

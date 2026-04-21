@@ -38,7 +38,7 @@ function getAttrRepOptions(cluster) {
   return [...attrs, ...reps];
 }
 
-export default function RuleEditorCauseTrigger({ devices, cause, onChange }) {
+export default function RuleEditorCauseTrigger({ devices, cause, onChange, variables }) {
   const sourceType = cause.sourceType || 'attr_rep';
   const isVarMode = sourceType === 'variable';
 
@@ -47,7 +47,7 @@ export default function RuleEditorCauseTrigger({ devices, cause, onChange }) {
   const selectedCluster = getClusterOptions(selectedDevice, cause.ep).find(c => c.id === parseInt(cause.cluster));
   const selectedAttrOrRep = getAttrRepOptions(selectedCluster).find(a => a.value === cause.attrOrRep);
 
-  const selectedVar = isVarMode ? getVariable(cause.var) : null;
+  const selectedVar = isVarMode ? variables.find(v => v.guid === cause.var) : null;
 
   // === Сброс эндпоинта при смене устройства ===
   useEffect(() => {
@@ -113,12 +113,19 @@ export default function RuleEditorCauseTrigger({ devices, cause, onChange }) {
                 value={cause.var || ''}
                 onChange={(e) => {
                   const guid = e.target.value;
-                  updateCause({ var: guid, guid });
+                  const variable = variables.find(v => v.guid === guid);
+                  updateCause({
+                    var: guid,
+                    guid,
+                    expected_type: variable?.type || 0x20,
+                    cond: 'eq',
+                    value: cause.value || '0'
+                  });
                 }}
                 className="form-input"
               >
                 <option value="">Выберите</option>
-                {virtualVariables.map(v => (
+                {variables.map(v => (
                   <option key={v.guid} value={v.guid}>{v.name} ({v.guid})</option>
                 ))}
               </select>
@@ -219,7 +226,7 @@ export default function RuleEditorCauseTrigger({ devices, cause, onChange }) {
                     updateCause({
                       attrOrRep: guid,
                       guid,
-                      expected_type: option?.type || 32,
+                      expected_type: option?.type || 0x20,
                     });
                   }}
                   disabled={!cause.cluster}

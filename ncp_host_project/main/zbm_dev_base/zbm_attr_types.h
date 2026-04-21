@@ -113,4 +113,15 @@ zbm_cluster_attribute_t** zbm_create_standard_attribute_array(uint16_t cluster_i
  */
 bool zbm_is_valid_data_size(zbm_attr_data_types_t type, uint16_t size);
 
+/**
+ * @brief Возвращает рекомендуемый размер (в байтах) для указанного типа атрибута.
+ *        Используется при создании виртуальных переменных и атрибутов по умолчанию.
+ * 
+ * @param type Тип данных из zbm_attr_data_types_t
+ * @return uint16_t Рекомендуемый размер в байтах
+ */
+uint16_t zbm_get_attr_size(zbm_attr_data_types_t type);
+
+const char* zbm_attr_type_to_str(zbm_attr_data_types_t type);
+
 #endif

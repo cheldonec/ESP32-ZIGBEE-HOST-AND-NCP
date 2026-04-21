@@ -167,9 +167,17 @@ typedef enum {
     ZBM_DATA_SRC_VAR,
 } zbm_data_source_t;
 
+#define ZB_AUTO_VAR_STR_LEN 64
+#define ZB_AUTO_VAR_LONG_STR_LEN 256
+bool zbm_var_realloc_storage(zbm_virtual_var_t *var);
+
 void zb_automation_v2_init(void);
 
+// обновляет и запускае правила
 void zbm_var_update_value(zbm_virtual_var_t* var, void* value, uint16_t size);
+
+// обновляет во время настроек из UI
+bool zbm_var_set_config(uint8_t idx, const char* name, zbm_attr_data_types_t type, void* value, uint16_t size);
 
 void zb_automation_v2_execute_action(const zb_action_t* act);
 

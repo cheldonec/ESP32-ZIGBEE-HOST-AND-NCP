@@ -80,7 +80,7 @@ bool zbm_zigbee_app_signal_handler(local_esp_zb_app_signal_t *signal_s)
                 cJSON_AddStringToObject(data, "ieee", ieee_str);
 
                 zbm_ws_send_sys_notify("zigbee_network_up", "Zigbee network formed successfully", data);
-
+                cJSON_Delete(data);
             } else {
                 ESP_LOGE(TAG, "❌ Network formation failed, status: %s", esp_err_to_name(err_status));
                 // ❌ Ошибка формирования — тоже сообщим в UI
@@ -88,6 +88,7 @@ bool zbm_zigbee_app_signal_handler(local_esp_zb_app_signal_t *signal_s)
                 cJSON_AddStringToObject(data, "error", esp_err_to_name(err_status));
 
                 zbm_ws_send_sys_notify("zigbee_network_error", "Failed to form Zigbee network", data);
+                cJSON_Delete(data);
                 // Можно перезапустить формирование
             }
             break;
@@ -109,6 +110,7 @@ bool zbm_zigbee_app_signal_handler(local_esp_zb_app_signal_t *signal_s)
                     cJSON_AddNumberToObject(data, "pan_id", pan_id);
 
                     zbm_ws_send_sys_notify("zigbee_permit_join_started", "Zigbee network is now open for device joining", data);
+                    cJSON_Delete(data);
                 }else
                 {
                    isZigbeeNetworkOpened = false;
@@ -117,6 +119,7 @@ bool zbm_zigbee_app_signal_handler(local_esp_zb_app_signal_t *signal_s)
                     cJSON_AddNumberToObject(data, "pan_id", pan_id);
 
                     zbm_ws_send_sys_notify("zigbee_permit_join_stopped", "Zigbee network closed for new devices", data); 
+                    cJSON_Delete(data);
                 }
             }
             break;

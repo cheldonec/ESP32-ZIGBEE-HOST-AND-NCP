@@ -9,6 +9,8 @@
 #include "string.h"
 #include "cJSON.h"
 #include "zbm_spiffs_helper.h"
+#include "zbm_attr_types.h"
+
 
 static const char* TAG = "ZB_AUTO_V2";
 
@@ -19,6 +21,260 @@ zbm_virtual_var_t zbm_vars[ZB_AUTO_VAR_COUNT] = {0};
 
 // === Парсер JSON -> zb_rule_t (V2) ===
 bool rule_from_json(cJSON* json, zb_rule_t* out_rule) {
+    if (!json || !out_rule) return false;
+
+    memset(out_rule, 0, sizeof(zb_rule_t));
+
+    // === ID ===
+    cJSON* id_obj = cJSON_GetObjectItem(json, "id");
+    if (!id_obj || !cJSON_IsString(id_obj) || strlen(id_obj->valuestring) == 0) {
+        ESP_LOGE(TAG, "Missing or invalid rule ID");
+        return false;
+    }
+    strlcpy(out_rule->id, id_obj->valuestring, sizeof(out_rule->id));
+
+    // === Name ===
+    cJSON* name_obj = cJSON_GetObjectItem(json, "name");
+    if (name_obj && cJSON_IsString(name_obj)) {
+        strlcpy(out_rule->name, name_obj->valuestring, sizeof(out_rule->name));
+    } else {
+        strcpy(out_rule->name, "Unnamed Rule");
+    }
+
+    // === Enabled ===
+    out_rule->enabled = cJSON_IsTrue(cJSON_GetObjectItem(json, "enabled"));
+
+    // === Priority ===
+    cJSON* priority_obj = cJSON_GetObjectItem(json, "priority");
+    if (priority_obj && cJSON_IsNumber(priority_obj)) {
+        out_rule->priority = (int8_t)priority_obj->valueint;
+    }
+
+    // === Execution Mode ===
+    cJSON* exec_mode_obj = cJSON_GetObjectItem(json, "exec_mode");
+    if (exec_mode_obj && cJSON_IsNumber(exec_mode_obj)) {
+        out_rule->exec_mode = (exec_mode_obj->valueint == 1) ? ZB_RULE_EXEC_ALL : ZB_RULE_EXEC_FIRST;
+    } else {
+        out_rule->exec_mode = ZB_RULE_EXEC_FIRST;
+    }
+
+    // === Logic Op for allowing triggers ===
+    cJSON* logic_op_obj = cJSON_GetObjectItem(json, "allowing_logic_op");
+    if (logic_op_obj && cJSON_IsNumber(logic_op_obj)) {
+        out_rule->allowing_logic_op = (logic_op_obj->valueint == 1) ? ZB_LOGIC_AND : ZB_LOGIC_OR;
+    } else {
+        out_rule->allowing_logic_op = ZB_LOGIC_OR;
+    }
+
+    // === Cause Trigger ===
+    cJSON* cause_obj = cJSON_GetObjectItem(json, "cause_trigger");
+    if (cause_obj) {
+        cJSON* guid_obj = cJSON_GetObjectItem(cause_obj, "guid");
+        cJSON* cond_obj = cJSON_GetObjectItem(cause_obj, "cond");
+        cJSON* expected_type_obj = cJSON_GetObjectItem(cause_obj, "expected_type");
+        cJSON* value_obj = cJSON_GetObjectItem(cause_obj, "value");
+
+        if (!guid_obj || !cJSON_IsString(guid_obj)) {
+            ESP_LOGE(TAG, "Cause trigger: missing GUID");
+            return false;
+        }
+        strlcpy(out_rule->cause_trigger.guid, guid_obj->valuestring, sizeof(out_rule->cause_trigger.guid));
+
+        out_rule->cause_trigger.cond = ZB_COND_EQ;
+        if (cond_obj && cJSON_IsNumber(cond_obj) && cond_obj->valueint >= 0 && cond_obj->valueint <= 5) {
+            out_rule->cause_trigger.cond = (zb_condition_t)cond_obj->valueint;
+        }
+
+        out_rule->cause_trigger.expected_type = ZBM_ATTR_TYPE_U8; // fallback
+        if (expected_type_obj && cJSON_IsNumber(expected_type_obj)) {
+            out_rule->cause_trigger.expected_type = (zbm_attr_data_types_t)expected_type_obj->valueint;
+        }
+
+        // Выделяем память под значение
+        uint16_t val_size = zbm_get_attr_size(out_rule->cause_trigger.expected_type);
+        out_rule->cause_trigger.p_expected_value = calloc(1, val_size);
+        if (!out_rule->cause_trigger.p_expected_value) {
+            ESP_LOGE(TAG, "Failed to allocate memory for cause trigger value");
+            return false;
+        }
+        out_rule->cause_trigger.expected_size = val_size;
+
+        if (value_obj) {
+            switch (out_rule->cause_trigger.expected_type) {
+                case ZBM_ATTR_TYPE_U8:
+                    *(uint8_t*)out_rule->cause_trigger.p_expected_value = (uint8_t)value_obj->valueint;
+                    break;
+                case ZBM_ATTR_TYPE_S8:
+                    *(int8_t*)out_rule->cause_trigger.p_expected_value = (int8_t)value_obj->valueint;
+                    break;
+                case ZBM_ATTR_TYPE_U16:
+                    *(uint16_t*)out_rule->cause_trigger.p_expected_value = (uint16_t)value_obj->valueint;
+                    break;
+                case ZBM_ATTR_TYPE_CHAR_STRING:
+                case ZBM_ATTR_TYPE_LONG_CHAR_STRING:
+                    if (cJSON_IsString(value_obj)) {
+                        strlcpy((char*)out_rule->cause_trigger.p_expected_value, value_obj->valuestring, 
+                                zbm_get_attr_size(out_rule->cause_trigger.expected_type));
+                    } else {
+                        snprintf((char*)out_rule->cause_trigger.p_expected_value, 
+                                 zbm_get_attr_size(out_rule->cause_trigger.expected_type), "%d", value_obj->valueint);
+                    }
+                    break;
+                default:
+                    *(uint8_t*)out_rule->cause_trigger.p_expected_value = (uint8_t)value_obj->valueint;
+                    break;
+            }
+        } else {
+            *(uint8_t*)out_rule->cause_trigger.p_expected_value = 1;
+        }
+
+        out_rule->cause_trigger.mode = ZB_TRIGGER_CAUSING;
+    } else {
+        ESP_LOGE(TAG, "Missing cause_trigger");
+        return false;
+    }
+
+    // === Allowing Triggers ===
+    cJSON* triggers_arr = cJSON_GetObjectItem(json, "allowing_triggers");
+    out_rule->trigger_count = 0;
+    if (triggers_arr && cJSON_IsArray(triggers_arr)) {
+        int count = cJSON_GetArraySize(triggers_arr);
+        for (int i = 0; i < count && out_rule->trigger_count < ZB_AUTO_MAX_TRIGGERS; i++) {
+            cJSON* t_obj = cJSON_GetArrayItem(triggers_arr, i);
+            if (!t_obj) continue;
+
+            cJSON* t_guid = cJSON_GetObjectItem(t_obj, "guid");
+            cJSON* t_cond = cJSON_GetObjectItem(t_obj, "cond");
+            cJSON* t_type = cJSON_GetObjectItem(t_obj, "expected_type");
+            cJSON* t_value = cJSON_GetObjectItem(t_obj, "value");
+
+            if (!t_guid || !cJSON_IsString(t_guid)) continue;
+
+            zb_trigger_t* t = &out_rule->triggers[out_rule->trigger_count];
+
+            strlcpy(t->guid, t_guid->valuestring, sizeof(t->guid));
+            t->cond = (t_cond && cJSON_IsNumber(t_cond)) ? (zb_condition_t)t_cond->valueint : ZB_COND_EQ;
+            t->expected_type = (t_type && cJSON_IsNumber(t_type)) ? (zbm_attr_data_types_t)t_type->valueint : ZBM_ATTR_TYPE_U8;
+            t->mode = ZB_TRIGGER_ALLOWING;
+
+            uint16_t val_size = zbm_get_attr_size(t->expected_type);
+            t->p_expected_value = calloc(1, val_size);
+            t->expected_size = val_size;
+            if (!t->p_expected_value) continue;
+
+            if (t_value) {
+                switch (t->expected_type) {
+                    case ZBM_ATTR_TYPE_U8:
+                        *(uint8_t*)t->p_expected_value = (uint8_t)t_value->valueint;
+                        break;
+                    case ZBM_ATTR_TYPE_S8:
+                        *(int8_t*)t->p_expected_value = (int8_t)t_value->valueint;
+                        break;
+                    case ZBM_ATTR_TYPE_U16:
+                        *(uint16_t*)t->p_expected_value = (uint16_t)t_value->valueint;
+                        break;
+                    case ZBM_ATTR_TYPE_CHAR_STRING:
+                    case ZBM_ATTR_TYPE_LONG_CHAR_STRING:
+                        if (cJSON_IsString(t_value)) {
+                            strlcpy((char*)t->p_expected_value, t_value->valuestring, zbm_get_attr_size(t->expected_type));
+                        } else {
+                            snprintf((char*)t->p_expected_value, zbm_get_attr_size(t->expected_type), "%d", t_value->valueint);
+                        }
+                        break;
+                    default:
+                        *(uint8_t*)t->p_expected_value = (uint8_t)t_value->valueint;
+                        break;
+                }
+            } else {
+                *(uint8_t*)t->p_expected_value = 1;
+            }
+
+            out_rule->trigger_count++;
+        }
+    }
+
+    // === Actions ===
+    cJSON* actions_arr = cJSON_GetObjectItem(json, "actions");
+    out_rule->action_count = 0;
+    if (actions_arr && cJSON_IsArray(actions_arr)) {
+        int count = cJSON_GetArraySize(actions_arr);
+        for (int i = 0; i < count && out_rule->action_count < ZB_AUTO_MAX_ACTIONS; i++) {
+            cJSON* a_obj = cJSON_GetArrayItem(actions_arr, i);
+            if (!a_obj) continue;
+
+            cJSON* type_obj = cJSON_GetObjectItem(a_obj, "type");
+            if (!type_obj || !cJSON_IsNumber(type_obj)) continue;
+
+            int action_type = type_obj->valueint;
+            zb_action_t* act = &out_rule->actions[out_rule->action_count];
+
+            if (action_type == 0) {
+                // Send command by GUID
+                cJSON* cmd_guid = cJSON_GetObjectItem(a_obj, "cmd_guid");
+                if (cmd_guid && cJSON_IsString(cmd_guid)) {
+                    act->type = ZB_ACTION_SEND_CMD_BY_GUID;
+                    strlcpy(act->data.send_cmd.cmd_guid, cmd_guid->valuestring, sizeof(act->data.send_cmd.cmd_guid));
+
+                    cJSON* params = cJSON_GetObjectItem(a_obj, "params");
+                    if (params) {
+                        act->data.send_cmd.params = cJSON_Duplicate(params, true);
+                    } else {
+                        act->data.send_cmd.params = NULL;
+                    }
+                }
+            } else if (action_type == 1) {
+                // Set variable
+                cJSON* var_idx_obj = cJSON_GetObjectItem(a_obj, "var_idx");
+                cJSON* value_obj = cJSON_GetObjectItem(a_obj, "value");
+                if (!var_idx_obj || !cJSON_IsNumber(var_idx_obj)) continue;
+
+                uint8_t var_idx = (uint8_t)var_idx_obj->valueint;
+                if (var_idx >= ZB_AUTO_VAR_COUNT) continue;
+
+                zbm_virtual_var_t* var = &zbm_vars[var_idx];
+                act->data.set_uint8.var_idx = var_idx;
+
+                switch (var->data_type) {
+                    case ZBM_ATTR_TYPE_U8:
+                        act->type = ZB_ACTION_SET_VAR_UINT8;
+                        act->data.set_uint8.value = (value_obj) ? (uint8_t)value_obj->valueint : 0;
+                        break;
+                    case ZBM_ATTR_TYPE_S8:
+                        act->type = ZB_ACTION_SET_VAR_INT8;
+                        act->data.set_int8.value = (value_obj) ? (int8_t)value_obj->valueint : 0;
+                        break;
+                    case ZBM_ATTR_TYPE_U16:
+                        act->type = ZB_ACTION_SET_VAR_UINT16;
+                        act->data.set_uint16.value = (value_obj) ? (uint16_t)value_obj->valueint : 0;
+                        break;
+                    case ZBM_ATTR_TYPE_CHAR_STRING:
+                    case ZBM_ATTR_TYPE_LONG_CHAR_STRING:
+                        act->type = ZB_ACTION_SET_VAR_STRING;
+                        if (value_obj) {
+                            if (cJSON_IsString(value_obj)) {
+                                strlcpy(act->data.set_str.str, value_obj->valuestring, sizeof(act->data.set_str.str));
+                            } else {
+                                snprintf(act->data.set_str.str, sizeof(act->data.set_str.str), "%d", value_obj->valueint);
+                            }
+                        } else {
+                            strcpy(act->data.set_str.str, "");
+                        }
+                        break;
+                    default:
+                        act->type = ZB_ACTION_SET_VAR_UINT8;
+                        act->data.set_uint8.value = (value_obj) ? (uint8_t)value_obj->valueint : 0;
+                        break;
+                }
+            }
+
+            out_rule->action_count++;
+        }
+    }
+
+    return true;
+}
+
+bool rule_from_json_old(cJSON* json, zb_rule_t* out_rule) {
     if (!json || !out_rule) return false;
 
     memset(out_rule, 0, sizeof(zb_rule_t));
@@ -266,6 +522,144 @@ cJSON* rule_to_json(const zb_rule_t* rule) {
             cJSON_AddNumberToObject(cause_json, "value", *(uint16_t*)rule->cause_trigger.p_expected_value);
             break;
         case ZBM_ATTR_TYPE_CHAR_STRING:
+        case ZBM_ATTR_TYPE_LONG_CHAR_STRING: {
+            uint16_t size = zbm_get_attr_size(rule->cause_trigger.expected_type);
+            char* str = (char*)rule->cause_trigger.p_expected_value;
+            // Обрезаем по нулевому байту
+            for (int i = 0; i < size; i++) {
+                if (str[i] == '\0') {
+                    str = strndup(str, i);
+                    cJSON_AddStringToObject(cause_json, "value", str);
+                    free(str);
+                    goto end_cause_str;
+                }
+            }
+            cJSON_AddStringToObject(cause_json, "value", (char*)rule->cause_trigger.p_expected_value);
+        end_cause_str:
+            break;
+        }
+        default:
+            cJSON_AddNumberToObject(cause_json, "value", *(uint8_t*)rule->cause_trigger.p_expected_value);
+            break;
+    }
+    cJSON_AddItemToObject(json, "cause_trigger", cause_json);
+
+    // === allowing_triggers ===
+    cJSON* allowing_json = cJSON_CreateArray();
+    for (int i = 0; i < rule->trigger_count; i++) {
+        const zb_trigger_t* t = &rule->triggers[i];
+        cJSON* t_json = cJSON_CreateObject();
+        cJSON_AddStringToObject(t_json, "guid", t->guid);
+        cJSON_AddNumberToObject(t_json, "cond", t->cond);
+        cJSON_AddNumberToObject(t_json, "expected_type", t->expected_type);
+
+        switch (t->expected_type) {
+            case ZBM_ATTR_TYPE_BOOL:
+            case ZBM_ATTR_TYPE_U8:
+            case ZBM_ATTR_TYPE_S8:
+                cJSON_AddNumberToObject(t_json, "value", *(uint8_t*)t->p_expected_value);
+                break;
+            case ZBM_ATTR_TYPE_U16:
+            case ZBM_ATTR_TYPE_S16:
+                cJSON_AddNumberToObject(t_json, "value", *(uint16_t*)t->p_expected_value);
+                break;
+            case ZBM_ATTR_TYPE_CHAR_STRING:
+            case ZBM_ATTR_TYPE_LONG_CHAR_STRING: {
+                uint16_t size = zbm_get_attr_size(t->expected_type);
+                char* str = (char*)t->p_expected_value;
+                for (int i = 0; i < size; i++) {
+                    if (str[i] == '\0') {
+                        str = strndup(str, i);
+                        cJSON_AddStringToObject(t_json, "value", str);
+                        free(str);
+                        goto end_allow_str;
+                    }
+                }
+                cJSON_AddStringToObject(t_json, "value", (char*)t->p_expected_value);
+            end_allow_str:
+                break;
+            }
+            default:
+                cJSON_AddNumberToObject(t_json, "value", *(uint8_t*)t->p_expected_value);
+                break;
+        }
+        cJSON_AddItemToArray(allowing_json, t_json);
+    }
+    cJSON_AddItemToObject(json, "allowing_triggers", allowing_json);
+
+    // === Действия ===
+    cJSON* actions = cJSON_CreateArray();
+    for (int i = 0; i < rule->action_count; i++) {
+        const zb_action_t* a = &rule->actions[i];
+        cJSON* a_json = cJSON_CreateObject();
+        cJSON_AddNumberToObject(a_json, "type", a->type);
+
+        switch (a->type) {
+            case ZB_ACTION_SEND_CMD_BY_GUID:
+                cJSON_AddStringToObject(a_json, "cmd_guid", a->data.send_cmd.cmd_guid);
+                if (a->data.send_cmd.params) {
+                    cJSON_AddItemToObject(a_json, "params", cJSON_Duplicate(a->data.send_cmd.params, true));
+                }
+                break;
+            case ZB_ACTION_SET_VAR_UINT8:
+                cJSON_AddNumberToObject(a_json, "var_idx", a->data.set_uint8.var_idx);
+                cJSON_AddNumberToObject(a_json, "value", a->data.set_uint8.value);
+                break;
+            case ZB_ACTION_SET_VAR_INT8:
+                cJSON_AddNumberToObject(a_json, "var_idx", a->data.set_int8.var_idx);
+                cJSON_AddNumberToObject(a_json, "value", a->data.set_int8.value);
+                break;
+            case ZB_ACTION_SET_VAR_UINT16:
+                cJSON_AddNumberToObject(a_json, "var_idx", a->data.set_uint16.var_idx);
+                cJSON_AddNumberToObject(a_json, "value", a->data.set_uint16.value);
+                break;
+            case ZB_ACTION_SET_VAR_STRING:
+                cJSON_AddNumberToObject(a_json, "var_idx", a->data.set_str.var_idx);
+                cJSON_AddStringToObject(a_json, "value", a->data.set_str.str);
+                break;
+            case ZB_ACTION_INC_VAR:
+            case ZB_ACTION_DEC_VAR:
+            case ZB_ACTION_TOGGLE_VAR:
+                cJSON_AddNumberToObject(a_json, "var_idx", a->data.inc.var_idx);
+                break;
+            default:
+                break;
+        }
+        cJSON_AddItemToArray(actions, a_json);
+    }
+    cJSON_AddItemToObject(json, "actions", actions);
+
+    return json;
+}
+
+cJSON* rule_to_json_old(const zb_rule_t* rule) {
+    if (!rule) return NULL;
+
+    cJSON* json = cJSON_CreateObject();
+    cJSON_AddStringToObject(json, "id", rule->id);
+    cJSON_AddStringToObject(json, "name", rule->name);
+    cJSON_AddBoolToObject(json, "enabled", rule->enabled);
+    cJSON_AddNumberToObject(json, "priority", rule->priority);
+    cJSON_AddNumberToObject(json, "exec_mode", rule->exec_mode);
+    cJSON_AddNumberToObject(json, "allowing_logic", rule->allowing_logic_op);
+
+    // === cause_trigger ===
+    cJSON* cause_json = cJSON_CreateObject();
+    cJSON_AddStringToObject(cause_json, "guid", rule->cause_trigger.guid);
+    cJSON_AddNumberToObject(cause_json, "cond", rule->cause_trigger.cond);
+    cJSON_AddNumberToObject(cause_json, "expected_type", rule->cause_trigger.expected_type);
+
+    switch (rule->cause_trigger.expected_type) {
+        case ZBM_ATTR_TYPE_BOOL:
+        case ZBM_ATTR_TYPE_U8:
+        case ZBM_ATTR_TYPE_S8:
+            cJSON_AddNumberToObject(cause_json, "value", *(uint8_t*)rule->cause_trigger.p_expected_value);
+            break;
+        case ZBM_ATTR_TYPE_U16:
+        case ZBM_ATTR_TYPE_S16:
+            cJSON_AddNumberToObject(cause_json, "value", *(uint16_t*)rule->cause_trigger.p_expected_value);
+            break;
+        case ZBM_ATTR_TYPE_CHAR_STRING:
         case ZBM_ATTR_TYPE_LONG_CHAR_STRING:
             cJSON_AddStringToObject(cause_json, "value", (char*)rule->cause_trigger.p_expected_value);
             break;
@@ -411,15 +805,73 @@ void zb_rules_load_all_from_storage(void) {
 //                ВИРТУАЛЬНЫЕ ПЕРЕМЕННЫЕ
 // ========================================================
 
+/**
+ * @brief Перевыделяет p_value в зависимости от data_type
+ * @return true если успешно
+ */
+bool zbm_var_realloc_storage(zbm_virtual_var_t *var) {
+    if (!var) return false;
+
+    uint16_t new_size = 0;
+    switch (var->data_type) {
+        case ZBM_ATTR_TYPE_U8:
+        case ZBM_ATTR_TYPE_S8:
+        case ZBM_ATTR_TYPE_BOOL:
+            new_size = 1;
+            break;
+        case ZBM_ATTR_TYPE_U16:
+        case ZBM_ATTR_TYPE_S16:
+            new_size = 2;
+            break;
+        case ZBM_ATTR_TYPE_CHAR_STRING:
+            new_size = ZB_AUTO_VAR_STR_LEN; // например, 32
+            break;
+        case ZBM_ATTR_TYPE_LONG_CHAR_STRING:
+            new_size = ZB_AUTO_VAR_LONG_STR_LEN; // например, 256
+            break;
+        default:
+            return false;
+    }
+
+    // Если размер не изменился — можно выйти
+    if (var->data_size == new_size && var->p_value != NULL) {
+        return true;
+    }
+
+    void* new_ptr = realloc(var->p_value, new_size);
+    if (new_size > 0 && new_ptr == NULL) {
+        ESP_LOGE(TAG, "Failed to realloc storage for var %d", var->idx);
+        return false;
+    }
+
+    // Обнуляем новую память (если расширили)
+    if (var->p_value == NULL) {
+        memset(new_ptr, 0, new_size);
+    } else if (new_size > var->data_size) {
+        memset((uint8_t*)new_ptr + var->data_size, 0, new_size - var->data_size);
+    }
+
+    var->p_value = new_ptr;
+    var->data_size = new_size;
+    return true;
+}
+
 void zbm_var_init(void) {
     for (int i = 0; i < ZB_AUTO_VAR_COUNT; i++) {
         snprintf(zbm_vars[i].name, sizeof(zbm_vars[i].name), "var_%d", i);
-        snprintf(zbm_vars[i].guid, sizeof(zbm_vars[i].guid), "var_%d", i);  // Инициализация GUID
+        snprintf(zbm_vars[i].guid, sizeof(zbm_vars[i].guid), "var_%d", i);
         zbm_vars[i].data_type = ZBM_ATTR_TYPE_U8;
-        zbm_vars[i].data_size = 1;
-        zbm_vars[i].p_value = calloc(1, 1);
+        zbm_vars[i].data_size = 0; // ← начнём с 0
+        zbm_vars[i].p_value = NULL;
         zbm_vars[i].last_update_ms = 0;
         zbm_vars[i].idx = i;
+
+        // Выделяем память с учётом типа
+        if (!zbm_var_realloc_storage(&zbm_vars[i])) {
+            ESP_LOGE(TAG, "Failed to alloc storage for var %d", i);
+            zbm_vars[i].p_value = NULL;
+            zbm_vars[i].data_size = 0;
+        }
     }
 
     // Загружаем из SPIFFS
@@ -429,26 +881,50 @@ void zbm_var_init(void) {
         for (int i = 0; i < cJSON_GetArraySize(json); i++) {
             cJSON* item = cJSON_GetArrayItem(json, i);
             int idx = cJSON_GetObjectItem(item, "idx")->valueint;
-            if (idx >= 0 && idx < ZB_AUTO_VAR_COUNT) {
-                // Восстанавливаем имя, если есть
-                cJSON* name_obj = cJSON_GetObjectItem(item, "name");
-                if (name_obj && cJSON_IsString(name_obj)) {
-                    strncpy(zbm_vars[idx].name, name_obj->valuestring, sizeof(zbm_vars[idx].name) - 1);
-                }
-                cJSON* type_obj = cJSON_GetObjectItem(item, "type");
-                if (type_obj) zbm_vars[idx].data_type = (zbm_attr_data_types_t)type_obj->valueint;
+            if (idx < 0 || idx >= ZB_AUTO_VAR_COUNT) continue;
 
-                cJSON* value = cJSON_GetObjectItem(item, "value");
-                if (cJSON_IsNumber(value)) {
-                    uint16_t size = 1;
-                    if (zbm_vars[idx].data_type == ZBM_ATTR_TYPE_U16 ||
-                        zbm_vars[idx].data_type == ZBM_ATTR_TYPE_S16)
-                        size = 2;
-                    zbm_var_update_value(&zbm_vars[idx], &value->valueint, size);
-                } else if (cJSON_IsString(value)) {
-                    zbm_var_update_value(&zbm_vars[idx], (void*)value->valuestring, strlen(value->valuestring) + 1);
+            zbm_virtual_var_t* var = &zbm_vars[idx];
+
+            // === Обновляем имя ===
+            cJSON* name_obj = cJSON_GetObjectItem(item, "name");
+            if (name_obj && cJSON_IsString(name_obj)) {
+                strncpy(var->name, name_obj->valuestring, sizeof(var->name) - 1);
+                var->name[sizeof(var->name) - 1] = '\0';
+            }
+
+            // === Обновляем тип ===
+            cJSON* type_obj = cJSON_GetObjectItem(item, "type");
+            if (type_obj) {
+                zbm_attr_data_types_t new_type = (zbm_attr_data_types_t)type_obj->valueint;
+                if (new_type != var->data_type) {
+                    var->data_type = new_type;
+                    if (!zbm_var_realloc_storage(var)) {
+                        ESP_LOGE(TAG, "Failed to realloc storage for var %d (type %d)", idx, new_type);
+                        continue;
+                    }
                 }
             }
+
+            // === Устанавливаем значение ===
+            cJSON* value_obj = cJSON_GetObjectItem(item, "value");
+            if (value_obj == NULL) continue;
+
+            if (cJSON_IsNumber(value_obj)) {
+                int num = value_obj->valueint;
+                if (var->data_size == 1) {
+                    uint8_t val = (uint8_t)num;
+                    memcpy(var->p_value, &val, 1);
+                } else if (var->data_size == 2) {
+                    uint16_t val = (uint16_t)num;
+                    memcpy(var->p_value, &val, 2);
+                }
+            } else if (cJSON_IsString(value_obj)) {
+                if (var->data_size > 0 && var->p_value != NULL) {
+                    strlcpy((char*)var->p_value, value_obj->valuestring, var->data_size);
+                }
+            }
+
+            var->last_update_ms = esp_log_timestamp(); // можно использовать xTaskGetTickCount()
         }
     }
     cJSON_Delete(json);
@@ -490,6 +966,8 @@ void zbm_vars_save_to_storage(void) {
     ESP_LOGI(TAG, "Variables saved to %s", ZBM_RULES_VARS_FILE);
 }
 
+
+
 void zbm_var_update_value(zbm_virtual_var_t* var, void* value, uint16_t size) {
     if (var->p_value && var->data_size != size) {
         free(var->p_value);
@@ -507,6 +985,135 @@ void zbm_var_update_value(zbm_virtual_var_t* var, void* value, uint16_t size) {
     char var_guid[32];
     snprintf(var_guid, sizeof(var_guid), "var_%d", var->idx);
     zb_automation_v2_on_data_change(ZBM_DATA_SRC_VAR, var_guid, var->data_type, value, size);
+}
+
+bool zbm_var_set_config(uint8_t idx, const char* name, zbm_attr_data_types_t type, void* value, uint16_t size)
+{
+    if (idx >= ZB_AUTO_VAR_COUNT) {
+        ESP_LOGE(TAG, "Invalid var index: %d", idx);
+        return false;
+    }
+
+    zbm_virtual_var_t* var = &zbm_vars[idx];
+    bool updated = false;
+
+    // === Обновление имени ===
+    if (name && strlen(name) > 0 && strcmp(var->name, name) != 0) {
+        strncpy(var->name, name, sizeof(var->name) - 1);
+        var->name[sizeof(var->name) - 1] = '\0';
+        updated = true;
+        ESP_LOGI(TAG, "Var %d: name updated to '%s'", idx, name);
+    }
+
+    // === Обновление типа ===
+    if (var->data_type != type) {
+        var->data_type = type;
+        updated = true;
+        ESP_LOGI(TAG, "Var %d: type changed to %d", idx, type);
+
+        // Освобождаем старый буфер
+        if (var->p_value) {
+            free(var->p_value);
+            var->p_value = NULL;
+        }
+        var->data_size = 0;
+    }
+
+    // === Определяем размер по типу, если он не задан явно ===
+    uint16_t required_size = 0;
+    switch (type) {
+        case ZBM_ATTR_TYPE_U8:
+        case ZBM_ATTR_TYPE_S8:
+        case ZBM_ATTR_TYPE_BOOL:
+            required_size = 1;
+            break;
+        case ZBM_ATTR_TYPE_U16:
+        case ZBM_ATTR_TYPE_S16:
+            required_size = 2;
+            break;
+        case ZBM_ATTR_TYPE_CHAR_STRING:
+            required_size = ZB_AUTO_VAR_STR_LEN; // например, 32
+            break;
+        case ZBM_ATTR_TYPE_LONG_CHAR_STRING:
+            required_size = ZB_AUTO_VAR_LONG_STR_LEN; // например, 256
+            break;
+        default:
+            ESP_LOGE(TAG, "Unsupported data type: %d", type);
+            return false;
+    }
+
+    // === Выделяем память, если ещё не выделена или размер изменился ===
+    if (!var->p_value || var->data_size != required_size) {
+        void* new_ptr = calloc(1, required_size);
+        if (!new_ptr) {
+            ESP_LOGE(TAG, "Failed to allocate memory for var %d (size=%u)", idx, required_size);
+            return false;
+        }
+
+        // Копируем старые данные, если были (опционально)
+        if (var->p_value && var->data_size > 0) {
+            size_t copy_len = (var->data_size < required_size) ? var->data_size : required_size;
+            memcpy(new_ptr, var->p_value, copy_len);
+        }
+
+        free(var->p_value);
+        var->p_value = new_ptr;
+        var->data_size = required_size;
+        updated = true;
+    }
+
+    // === Обновление значения ===
+    if (value && size > 0) {
+        if (var->data_type == ZBM_ATTR_TYPE_U8 ||
+            var->data_type == ZBM_ATTR_TYPE_S8 ||
+            var->data_type == ZBM_ATTR_TYPE_BOOL ||
+            var->data_type == ZBM_ATTR_TYPE_U16 ||
+            var->data_type == ZBM_ATTR_TYPE_S16) {
+
+            int num;
+            if (size == 1) {
+                num = (var->data_type == ZBM_ATTR_TYPE_S8) ? 
+                      *(int8_t*)value : *(uint8_t*)value;
+            } else if (size == 2) {
+                num = (var->data_type == ZBM_ATTR_TYPE_S16) ? 
+                      *(int16_t*)value : *(uint16_t*)value;
+            } else {
+                num = atoi((char*)value);
+            }
+
+            if (var->data_type == ZBM_ATTR_TYPE_U8) {
+                *(uint8_t*)var->p_value = (uint8_t)num;
+            } else if (var->data_type == ZBM_ATTR_TYPE_S8) {
+                *(int8_t*)var->p_value = (int8_t)num;
+            } else if (var->data_type == ZBM_ATTR_TYPE_BOOL) {
+                *(bool*)var->p_value = (num != 0);
+            } else if (var->data_type == ZBM_ATTR_TYPE_U16) {
+                *(uint16_t*)var->p_value = (uint16_t)num;
+            } else if (var->data_type == ZBM_ATTR_TYPE_S16) {
+                *(int16_t*)var->p_value = (int16_t)num;
+            }
+        } else {
+            // Для строк — копируем с ограничением размера
+            
+            size_t copy_len = (size < var->data_size) ? size : var->data_size;
+            memcpy(var->p_value, value, copy_len);
+            // Убедимся, что строка завершена нулём (если это строка)
+            if (var->data_type == ZBM_ATTR_TYPE_CHAR_STRING || 
+                var->data_type == ZBM_ATTR_TYPE_LONG_CHAR_STRING) {
+                ((char*)var->p_value)[var->data_size - 1] = '\0';
+            }
+        }
+
+        var->last_update_ms = esp_log_timestamp();
+        updated = true;
+        ESP_LOGI(TAG, "Var %d: value updated", idx);
+    }
+
+    if (updated) {
+        zbm_vars_save_to_storage(); // Сохраняем конфиг в SPIFFS
+    }
+
+    return updated;
 }
 
 void zbm_var_set_uint8(uint8_t idx, uint8_t value) {
@@ -934,12 +1541,14 @@ bool zb_automation_v2_run_rule_now(const char* id) {
 // ========================================================
 
 void zb_automation_v2_init(void) {
-    zbm_var_init();
+    
     zb_rules_count = 0;
 
     // Загружаем правила
     zb_rules_load_all_from_storage();
-
+    
+    // загрузка переменных и первая инициализация
+    zbm_var_init();
     // Инициализируем поведения
     zbm_behavior_init();
 

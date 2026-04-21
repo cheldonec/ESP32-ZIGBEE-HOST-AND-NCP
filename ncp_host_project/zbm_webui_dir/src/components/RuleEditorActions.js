@@ -24,7 +24,7 @@ function getCommandById(device, epId, clusterId, cmdGuid) {
   return cluster?.commands?.find(c => c.guid === cmdGuid) || null;
 }
 
-export default function RuleEditorActions({ devices, actions, onChange, onParamChange, onRemove, onAdd }) {
+export default function RuleEditorActions({ devices, variables, actions, onChange, onParamChange, onRemove, onAdd }) {
   // === Сброс ep при смене device ===
   useEffect(() => {
     actions.forEach(action => {
@@ -74,37 +74,69 @@ export default function RuleEditorActions({ devices, actions, onChange, onParamC
               </div>
 
               {/* Блок "Изменить переменную" */}
+              {/* Блок "Изменить переменную" */}
               {action.type === 'set_var' && (
-                <div className="space-y-3 ml-4">
+                <div className="space-y-3 ml-4 border-l-2 border-gray-700 pl-4">
                   <div className="form-row">
                     <label className="form-label">Переменная</label>
                     <select
                       value={action.target || ''}
-                      onChange={(e) => onChange(action.id, 'target', e.target.value)}
+                      onChange={(e) => {
+                        const guid = e.target.value;
+                        const variable = variables.find(v => v.guid === guid);
+                        onChange(action.id, 'target', guid);
+                        // Автоматически сбрасываем значение при смене переменной
+                        onChange(action.id, 'value', '');
+                      }}
                       className="form-input"
                     >
                       <option value="">Выберите</option>
-                      {virtualVariables.map(v => (
+                      {variables.map(v => (
                         <option key={v.guid} value={v.guid}>{v.name} ({v.guid})</option>
                       ))}
                     </select>
                   </div>
-                  <div className="form-row">
-                    <label className="form-label">Тип</label>
-                    <div className="form-static-text font-mono text-green-400">
-                      {action.target ? formatDataType(getVariable(action.target)?.type) : '—'}
-                    </div>
-                  </div>
-                  <div className="form-row">
-                    <label className="form-label">Значение</label>
-                    <input
-                      type="text"
-                      value={action.value || ''}
-                      onChange={(e) => onChange(action.id, 'value', e.target.value)}
-                      placeholder="1, true..."
-                      className="form-input"
-                    />
-                  </div>
+
+                  {action.target && (() => {
+                  // Используем тип из действия (сохранённый), а не из текущей переменной
+                  const dataType = action.dataType !== undefined 
+                    ? action.dataType 
+                    : (variables.find(v => v.guid === action.target)?.type ?? 0x20);
+
+                  return (
+                    <>
+                      <div className="form-row">
+                        <label className="form-label">Тип</label>
+                        <div className="form-static-text font-mono text-green-400">
+                          {formatDataType(dataType)}
+                        </div>
+                      </div>
+
+                      <div className="form-row">
+                        <label className="form-label">Значение</label>
+                        {dataType === 0x42 || dataType === 0x43 ? (
+                          <input
+                            type="text"
+                            value={action.value || ''}
+                            onChange={(e) => onChange(action.id, 'value', e.target.value)}
+                            placeholder="Введите строку"
+                            className="form-input"
+                          />
+                        ) : (
+                          <input
+                            type="number"
+                            value={action.value || ''}
+                            onChange={(e) => onChange(action.id, 'value', e.target.value)}
+                            placeholder="1, 255..."
+                            className="form-input"
+                            min="0"
+                            max="65535"
+                          />
+                        )}
+                      </div>
+                    </>
+                  );
+                })()}
                 </div>
               )}
 

@@ -1,7 +1,8 @@
 // src/components/Settings.js
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
+import { useVariables } from '../hooks/useVariables';
 
-export default function Settings({ activeSection = 'network' }) {
+export default function Settings({ activeSection = 'network'}) {
   const [config, setConfig] = useState({
     pan_id: '',
     radio_channel: '',
@@ -26,32 +27,36 @@ export default function Settings({ activeSection = 'network' }) {
   const [showStaPassword, setShowStaPassword] = useState(false);
 
   useEffect(() => {
-    fetch('/api/get/coordinator')
-      .then(res => res.json())
-      .then(data => {
+    const loadConfig = async () => {
+      try {
+        const coordRes = await fetch('/api/get/coordinator');
+        const coordData = await coordRes.json();
+
         setConfig(prev => ({
           ...prev,
-          pan_id: data.pan_id || '',
-          radio_channel: data.radio_channel || '',
-          coordinator_name: data.friendly_name || 'Zigbee Coordinator',
-          hostname: data.hostname || 'esp32-zigbee',
-          wifi_mode: data.wifi_mode || 'ap',
-          wifi_ap_ssid: data.wifi_ap_ssid || prev.wifi_ap_ssid,
-          wifi_ap_password: data.wifi_ap_password || prev.wifi_ap_password,
-          wifi_sta_ssid: data.wifi_sta_ssid || '',
-          wifi_sta_password: data.wifi_sta_password || '',
+          pan_id: coordData.pan_id || '',
+          radio_channel: coordData.radio_channel || '',
+          coordinator_name: coordData.friendly_name || 'Zigbee Coordinator',
+          hostname: coordData.hostname || 'esp32-zigbee',
+          wifi_mode: coordData.wifi_mode || 'ap',
+          wifi_ap_ssid: coordData.wifi_ap_ssid || prev.wifi_ap_ssid,
+          wifi_ap_password: coordData.wifi_ap_password || prev.wifi_ap_password,
+          wifi_sta_ssid: coordData.wifi_sta_ssid || '',
+          wifi_sta_password: coordData.wifi_sta_password || '',
 
-          ssdp_manufacturer: data.ssdp_manufacturer || prev.ssdp_manufacturer,
-          ssdp_model_name: data.ssdp_model_name || prev.ssdp_model_name,
-          ssdp_model_number: data.ssdp_model_number || prev.ssdp_model_number,
-          ssdp_serial_number: data.ssdp_serial_number || prev.ssdp_serial_number,
-          ssdp_server_name: data.ssdp_server_name || prev.ssdp_server_name,
+          ssdp_manufacturer: coordData.ssdp_manufacturer || prev.ssdp_manufacturer,
+          ssdp_model_name: coordData.ssdp_model_name || prev.ssdp_model_name,
+          ssdp_model_number: coordData.ssdp_model_number || prev.ssdp_model_number,
+          ssdp_serial_number: coordData.ssdp_serial_number || prev.ssdp_serial_number,
+          ssdp_server_name: coordData.ssdp_server_name || prev.ssdp_server_name,
         }));
-      })
-      .catch(err => {
-        setStatus('Ошибка загрузки настроек');
+      } catch (err) {
+        setStatus('Ошибка загрузки координатора');
         console.error(err);
-      });
+      }
+    };
+
+    loadConfig();
   }, []);
 
   const handleChange = (e) => {
@@ -131,6 +136,148 @@ export default function Settings({ activeSection = 'network' }) {
       });
     }
   };
+  
+  // === Переменные (внутри Settings.js) ===
+  const VariablesSettings = () => {
+    const { variables, reload } = useVariables();
+    const [localVars, setLocalVars] = useState([]);
+    const [isSaving, setIsSaving] = useState(false);
+
+    const VAR_TYPES = [
+      { value: 0x20, label: 'uint8' },
+      { value: 0x28, label: 'int8' },
+      { value: 0x21, label: 'uint16' },
+      { value: 0x29, label: 'int16' },
+      { value: 0x42, label: 'char_string' },
+      { value: 0x44, label: 'long_char_string' },
+    ];
+
+    // Инициализация: только один раз при первом рендере
+    useEffect(() => {
+      if (variables.length > 0 && localVars.length === 0) {
+        setLocalVars(variables.map(v => ({ ...v })));
+      }
+    }, [variables, localVars.length]);
+
+    const handleNameChange = (idx, value) => {
+      setLocalVars(prev => prev.map(v => v.idx === idx ? { ...v, name: value } : v));
+    };
+
+    const handleTypeChange = (idx, value) => {
+      const numValue = Number(value);
+      setLocalVars(prev => prev.map(v => v.idx === idx ? { ...v, type: numValue } : v));
+    };
+
+    const handleValueChange = (idx, value) => {
+      setLocalVars(prev => prev.map(v => v.idx === idx ? { ...v, value } : v));
+    };
+
+    const saveAll = async () => {
+      setIsSaving(true);
+      try {
+        const promises = localVars.map(async (v) => {
+          let valueToSend;
+
+          if (v.type === 0x42 || v.type === 0x44) {
+            valueToSend = v.value;
+          } else {
+            const num = Number(v.value);
+            if (isNaN(num)) return Promise.resolve();
+            valueToSend = num;
+          }
+
+          const payload = {
+            name: v.name,
+            type: v.type,
+            value: valueToSend,
+          };
+
+          return fetch(`/api/post/var/${v.idx}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+          });
+        });
+
+        await Promise.all(promises);
+        await reload(); // Получаем свежие данные
+
+        // ✅ Принудительно синхронизируем UI с обновлёнными переменными
+        setLocalVars(variables.map(v => ({ ...v })));
+
+        setStatus('✅ Переменные сохранены');
+      } catch (err) {
+        console.error('Ошибка сохранения переменных:', err);
+        setStatus('❌ Ошибка при сохранении');
+      } finally {
+        setIsSaving(false);
+      }
+    };
+
+    return (
+      <div className="panel">
+        <div className="panel-header">🔢 Переменные</div>
+        <div className="panel-body">
+          <table className="w-full text-sm">
+            <thead>
+              <tr>
+                <th className="text-left py-2 text-gray-400">Имя</th>
+                <th className="text-left py-2 text-gray-400">Тип</th>
+                <th className="text-left py-2 text-gray-400">Значение</th>
+              </tr>
+            </thead>
+            <tbody>
+              {localVars.map((v) => (
+                <tr key={v.idx}>
+                  <td className="py-1">
+                    <input
+                      type="text"
+                      value={v.name}
+                      onChange={(e) => handleNameChange(v.idx, e.target.value)}
+                      placeholder={`var_${v.idx}`}
+                      className="form-input text-xs px-2 py-1 h-6"
+                      style={{ fontSize: '11px', padding: '1px 4px' }}
+                    />
+                  </td>
+                  <td className="py-1 text-gray-500">
+                    <select
+                      value={v.type}
+                      onChange={(e) => handleTypeChange(v.idx, e.target.value)}
+                      className="form-input text-xs px-2 py-1 h-6"
+                      style={{ fontSize: '11px', padding: '1px 4px' }}
+                    >
+                      {VAR_TYPES.map(({ value, label }) => (
+                        <option key={value} value={value}>{label}</option>
+                      ))}
+                    </select>
+                  </td>
+                  <td className="py-1">
+                    <input
+                      type="text"
+                      value={v.value ?? ''}
+                      onChange={(e) => handleValueChange(v.idx, e.target.value)}
+                      placeholder="значение"
+                      className="form-input text-xs px-2 py-1 h-6"
+                      style={{ fontSize: '11px', padding: '1px 4px' }}
+                    />
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+
+          <div className="mt-4 flex justify-end">
+            <button onClick={saveAll} disabled={isSaving} className="btn-primary text-sm">
+              {isSaving ? 'Сохранение...' : 'Сохранить все'}
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  };// end of varsettings component
+
+  // ✅ Сохраняем элемент, чтобы не пересоздавать при каждом рендере
+  const variablesSettingsElement = useMemo(() => <VariablesSettings />, []);
 
   const renderSection = () => {
     if (activeSection === 'network') {
@@ -139,6 +286,7 @@ export default function Settings({ activeSection = 'network' }) {
           <div className="panel-header">📶 Параметры сети</div>
           <div className="panel-body">
             <form onSubmit={handleSubmit} className="form-fields">
+              {/* ... остальные поля формы ... */}
               <div className="form-row">
                 <label className="form-label">Сервер</label>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flex: 1 }}>
@@ -323,6 +471,11 @@ export default function Settings({ activeSection = 'network' }) {
           </div>
         </div>
       );
+    }
+
+    if (activeSection === 'variables') {
+      //return <VariablesSettings variables={variables} onSave={() => setStatus('✅ Переменные сохранены')} />;
+      return variablesSettingsElement;
     }
 
     return <div>Раздел не найден</div>;

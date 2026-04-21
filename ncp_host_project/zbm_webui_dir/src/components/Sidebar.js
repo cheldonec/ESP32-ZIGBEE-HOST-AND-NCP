@@ -1,12 +1,14 @@
 // src/components/Sidebar.js
+import { useState } from 'react';
 import { useDevices } from '../hooks/useDevices';
 import DeviceSidebar from './DeviceSidebar';
-import { useState } from 'react';
+
 import RulesSidebar from './RulesSidebar';
 
 const SETTINGS_ITEMS = [
   { id: 'network', label: 'Параметры сети', icon: '📶' },
   { id: 'ssdp', label: 'Информация о SSDP', icon: '🌐' },
+  { id: 'variables', label: 'Переменные', icon: '🔢' },
 ];
 
 export default function Sidebar({ currentTab, selectedItem, onSelectItem }) {

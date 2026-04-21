@@ -64,49 +64,115 @@ static bool get_rule_path_by_id(const char* rule_id, char* out_path, size_t path
 
 
 esp_err_t zbm_rest_api_get_vars_handler(httpd_req_t* req) {
+    ESP_LOGI(TAG, "REQ /api/get/vars - Fetching all variables");
+
     cJSON* arr = cJSON_CreateArray();
     for (int i = 0; i < ZB_AUTO_VAR_COUNT; i++) {
         cJSON* v = cJSON_CreateObject();
+
+        // Защита: имя может быть NULL
+        const char* name = zbm_vars[i].name;
+        cJSON_AddStringToObject(v, "name", name);
+
         cJSON_AddNumberToObject(v, "idx", i);
-        cJSON_AddStringToObject(v, "name", zbm_vars[i].name);
         cJSON_AddNumberToObject(v, "type", zbm_vars[i].data_type);
 
+        char value_str[64] = {0};
+
         switch (zbm_vars[i].data_type) {
-            case ZBM_ATTR_TYPE_U8:
-                cJSON_AddNumberToObject(v, "value", *(uint8_t*)zbm_vars[i].p_value);
+            case ZBM_ATTR_TYPE_U8: {
+                uint8_t val = *(uint8_t*)zbm_vars[i].p_value;
+                cJSON_AddNumberToObject(v, "value", val);
+                snprintf(value_str, sizeof(value_str), "U8=%u", val);
                 break;
-            case ZBM_ATTR_TYPE_S8:
-                cJSON_AddNumberToObject(v, "value", *(int8_t*)zbm_vars[i].p_value);
+            }
+            case ZBM_ATTR_TYPE_S8: {
+                int8_t val = *(int8_t*)zbm_vars[i].p_value;
+                cJSON_AddNumberToObject(v, "value", val);
+                snprintf(value_str, sizeof(value_str), "S8=%d", val);
                 break;
-            case ZBM_ATTR_TYPE_U16:
-                cJSON_AddNumberToObject(v, "value", *(uint16_t*)zbm_vars[i].p_value);
+            }
+            case ZBM_ATTR_TYPE_BOOL: {
+                bool val = *(bool*)zbm_vars[i].p_value;
+                cJSON_AddBoolToObject(v, "value", val);
+                snprintf(value_str, sizeof(value_str), "BOOL=%s", val ? "true" : "false");
                 break;
+            }
+            case ZBM_ATTR_TYPE_U16: {
+                uint16_t val = *(uint16_t*)zbm_vars[i].p_value;
+                cJSON_AddNumberToObject(v, "value", val);
+                snprintf(value_str, sizeof(value_str), "U16=%u", val);
+                break;
+            }
+            case ZBM_ATTR_TYPE_S16: {
+                int16_t val = *(int16_t*)zbm_vars[i].p_value;
+                cJSON_AddNumberToObject(v, "value", val);
+                snprintf(value_str, sizeof(value_str), "S16=%d", val);
+                break;
+            }
             case ZBM_ATTR_TYPE_CHAR_STRING:
-                cJSON_AddStringToObject(v, "value", (char*)zbm_vars[i].p_value);
+            case ZBM_ATTR_TYPE_LONG_CHAR_STRING: {
+                char* str = (char*)zbm_vars[i].p_value;
+                if (!str) {
+                    cJSON_AddStringToObject(v, "value", "");
+                    snprintf(value_str, sizeof(value_str), "STR=(null)");
+                } else {
+                    cJSON_AddStringToObject(v, "value", str);
+                    if (zbm_vars[i].data_type == ZBM_ATTR_TYPE_CHAR_STRING) {
+                        snprintf(value_str, sizeof(value_str), "STR=\"%s\"", str);
+                    } else {
+                        snprintf(value_str, sizeof(value_str), "LSTR(len=%d)", strlen(str));
+                    }
+                }
                 break;
-            default:
-                cJSON_AddNumberToObject(v, "value", *(uint8_t*)zbm_vars[i].p_value);
+            }
+            default: {
+                uint8_t val = *(uint8_t*)zbm_vars[i].p_value;
+                cJSON_AddNumberToObject(v, "value", val);
+                snprintf(value_str, sizeof(value_str), "UNK=%u", val);
                 break;
+            }
         }
+
         cJSON_AddItemToArray(arr, v);
+
+        // 🔐 Безопасный вывод имени и типа
+        const char* safe_name = zbm_vars[i].name;
+        const char* type_str = zbm_attr_type_to_str(zbm_vars[i].data_type);
+        if (!type_str) type_str = "UNKNOWN";
+
+        ESP_LOGI(TAG, "VAR[%d] name='%s' type=%d (%s) -> %s",
+                 i, safe_name, zbm_vars[i].data_type, type_str, value_str);
     }
 
     char* str = cJSON_PrintUnformatted(arr);
     cJSON_Delete(arr);
 
+    if (!str) {
+        ESP_LOGE(TAG, "Failed to serialize variables to JSON");
+        httpd_resp_send_500(req);
+        return ESP_OK;
+    }
+
     httpd_resp_set_type(req, "application/json");
     httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
     httpd_resp_send(req, str, HTTPD_RESP_USE_STRLEN);
+
+    ESP_LOGI(TAG, "RESP /api/get/vars -> %u bytes sent", (unsigned int)strlen(str));
+
     free(str);
     return ESP_OK;
 }
 
 esp_err_t zbm_rest_api_post_var_handler(httpd_req_t* req) {
+    uint32_t temp_value = 0;  // будет использоваться как буфер
+    void* free_on_exit = NULL; // если выделяем память для строки
     char uri[64];
     strlcpy(uri, req->uri, sizeof(uri));
-    int idx = atoi(uri + strlen("/api/var/"));
+    int idx = atoi(uri + strlen("/api/post/var/"));
+
     if (idx < 0 || idx >= ZB_AUTO_VAR_COUNT) {
-        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid index");
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid variable index");
         return ESP_OK;
     }
 
@@ -120,31 +186,158 @@ esp_err_t zbm_rest_api_post_var_handler(httpd_req_t* req) {
 
     cJSON* json = cJSON_Parse(body);
     if (!json) {
-        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid JSON");
+        const char* resp = "{\"success\":false,\"error\":\"invalid_json\"}";
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+        httpd_resp_send(req, resp, strlen(resp));
         return ESP_OK;
     }
 
-    cJSON* value = cJSON_GetObjectItem(json, "value");
-    cJSON* type_obj = cJSON_GetObjectItem(json, "type");
+    bool updated = false;
+    const char* name = NULL;
+    zbm_attr_data_types_t type = zbm_vars[idx].data_type;
+    void* value_ptr = NULL;
+    uint16_t value_size = 0;
 
-    if (type_obj) zbm_vars[idx].data_type = (zbm_attr_data_types_t)type_obj->valueint;
-
-    if (cJSON_IsNumber(value)) {
-        uint16_t size = 1;
-        if (zbm_vars[idx].data_type == ZBM_ATTR_TYPE_U16 ||
-            zbm_vars[idx].data_type == ZBM_ATTR_TYPE_S16) size = 2;
-        zbm_var_update_value(&zbm_vars[idx], &value->valueint, size);
-    } else if (cJSON_IsString(value)) {
-        zbm_var_update_value(&zbm_vars[idx], (void*)value->valuestring, strlen(value->valuestring) + 1);
+    // === Парсим имя ===
+    cJSON* name_obj = cJSON_GetObjectItem(json, "name");
+    if (name_obj && cJSON_IsString(name_obj)) {
+        name = name_obj->valuestring;
+        if (strlen(name) == 0 || strlen(name) >= sizeof(zbm_vars[idx].name)) {
+            cJSON_Delete(json);
+            const char* resp = "{\"success\":false,\"error\":\"invalid_name_length\"}";
+            httpd_resp_set_type(req, "application/json");
+            httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+            httpd_resp_send(req, resp, strlen(resp));
+            return ESP_OK;
+        }
     }
 
-    zbm_vars_save_to_storage();  // сохраняем
+    // === Парсим тип ===
+    cJSON* type_obj = cJSON_GetObjectItem(json, "type");
+    if (type_obj && cJSON_IsNumber(type_obj)) {
+        zbm_attr_data_types_t new_type = (zbm_attr_data_types_t)type_obj->valueint;
+        if (new_type != ZBM_ATTR_TYPE_U8 &&
+            new_type != ZBM_ATTR_TYPE_S8 &&
+            new_type != ZBM_ATTR_TYPE_BOOL &&
+            new_type != ZBM_ATTR_TYPE_U16 &&
+            new_type != ZBM_ATTR_TYPE_S16 &&
+            new_type != ZBM_ATTR_TYPE_CHAR_STRING &&
+            new_type != ZBM_ATTR_TYPE_LONG_CHAR_STRING) {
+            cJSON_Delete(json);
+            const char* resp = "{\"success\":false,\"error\":\"unsupported_type\"}";
+            httpd_resp_set_type(req, "application/json");
+            httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+            httpd_resp_send(req, resp, strlen(resp));
+            return ESP_OK;
+        }
+        type = new_type;
+    }
+
+    // === Парсим значение ===
+    cJSON* value_obj = cJSON_GetObjectItem(json, "value");
+    if (value_obj) {
+        // Определяем размер
+        switch (type) {
+            case ZBM_ATTR_TYPE_U8:
+            case ZBM_ATTR_TYPE_S8:
+            case ZBM_ATTR_TYPE_BOOL:
+                value_size = 1;
+                break;
+            case ZBM_ATTR_TYPE_U16:
+            case ZBM_ATTR_TYPE_S16:
+                value_size = 2;
+                break;
+            case ZBM_ATTR_TYPE_CHAR_STRING:
+            case ZBM_ATTR_TYPE_LONG_CHAR_STRING:
+                if (cJSON_IsString(value_obj)) {
+                    value_size = strlen(value_obj->valuestring) + 1;
+                } else {
+                    cJSON_Delete(json);
+                    const char* resp = "{\"success\":false,\"error\":\"string_value_expected\"}";
+                    httpd_resp_set_type(req, "application/json");
+                    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+                    httpd_resp_send(req, resp, strlen(resp));
+                    return ESP_OK;
+                }
+                break;
+            default:
+                value_size = 1;
+                break;
+        }
+
+        // Подготавливаем указатель на значение
+        if (type == ZBM_ATTR_TYPE_CHAR_STRING || type == ZBM_ATTR_TYPE_LONG_CHAR_STRING) {
+            if (cJSON_IsString(value_obj)) {
+                value_ptr = (void*)value_obj->valuestring;
+            } else if (cJSON_IsNumber(value_obj)) {
+                // Число → строка
+                char* str_val = malloc(16);
+                if (!str_val) {
+                    cJSON_Delete(json);
+                    const char* resp = "{\"success\":false,\"error\":\"no_mem\"}";
+                    httpd_resp_send(req, resp, strlen(resp));
+                    return ESP_OK;
+                }
+                snprintf(str_val, 16, "%d", value_obj->valueint);
+                value_ptr = str_val;
+                free_on_exit = str_val; // см. ниже
+            }
+        } else {
+            // Числовые типы: U8, S8, U16, S16
+            if (cJSON_IsNumber(value_obj)) {
+                if (value_size == 1) {
+                    uint8_t val = (uint8_t)value_obj->valueint;
+                    memcpy(&temp_value, &val, 1);
+                    value_ptr = &temp_value;
+                } else if (value_size == 2) {
+                    uint16_t val = (uint16_t)value_obj->valueint;
+                    memcpy(&temp_value, &val, 2);
+                    value_ptr = &temp_value;
+                }
+            } else if (cJSON_IsString(value_obj)) {
+                // Строка → число
+                int num = atoi(value_obj->valuestring);
+                if (value_size == 1) {
+                    uint8_t val = (uint8_t)num;
+                    memcpy(&temp_value, &val, 1);
+                    value_ptr = &temp_value;
+                } else if (value_size == 2) {
+                    uint16_t val = (uint16_t)num;
+                    memcpy(&temp_value, &val, 2);
+                    value_ptr = &temp_value;
+                }
+            }
+        }
+    }
+
+    // === Применяем изменения через безопасную функцию ===
+    if (zbm_var_set_config(idx, name, type, value_ptr, value_size)) {
+        updated = true;
+    }
 
     cJSON_Delete(json);
-    httpd_resp_sendstr(req, "{\"success\":true}");
+
+    // === Формируем успешный ответ ===
+    if (updated) {
+        // Уведомление WebSocket
+        cJSON* notify = cJSON_CreateObject();
+        cJSON_AddNumberToObject(notify, "idx", idx);
+        zbm_ws_send_sys_notify("var_updated", "Variable updated", notify);
+        cJSON_Delete(notify);
+    }
+
+    const char* resp = "{\"success\":true}";
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    httpd_resp_send(req, resp, strlen(resp));
+
+    if (free_on_exit) {
+        free(free_on_exit);
+        free_on_exit = NULL;
+    }
     return ESP_OK;
 }
-
 
 // === Обработчик: GET /api/rules — получить список правил (индекс) ===
 esp_err_t zbm_rest_api_get_rules_handler(httpd_req_t* req) {
@@ -361,7 +554,7 @@ esp_err_t zbm_rest_api_post_rule_handler(httpd_req_t* req) {
     cJSON_AddStringToObject(notify_data, "id", rule_id);
     cJSON_AddStringToObject(notify_data, "action", "rule_updated");
     zbm_ws_send_sys_notify("rule_updated", "Rule saved", notify_data);
-
+    cJSON_Delete(notify_data);
     char resp_str[128];
     snprintf(resp_str, sizeof(resp_str), "{\"success\": true, \"id\": \"%s\"}", rule_id);
 
@@ -419,7 +612,7 @@ esp_err_t zbm_rest_api_delete_rule_handler(httpd_req_t* req) {
     cJSON_AddStringToObject(notify_data, "id", id);
     cJSON_AddStringToObject(notify_data, "action", "rule_deleted");
     zbm_ws_send_sys_notify("rule_deleted", "Rule deleted", notify_data);
-
+    cJSON_Delete(notify_data);
     const char* response = "{\"success\": true}";
     httpd_resp_set_type(req, "application/json");
     httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
@@ -505,7 +698,7 @@ static esp_err_t set_rule_enabled_state(httpd_req_t* req, bool enabled) {
     cJSON_AddStringToObject(notify_data, "id", id);
     cJSON_AddBoolToObject(notify_data, "enabled", enabled);
     zbm_ws_send_sys_notify("rule_toggled", enabled ? "Rule enabled" : "Rule disabled", notify_data);
-
+    cJSON_Delete(notify_data);
     const char* response = "{\"success\": true}";
     httpd_resp_set_type(req, "application/json");
     httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");

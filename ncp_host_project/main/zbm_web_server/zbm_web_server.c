@@ -213,7 +213,7 @@ bool zbm_ws_send_sys_notify(const char* event_type, const char* message, cJSON* 
     BaseType_t ret = xQueueSendToBack(ws_sys_notify_queue, &msg, pdMS_TO_TICKS(10));
     if (ret != pdTRUE) {
         ESP_LOGW(TAG, "SysNotify queue full, dropping: %s", event_type);
-        cJSON_Delete(data); // если не вошёл — освобождаем
+        //cJSON_Delete(data); // если не вошёл — освобождаем
         return false;
     }
 
@@ -230,7 +230,7 @@ void ws_notify_automation_rule_fired(const char* rule_id, const char* trigger_gu
     }
 
     zbm_ws_send_sys_notify("automation", "rule_fired", data);
-    // владение data передаётся в zbm_ws_send_sys_notify, будет удалено автоматически
+    cJSON_Delete(data);
 }
 
 // Асинхронная отправка WS
@@ -694,13 +694,13 @@ httpd_uri_t uri_update_dev_friendly_name = {
 //====                 RULES                 ====
 
 httpd_uri_t api_rules_get_vars = {
-    .uri       = "/api/vars",
+    .uri       = "/api/get/vars",
     .method    = HTTP_GET,
     .handler   = zbm_rest_api_get_vars_handler
 };
 
 httpd_uri_t api_rules_post_vars = {
-    .uri       = "/api/var/:idx",
+    .uri       = "/api/post/var/*",
     .method    = HTTP_POST,
     .handler   = zbm_rest_api_post_var_handler
 };

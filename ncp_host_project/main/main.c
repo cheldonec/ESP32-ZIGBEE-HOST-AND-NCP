@@ -31,10 +31,10 @@ void app_main(void)
     zbm_load_all_devices_from_spiffs_and_restore();
 
     zb_automation_v2_init();  // инициализируем движок правил
-
-
+    
     ret = zbm_ncp_connect_start();
-
+    //vTaskDelay(1000 / portTICK_PERIOD_MS); // задержка 1 sec
+    
     // Запуск теста: каждые 2 секунды, бесконечно
     /*zbm_test_run(1000, true);
 

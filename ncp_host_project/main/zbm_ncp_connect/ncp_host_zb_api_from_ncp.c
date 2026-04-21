@@ -708,6 +708,7 @@ static esp_err_t zb_manager_active_ep_resp_fn(const uint8_t *input, uint16_t inl
         }
 
         zbm_ws_send_sys_notify("device_updated", "Device endpoints updated", data);
+        cJSON_Delete(data);
     } else if (result == 0) {
         // Можно обновить время, но не обязательно сохранять
         // Например, все эндпоинты уже были, но устройство просто ответило
@@ -794,7 +795,7 @@ static esp_err_t zb_manager_simple_desc_resp_fn(const uint8_t *input, uint16_t i
     cJSON_AddStringToObject(data, "short_addr", short_str);
 
     zbm_ws_send_sys_notify("device_updated", "Device structure updated from Simple Descriptor", data);
-
+    cJSON_Delete(data);
     ESP_LOGI(TAG, "✅ Applied Simple Descriptor for dev=0x%04X, ep=%d, in=%d, out=%d",
              short_addr, endpoint_id, in_count, out_count);
 

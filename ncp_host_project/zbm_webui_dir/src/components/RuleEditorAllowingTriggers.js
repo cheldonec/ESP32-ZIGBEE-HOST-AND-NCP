@@ -1,6 +1,6 @@
 // src/components/RuleEditorAllowingTriggers.js
 import { useState } from 'react';
-import { virtualVariables, getVariable, formatDataType } from './variables';
+import { formatDataType } from './variables';
 
 const conditionTypes = [
   { value: 'eq', label: 'равно' },
@@ -41,7 +41,7 @@ function getAttrRepOptions(cluster) {
   return [...attrs, ...reps];
 }
 
-export default function RuleEditorAllowingTriggers({ devices, triggers, onAdd, onChange, onRemove }) {
+export default function RuleEditorAllowingTriggers({ devices, variables, triggers, onAdd, onChange, onRemove }) {
   const updateTrigger = (id, updates) => {
     const trigger = triggers.find(t => t.id === id);
     onChange(id, { ...trigger, ...updates });
@@ -59,7 +59,7 @@ export default function RuleEditorAllowingTriggers({ devices, triggers, onAdd, o
             const isVarMode = sourceType === 'variable';
 
             // Переменная
-            const varData = isVarMode ? getVariable(trigger.var) : null;
+            const varData = isVarMode ? variables.find(v => v.guid === trigger.var) : null;
 
             // Атрибут/репорт
             const device = devices.find(d => d.ieee_addr === trigger.device);
@@ -119,18 +119,19 @@ export default function RuleEditorAllowingTriggers({ devices, triggers, onAdd, o
                         value={trigger.var || ''}
                         onChange={(e) => {
                           const guid = e.target.value;
-                          const variable = getVariable(guid);
+                          const variable = variables.find(v => v.guid === guid);
                           updateTrigger(trigger.id, {
                             var: guid,
-                            guid, // сохраняем для бэкенда
-                            expected_type: variable?.type || 32,
+                            guid,
+                            dataType: variable?.type || 0x20,
+                            cond: 'eq',
                             value: trigger.value || '0'
                           });
                         }}
                         className="form-input"
                       >
                         <option value="">Выберите</option>
-                        {virtualVariables.map(v => (
+                        {variables.map(v => (
                           <option key={v.guid} value={v.guid}>{v.name} ({v.guid})</option>
                         ))}
                       </select>
@@ -232,7 +233,7 @@ export default function RuleEditorAllowingTriggers({ devices, triggers, onAdd, o
                             updateTrigger(trigger.id, {
                               attrOrRep: guid,
                               guid, // реальный guid атрибута/репорта
-                              expected_type: option?.type || 32,
+                              dataType: option?.type || 0x20,
                             });
                           }}
                           disabled={!trigger.cluster}

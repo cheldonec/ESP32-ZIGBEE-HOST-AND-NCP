@@ -15,6 +15,7 @@ import Navbar from './components/Navbar';
 import { useDevices } from './hooks/useDevices';
 import BehaviorsPanel from './components/BehaviorsPanel';
 import RuleEditor from './components/RuleEditor';
+import { useVariables } from './hooks/useVariables'; // ✅ Хук импортирован
 
 // Хук для координатора
 const useCoordinator = () => {
@@ -47,6 +48,7 @@ function App() {
   const { coordinator } = useCoordinator();
   const { addToast } = useNotification();
 
+  // 🔥 Запускаем загрузку устройств и переменных при старте
   const { devices: fullDevices } = useDevices({
     onAttributeUpdate: ({ attribute, value, isCustomReport, short, ep, clusterId, attrId }) => {
       const { name } = attribute;
@@ -99,6 +101,14 @@ function App() {
       addToast(`${emoji} ${userMessage}`, 5000);
     }
   });
+
+  // ✅ ЕДИНСТВЕННОЕ место вызова useVariables — при старте приложения
+  const { variables } = useVariables();
+
+  // Для отладки — можно убрать
+  useEffect(() => {
+    console.log('✅ [App] Переменные загружены:', variables);
+  }, [variables]);
 
   const selectedDevice = fullDevices.find(d => d.ieee_addr === selectedItem?.id) || null;
 
@@ -162,7 +172,7 @@ function App() {
           )}
 
           {currentPath === '#/rules' && selectedItem?.type === 'rule' && (
-            <RuleEditor ruleId={selectedItem.id} />  // ✅ Теперь используем модульный редактор
+            <RuleEditor ruleId={selectedItem.id} />
           )}
 
           {![ '/', '/settings', '/scenes', '/rules'].includes(currentPath.replace('#', '')) && (

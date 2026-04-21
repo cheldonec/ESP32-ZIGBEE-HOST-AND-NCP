@@ -846,7 +846,7 @@ esp_err_t zbm_rest_api_post_update_dev_friendly_name_handler(httpd_req_t* req) {
     cJSON_AddStringToObject(data, "ieee_addr", ieee_str);
     cJSON_AddStringToObject(data, "friendly_name", dev->friendly_name ? dev->friendly_name : "");
     zbm_ws_send_sys_notify("device_renamed", "Device renamed", data);
-
+    cJSON_Delete(data);
     ESP_LOGI(TAG, "✅ Device %s renamed to '%s'", ieee_str, dev->friendly_name ? dev->friendly_name : "(no name)");
 
 _end:

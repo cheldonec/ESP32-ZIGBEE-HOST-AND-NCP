@@ -1,25 +1,25 @@
 // src/components/variables.js
+import { useVariables } from '../hooks/useVariables';
 
-export const virtualVariables = [
-  { guid: 'var_0', name: 'Ночное время', type: 16 },   // bool
-  { guid: 'var_1', name: 'Освещённость', type: 32 },  // uint8_t
-];
+// Экспортируем только интерфейс — теперь переменные динамические
+export const virtualVariables = []; // будет переопределено при рендере
 
-export function getVariable(guid) {
-  return virtualVariables.find(v => v.guid === guid);
-}
+export const getVariable = (guid) => {
+  const idx = parseInt(guid.replace('var_', ''), 10);
+  if (isNaN(idx)) return null;
+  // Мы не можем использовать useVariables здесь напрямую — это хук
+  // Поэтому используем косвенный способ
+  return null; // будет передано через пропсы или контекст
+};
 
-export function formatDataType(type) {
+export const formatDataType = (type) => {
   const types = {
-    16: 'bool',
-    32: 'uint8_t',
-    33: 'uint16_t',
-    35: 'uint32_t',
-    48: 'enum',
-    66: 'char_str',
-    72: 'long_char_str',
-    65: 'octet_str',
-    71: 'long_octet_str'
+    0x20: 'uint8',
+    0x28: 'int8',
+    0x21: 'uint16',
+    0x29: 'int16',
+    0x42: 'char_string',
+    0x44: 'long_char_string'
   };
-  return types[type] || `unknown (${type})`;
-}
+  return types[type] || `unknown(0x${type.toString(16)})`;
+};

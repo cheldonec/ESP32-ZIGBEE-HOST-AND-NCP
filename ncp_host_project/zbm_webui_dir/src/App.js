@@ -10,12 +10,11 @@ import DeviceDetails from './components/DeviceDetails';
 import Settings from './components/Settings';
 import NotificationProvider from './components/NotificationProvider';
 import { useNotification } from './context/NotificationContext';
-import { useServerHealth } from './hooks/useServerHealth';
 import Navbar from './components/Navbar';
 import { useDevices } from './hooks/useDevices';
 import BehaviorsPanel from './components/BehaviorsPanel';
 import RuleEditor from './components/RuleEditor';
-import { useVariables } from './hooks/useVariables'; // ✅ Хук импортирован
+import { useVariables } from './hooks/useVariables';
 
 // Хук для координатора
 const useCoordinator = () => {
@@ -44,15 +43,14 @@ const useCoordinator = () => {
 
 function App() {
   const [currentPath, setCurrentPath] = useState(window.location.hash || '#/');
-  const [selectedItem, setSelectedItem] = useState(null); // { type: 'device', id: '...' }
+  const [selectedItem, setSelectedItem] = useState(null);
   const { coordinator } = useCoordinator();
   const { addToast } = useNotification();
 
-  // 🔥 Запускаем загрузку устройств и переменных при старте
+  // 🔥 Запускаем загрузку устройств
   const { devices: fullDevices } = useDevices({
     onAttributeUpdate: ({ attribute, value, isCustomReport, short, ep, clusterId, attrId }) => {
       const { name } = attribute;
-
       const iconMap = {
         OnOff: value === '1' || value === 'true' ? '💡' : '⚫️',
         Voltage: '🔋',
@@ -86,7 +84,6 @@ function App() {
 
       addToast(message);
     },
-
     onSystemNotify: ({ type, message, emoji, data }) => {
       let userMessage = message;
       if (type === 'device_renamed') {
@@ -97,27 +94,71 @@ function App() {
       } else if (type === 'zigbee_permit_join_stopped') {
         userMessage = '🛑 Сеть Zigbee закрыта';
       }
-
       addToast(`${emoji} ${userMessage}`, 5000);
     }
   });
 
-  // ✅ ЕДИНСТВЕННОЕ место вызова useVariables — при старте приложения
+  // ✅ Переменные
   const { variables } = useVariables();
 
-  // Для отладки — можно убрать
+  // Лог при обновлении переменных
   useEffect(() => {
     console.log('✅ [App] Переменные загружены:', variables);
   }, [variables]);
 
-  const selectedDevice = fullDevices.find(d => d.ieee_addr === selectedItem?.id) || null;
-
+  // Хеш
   useEffect(() => {
     const onHashChange = () => setCurrentPath(window.location.hash || '#/');
     window.addEventListener('hashchange', onHashChange);
     return () => window.removeEventListener('hashchange', onHashChange);
   }, []);
 
+  // ✅ Health-check: только после WebSocket
+  useEffect(() => {
+    if (window.ws?.readyState === WebSocket.OPEN) {
+      console.log('✅ [App] WebSocket подключён → запускаем health-check');
+
+      const checkServer = async () => {
+        try {
+          const res = await fetch('/api/get_server_status?t=' + Date.now(), {
+            method: 'GET',
+            cache: 'no-cache'
+          });
+
+          if (!res.ok) return;
+          const data = await res.json();
+          const currentToken = data.session_token;
+
+          if (!currentToken) {
+            console.debug('[Health] Нет session_token');
+            return;
+          }
+
+          const savedToken = localStorage.getItem('server_session_token');
+
+          if (!savedToken) {
+            console.log('✅ [Health] Сохраняем токен:', currentToken);
+            localStorage.setItem('server_session_token', currentToken);
+            return;
+          }
+
+          if (savedToken !== currentToken) {
+            console.log('🔄 Сервер перезагрузился. Перезагружаем UI...');
+            localStorage.setItem('server_session_token', currentToken);
+            window.location.reload();
+          }
+        } catch (err) {
+          console.debug('[Health] Ошибка:', err.message);
+        }
+      };
+
+      checkServer();
+      const interval = setInterval(checkServer, 10000);
+      return () => clearInterval(interval);
+    }
+  }, [fullDevices]); // Зависит от появления устройств
+
+  // 🛑 Если нет координатора — показываем заглушку
   if (!coordinator) {
     return (
       <div className="app-container">
@@ -136,16 +177,14 @@ function App() {
     );
   }
 
+  const selectedDevice = fullDevices.find(d => d.ieee_addr === selectedItem?.id) || null;
+
   return (
     <div className="app-container">
       <header className="header">
         <div className="left">
-          <div>
-            <span>🌀</span> <strong>Zigbee:</strong> PAN {coordinator.pan_id} | CH {coordinator.radio_channel}
-          </div>
-          <div>
-            <span>📶</span> <strong>AP:</strong> {coordinator.wifi_ap_ssid || 'N/A'}
-          </div>
+          <div><span>🌀</span> <strong>Zigbee:</strong> PAN {coordinator.pan_id} | CH {coordinator.radio_channel}</div>
+          <div><span>📶</span> <strong>AP:</strong> {coordinator.wifi_ap_ssid || 'N/A'}</div>
         </div>
         <div className="ieee">{coordinator.ieee_addr}</div>
       </header>
@@ -157,6 +196,7 @@ function App() {
           currentTab={currentPath.replace('#', '')}
           selectedItem={selectedItem}
           onSelectItem={(type, id) => setSelectedItem({ type, id })}
+          devices={fullDevices}
         />
 
         <div className="content-area">
@@ -166,15 +206,12 @@ function App() {
           {currentPath === '#/' && selectedItem?.type === 'device' && (
             <DeviceDetails key={selectedItem.id} device={selectedDevice} />
           )}
-
           {currentPath === '#/scenes' && selectedItem?.type === 'scene' && (
             <BehaviorsPanel sceneId={selectedItem.id} />
           )}
-
           {currentPath === '#/rules' && selectedItem?.type === 'rule' && (
             <RuleEditor ruleId={selectedItem.id} />
           )}
-
           {![ '/', '/settings', '/scenes', '/rules'].includes(currentPath.replace('#', '')) && (
             <div className="p-8 text-gray-500">
               <h2 className="text-xl font-semibold">🚧 Страница в разработке</h2>
@@ -194,7 +231,6 @@ function App() {
 }
 
 export default function AppWithNotifications() {
-  useServerHealth();
   return (
     <NotificationProvider>
       <App />

@@ -34,7 +34,7 @@ typedef enum {
 */
 #define HOST_BUS_RINGBUF_SIZE         10240      // Было: 20480 → ОГРОМНО
 #define HOST_BUS_RINGBUF_TIMEOUT_MS   50
-#define HOST_BUS_TASK_STACK           6144      // Было: 8192
+#define HOST_BUS_TASK_STACK           4096      // Было: 8192
 #define HOST_BUS_TASK_PRIORITY        18        // Было: 18
 #define HOST_BUS_BUF_SIZE             2048      // Было: 4096 → слишком много
 /**

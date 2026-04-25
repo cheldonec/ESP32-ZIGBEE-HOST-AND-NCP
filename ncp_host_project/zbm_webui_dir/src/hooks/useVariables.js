@@ -17,7 +17,8 @@ export const useVariables = () => {
         guid: `var_${v.idx}`,
         name: v.name || `var_${v.idx}`,
         type: v.type,
-        value: v.value ?? ''
+        value: v.value ?? '',       // текущее значение (runtime)
+        init_value: v.init_value ?? ''  // начальное значение (config)
       }));
 
       setVariables(mapped);

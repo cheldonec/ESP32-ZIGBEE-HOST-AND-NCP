@@ -844,6 +844,7 @@ esp_err_t zbm_rest_api_post_update_dev_friendly_name_handler(httpd_req_t* req) {
     // Отправим уведомление: устройство переименовано
     cJSON *data = cJSON_CreateObject();
     cJSON_AddStringToObject(data, "ieee_addr", ieee_str);
+    //cJSON_AddStringToObject(data, "name", dev->friendly_name ? dev->friendly_name : "");
     cJSON_AddStringToObject(data, "friendly_name", dev->friendly_name ? dev->friendly_name : "");
     zbm_ws_send_sys_notify("device_renamed", "Device renamed", data);
     cJSON_Delete(data);

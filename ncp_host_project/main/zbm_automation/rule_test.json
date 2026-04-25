@@ -5,6 +5,11 @@
   "priority": 10,
   "exec_mode": 0,
   "allowing_logic_op": 0,
+  "time_range": {
+    "from": "20:00",
+    "to": "08:00",
+    "days": [0, 1, 2, 3, 4, 5, 6]
+  },
   "cause_trigger": {
     "guid": "0xAB2D:1:rep:0006:FD",
     "cond": 0,

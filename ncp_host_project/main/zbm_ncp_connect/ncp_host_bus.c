@@ -253,7 +253,7 @@ esp_err_t esp_host_bus_start(esp_host_bus_t *bus)
     }
 
     bus->state = BUS_INIT_START;
-    if (xTaskCreate(esp_host_bus_task, "host_bus_task", HOST_BUS_TASK_STACK, bus, HOST_BUS_TASK_PRIORITY, NULL) != pdTRUE) {
+    if (xTaskCreatePinnedToCore(esp_host_bus_task, "host_bus_task", HOST_BUS_TASK_STACK, bus, HOST_BUS_TASK_PRIORITY, NULL, 1) != pdTRUE) {
         bus->state = BUS_INIT_STOP;
         return ESP_FAIL;
     }

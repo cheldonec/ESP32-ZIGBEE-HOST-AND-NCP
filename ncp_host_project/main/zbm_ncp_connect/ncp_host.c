@@ -190,7 +190,7 @@ esp_err_t esp_host_start(void)
         return ESP_ERR_INVALID_ARG;
     }
 
-    if (xTaskCreate(esp_host_main_task, "host_task", HOST_TASK_STACK, &s_host_dev, HOST_TASK_PRIORITY, NULL) != pdTRUE) {
+    if (xTaskCreatePinnedToCore(esp_host_main_task, "host_task", HOST_TASK_STACK, &s_host_dev, HOST_TASK_PRIORITY, NULL, 1) != pdTRUE) {
         return ESP_FAIL;
     }
 

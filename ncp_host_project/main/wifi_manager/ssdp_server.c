@@ -458,7 +458,7 @@ void start_ssdp_server(void)
         NULL,
         5,
         &s_task_handle,
-        0  // core 0
+        1  // core 0
     );
 
     if (ret != pdPASS) {

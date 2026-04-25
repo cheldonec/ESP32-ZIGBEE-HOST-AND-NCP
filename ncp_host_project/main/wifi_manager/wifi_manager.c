@@ -34,6 +34,8 @@ THE SOFTWARE.*/
 #include "driver/gpio.h"
 #include "lwip/ip_addr.h"
 #include "zbm_coordinator.h"
+#include "zbm_rest_api.h"
+#include "sntp_time.h"
 
 static const char *TAG = "wifi_manager";
 static const char *TAG_AP = "WiFi SoftAP";
@@ -133,6 +135,9 @@ static bool mdns_is_started = false;
 // ============ mDNS ============
 static void start_mdns_service(esp_netif_t *netif)
 {
+    ESP_LOGI(TAG, "start_mdns_service");
+    ESP_LOGI(TAG, "Free DRAM: %d bytes", heap_caps_get_free_size(MALLOC_CAP_DMA));
+    ESP_LOGI(TAG, "Free IRAM: %d bytes", heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
     if (mdns_is_started) {
         mdns_free();
         mdns_is_started = false;
@@ -397,6 +402,8 @@ static void internal_event_task(void *pvParameters)
             switch (event) {
                 case WIFI_MANAGER_EVENT_GOT_IP:
                     ESP_LOGI(TAG, "Handling GOT_IP");
+                    generate_session_token();
+                    sntp_initialize();
                     start_mdns_service(esp_netif_sta);
                     break;
 
@@ -443,8 +450,8 @@ esp_err_t wifi_manager_init(void)
         return ESP_FAIL;
     }
 
-    xTaskCreate(&mode_handling_task, "mode_task", 6144, NULL, 10, &s_mode_task_handle);
-    xTaskCreate(&internal_event_task, "int_evt_task", 4096, NULL, 8, NULL);
+    xTaskCreate(&mode_handling_task, "mode_task", 3072, NULL, 10, &s_mode_task_handle);
+    xTaskCreate(&internal_event_task, "int_evt_task", 6144, NULL, 8, NULL);
 
     ESP_ERROR_CHECK(esp_event_handler_instance_register(WIFI_EVENT, ESP_EVENT_ANY_ID, &wifi_event_handler, NULL, NULL));
     ESP_ERROR_CHECK(esp_event_handler_instance_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &wifi_event_handler, NULL, NULL));

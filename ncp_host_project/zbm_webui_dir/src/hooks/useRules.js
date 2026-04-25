@@ -39,7 +39,7 @@ export const useRules = () => {
   useEffect(() => {
     // Первая загрузка
     reload();
-
+    
     // Подписка на внешние изменения (например, от useDevices через WebSocket)
     const handleRulesChange = () => {
       console.log('🔁 External event: rules changed — reloading...');

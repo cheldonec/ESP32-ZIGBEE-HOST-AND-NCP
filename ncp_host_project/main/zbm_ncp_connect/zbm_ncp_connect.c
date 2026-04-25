@@ -68,7 +68,7 @@ esp_err_t zbm_ncp_connect_start(void)
     ncp_host_notify_queue = xQueueCreate(HOST_EVENT_QUEUE_LEN, sizeof(esp_host_zb_ctx_t)); // notify_queue init in "ncp_host_zb_api.h"
     ncp_host_lock_semaphore = xSemaphoreCreateRecursiveMutex();                            // lock_semaphore init in "ncp_host_zb_api.h"
 
-    ESP_ERROR_CHECK(zbm_start_main_zigbee_task(0)); //in "ncp_host_zb_api.h"
+    ESP_ERROR_CHECK(zbm_start_main_zigbee_task(1)); //in "ncp_host_zb_api.h"
 
     
     ESP_ERROR_CHECK(esp_host_init(config.host_config.host_mode));

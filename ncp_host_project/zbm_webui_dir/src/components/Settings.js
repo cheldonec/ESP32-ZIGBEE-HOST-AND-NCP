@@ -141,7 +141,7 @@ export default function Settings({ activeSection = 'network'}) {
   const VariablesSettings = () => {
     const { variables, reload } = useVariables();
     const [localVars, setLocalVars] = useState([]);
-    const [isSaving, setIsSaving] = useState(false);
+    const [savingIdx, setSavingIdx] = useState(null); // индекс переменной, которая сохраняется
 
     const VAR_TYPES = [
       { value: 0x20, label: 'uint8' },
@@ -152,12 +152,23 @@ export default function Settings({ activeSection = 'network'}) {
       { value: 0x44, label: 'long_char_string' },
     ];
 
-    // Инициализация: только один раз при первом рендере
+    // Инициализация
     useEffect(() => {
-      if (variables.length > 0 && localVars.length === 0) {
-        setLocalVars(variables.map(v => ({ ...v })));
+      if (variables.length > 0) {
+        setLocalVars(prev => {
+          const map = new Map(prev.map(v => [v.idx, v]));
+          return variables.map(v => {
+            const current = map.get(v.idx);
+            // Сохраняем изменения пользователя в имени и init_value
+            return {
+              ...v,
+              name: current ? current.name : v.name,
+              init_value: current ? current.init_value : v.init_value,
+            };
+          });
+        });
       }
-    }, [variables, localVars.length]);
+    }, [variables]);
 
     const handleNameChange = (idx, value) => {
       setLocalVars(prev => prev.map(v => v.idx === idx ? { ...v, name: value } : v));
@@ -172,45 +183,51 @@ export default function Settings({ activeSection = 'network'}) {
       setLocalVars(prev => prev.map(v => v.idx === idx ? { ...v, value } : v));
     };
 
-    const saveAll = async () => {
-      setIsSaving(true);
+    const handleInitValueChange = (idx, value) => {
+      setLocalVars(prev => prev.map(v => v.idx === idx ? { ...v, init_value: value } : v));
+    };
+
+    // === Сохранение ОДНОЙ переменной ===
+    const saveSingle = async (v) => {
+      setSavingIdx(v.idx);
+
+      let initValueToSend;
+      if (v.type === 0x42 || v.type === 0x44) {
+        initValueToSend = v.init_value;
+      } else {
+        const num = Number(v.init_value);
+        if (isNaN(num)) {
+          setSavingIdx(null);
+          return alert('Неверное начальное значение');
+        }
+        initValueToSend = num;
+      }
+
+      const payload = {
+        name: v.name,
+        type: v.type,
+        init_value: initValueToSend,
+      };
+
       try {
-        const promises = localVars.map(async (v) => {
-          let valueToSend;
-
-          if (v.type === 0x42 || v.type === 0x44) {
-            valueToSend = v.value;
-          } else {
-            const num = Number(v.value);
-            if (isNaN(num)) return Promise.resolve();
-            valueToSend = num;
-          }
-
-          const payload = {
-            name: v.name,
-            type: v.type,
-            value: valueToSend,
-          };
-
-          return fetch(`/api/post/var/${v.idx}`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload),
-          });
+        const res = await fetch(`/api/post/var/${v.idx}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
         });
 
-        await Promise.all(promises);
-        await reload(); // Получаем свежие данные
-
-        // ✅ Принудительно синхронизируем UI с обновлёнными переменными
-        setLocalVars(variables.map(v => ({ ...v })));
-
-        setStatus('✅ Переменные сохранены');
+        if (res.ok) {
+          //await reload(); // один раз
+          //setLocalVars(variables.map(v => ({ ...v }))); // синхронизируем
+          setStatus('✅ Переменная сохранена');
+        } else {
+          setStatus('❌ Ошибка при сохранении');
+        }
       } catch (err) {
-        console.error('Ошибка сохранения переменных:', err);
-        setStatus('❌ Ошибка при сохранении');
+        console.error('Ошибка сохранения:', err);
+        setStatus('❌ Не удалось сохранить');
       } finally {
-        setIsSaving(false);
+        setSavingIdx(null);
       }
     };
 
@@ -223,7 +240,9 @@ export default function Settings({ activeSection = 'network'}) {
               <tr>
                 <th className="text-left py-2 text-gray-400">Имя</th>
                 <th className="text-left py-2 text-gray-400">Тип</th>
-                <th className="text-left py-2 text-gray-400">Значение</th>
+                <th className="text-left py-2 text-gray-400">Значение при старте</th>
+                <th className="text-left py-2 text-gray-400">Текущее значение</th>
+                <th className="text-left py-2 text-gray-400">Действие</th>
               </tr>
             </thead>
             <tbody>
@@ -254,27 +273,47 @@ export default function Settings({ activeSection = 'network'}) {
                   <td className="py-1">
                     <input
                       type="text"
+                      value={v.init_value ?? ''}
+                      onChange={(e) => handleInitValueChange(v.idx, e.target.value)}
+                      placeholder="начальное значение"
+                      className="form-input text-xs px-2 py-1 h-6"
+                      style={{ fontSize: '11px', padding: '1px 4px', width: '100px' }}
+                    />
+                  </td>
+                  <td className="py-1">
+                    <input
+                      type="text"
                       value={v.value ?? ''}
                       onChange={(e) => handleValueChange(v.idx, e.target.value)}
-                      placeholder="значение"
+                      placeholder="текущее значение"
                       className="form-input text-xs px-2 py-1 h-6"
                       style={{ fontSize: '11px', padding: '1px 4px' }}
                     />
+                  </td>
+                  <td className="py-1">
+                    <button
+                      onClick={() => saveSingle(v)}
+                      disabled={savingIdx === v.idx}
+                      className="btn-icon"
+                      title="Сохранить переменную"
+                      style={{ padding: '2px 6px', fontSize: '14px' }}
+                    >
+                      {savingIdx === v.idx ? '⏳' : '💾'}
+                    </button>
                   </td>
                 </tr>
               ))}
             </tbody>
           </table>
 
-          <div className="mt-4 flex justify-end">
-            <button onClick={saveAll} disabled={isSaving} className="btn-primary text-sm">
-              {isSaving ? 'Сохранение...' : 'Сохранить все'}
-            </button>
+          {/* Убрали общую кнопку */}
+          <div className="mt-4 text-xs text-gray-500">
+            Изменения сохраняются по одной переменной.
           </div>
         </div>
       </div>
     );
-  };// end of varsettings component
+  };
 
   // ✅ Сохраняем элемент, чтобы не пересоздавать при каждом рендере
   const variablesSettingsElement = useMemo(() => <VariablesSettings />, []);

@@ -29,7 +29,7 @@ extern QueueHandle_t                ncp_host_output_queue;           /*!< The qu
 extern QueueHandle_t                ncp_host_notify_queue;           /*!< The queue handler for wait notification */
 extern SemaphoreHandle_t            ncp_host_lock_semaphore;
 
-#define ZIGBEE_STACK_SIZE 8 * 1024
+#define ZIGBEE_STACK_SIZE 6 * 1024
 
 #define ZIGBEE_TASK_PRIORITY 10
 

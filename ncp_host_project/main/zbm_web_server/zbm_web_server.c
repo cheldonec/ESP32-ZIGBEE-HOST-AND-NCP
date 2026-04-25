@@ -16,7 +16,12 @@ static const char *TAG = "ZBM_WEB_SERVER";
 // === Глобальные переменные ===
 httpd_handle_t server_handle = NULL;
 static int ws_client_fd = -1;
-static char json_buffer_for_response[8192]; // буфер для cJSON
+
+// перенесено в SPIRAM
+//static char json_buffer_for_response[16384]; // буфер для cJSON
+#define JSON_BUFFER_SIZE 16384
+static char* json_buffer_for_response = NULL;
+
 static SemaphoreHandle_t json_buffer_mutex = NULL; // мьютекс для потокобезопасности
 
 // === Глобальные переменные ===
@@ -51,26 +56,66 @@ esp_err_t get_index_html_req_handler(httpd_req_t *req);
 esp_err_t get_from_ws_handler(httpd_req_t *req);
 
 void sanitize_utf8(char* str) {
-    while (*str) {
-        if ((*str & 0x80) == 0) { // ASCII
-            str++;
-        } else if ((*str & 0xE0) == 0xC0 && (str[1] & 0xC0) == 0x80) { // 2-byte
-            str += 2;
-        } else if ((*str & 0xF0) == 0xE0 && (str[1] & 0xC0) == 0x80 && (str[2] & 0xC0) == 0x80) { // 3-byte
-            str += 3;
-        } else if ((*str & 0xF8) == 0xF0 && (str[1] & 0xC0) == 0x80 && (str[2] & 0xC0) == 0x80 && (str[3] & 0xC0) == 0x80) { // 4-byte
-            str += 4;
-        } else {
-            *str = '?'; // Заменяем битый символ
-            str++;
+    char* p = str;
+    while (*p) {
+        // ASCII
+        if ((p[0] & 0x80) == 0) {
+            p++;
+            continue;
         }
+
+        // Проверяем 2-байтовую: 110xxxxx 10xxxxxx
+        if ((p[0] & 0xE0) == 0xC0) {
+            if (p[1] != '\0' && (p[1] & 0xC0) == 0x80) {
+                p += 2;
+                continue;
+            } else {
+                *p = '?';
+                p++;
+                continue;
+            }
+        }
+
+        // 3-байтовая: 1110xxxx 10xxxxxx 10xxxxxx
+        if ((p[0] & 0xF0) == 0xE0) {
+            if (p[1] != '\0' && p[2] != '\0' &&
+                (p[1] & 0xC0) == 0x80 &&
+                (p[2] & 0xC0) == 0x80) {
+                p += 3;
+                continue;
+            } else {
+                *p = '?';
+                p++;
+                continue;
+            }
+        }
+
+        // 4-байтовая: 11110xxx 10xxxxxx 10xxxxxx 10xxxxxx
+        if ((p[0] & 0xF8) == 0xF0) {
+            if (p[1] != '\0' && p[2] != '\0' && p[3] != '\0' &&
+                (p[1] & 0xC0) == 0x80 &&
+                (p[2] & 0xC0) == 0x80 &&
+                (p[3] & 0xC0) == 0x80) {
+                p += 4;
+                continue;
+            } else {
+                *p = '?';
+                p++;
+                continue;
+            }
+        }
+
+        // Всё остальное — битый байт
+        *p = '?';
+        p++;
     }
 }
 
 // отправка JSON
 static void send_json_event_to_ws_safe(cJSON* event) {
+    ESP_LOGI(TAG, "send_json_event_to_ws_safe");
     if (xSemaphoreTake(json_buffer_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
-        int len = cJSON_PrintPreallocated(event, json_buffer_for_response, sizeof(json_buffer_for_response), false);
+        int len = cJSON_PrintPreallocated(event, json_buffer_for_response, JSON_BUFFER_SIZE, false);
         if (len > 0) {
             cJSON_Minify(json_buffer_for_response);
             // ✅ Санитизация
@@ -103,11 +148,21 @@ void ws_update_task(void *pvParameters) {
         if (attr_received == pdTRUE) {
             ESP_LOGD(TAG, "Received attribute update for GUID: %s", msg_attr.guid);
 
+            // Создаём массив байт правильно
+            uint8_t raw_bytes[8] = {0};
+            size_t raw_len = msg_attr.value_len > 8 ? 8 : msg_attr.value_len;
+            memcpy(raw_bytes, msg_attr.value, raw_len);
+
             cJSON *event = cJSON_CreateObject();
             cJSON_AddStringToObject(event, "event", "attribute_updated");
             cJSON_AddStringToObject(event, "guid", msg_attr.guid);
             cJSON_AddNumberToObject(event, "type", msg_attr.data_type);
-            cJSON *j_value_bytes = cJSON_CreateIntArray((int*)msg_attr.value, msg_attr.value_len);
+
+            // Правильно создаём массив байтов: каждый байт → число 0–255
+            cJSON *j_value_bytes = cJSON_CreateArray();
+            for (size_t i = 0; i < raw_len; i++) {
+                cJSON_AddItemToArray(j_value_bytes, cJSON_CreateNumber(raw_bytes[i]));
+            }
             cJSON_AddItemToObject(event, "value_bytes", j_value_bytes);
 
             send_json_event_to_ws_safe(event);
@@ -129,55 +184,13 @@ void ws_update_task(void *pvParameters) {
 
             send_json_event_to_ws_safe(event);
             cJSON_Delete(event); // ✅ Теперь безопасно
-
+            cJSON_Delete(msg_sys.data);
             // ❌ Не обнуляем msg_sys.data — он не владеет памятью
             // memset(&msg_sys, 0, sizeof(msg_sys)); // ← УДАЛИ ЭТУ СТРОКУ!
         }
     }
 }
 
-void ws_update_task_old(void *pvParameters) {
-    zbm_ws_update_msg_t msg_attr;
-    zbm_ws_sys_notify_msg_t msg_sys;
-    static const char* TAG = "WS_UPDATE_TASK";
-
-    ESP_LOGI(TAG, "WS Update Task started");
-
-    while (1) {
-        BaseType_t attr_received = xQueueReceive(ws_update_queue, &msg_attr, pdMS_TO_TICKS(10));
-        if (attr_received == pdTRUE) {
-            ESP_LOGD(TAG, "Received attribute update for GUID: %s", msg_attr.guid);
-
-            cJSON *event = cJSON_CreateObject();
-            cJSON_AddStringToObject(event, "event", "attribute_updated");
-            cJSON_AddStringToObject(event, "guid", msg_attr.guid);
-            cJSON_AddNumberToObject(event, "type", msg_attr.data_type);
-            cJSON *j_value_bytes = cJSON_CreateIntArray((int*)msg_attr.value, msg_attr.value_len);
-            cJSON_AddItemToObject(event, "value_bytes", j_value_bytes);
-
-            send_json_event_to_ws_safe(event);
-            cJSON_Delete(event);
-        }
-
-        BaseType_t sys_received = xQueueReceive(ws_sys_notify_queue, &msg_sys, pdMS_TO_TICKS(10));
-        if (sys_received == pdTRUE) {
-            ESP_LOGI(TAG, "📤 SysNotify: %s — %s", msg_sys.event_type, msg_sys.message);
-
-            cJSON *event = cJSON_CreateObject();
-            cJSON_AddStringToObject(event, "event", "system_notify");
-            cJSON_AddStringToObject(event, "type", msg_sys.event_type);
-            cJSON_AddStringToObject(event, "message", msg_sys.message);
-            if (msg_sys.data) {
-                cJSON_AddItemToObject(event, "data", msg_sys.data); // владение передаётся
-            }
-
-            send_json_event_to_ws_safe(event);
-            cJSON_Delete(event); // data уже удалится здесь
-
-            memset(&msg_sys, 0, sizeof(msg_sys)); // очистка указателя data
-        }
-    }
-}
 
 bool zbm_ws_send_data_update_notify(const char* guid, uint8_t data_type, const void* value, size_t value_len) {
     if (!guid || !value || value_len == 0 || value_len > 256) {
@@ -201,23 +214,29 @@ bool zbm_ws_send_data_update_notify(const char* guid, uint8_t data_type, const v
 }
 
 bool zbm_ws_send_sys_notify(const char* event_type, const char* message, cJSON* data) {
-    if (!event_type || !message) {
-        return false;
-    }
-
     zbm_ws_sys_notify_msg_t msg = {0};
     strlcpy(msg.event_type, event_type, sizeof(msg.event_type));
     strlcpy(msg.message, message, sizeof(msg.message));
-    msg.data = data; // может быть NULL
+
+    // 🔁 Создаём копию JSON (если есть)
+    if (data) {
+        msg.data = cJSON_Duplicate(data, true); // полная рекурсивная копия
+        if (!msg.data) {
+            ESP_LOGE(TAG, "Failed to duplicate cJSON for sys notify");
+            return false;
+        }
+    } else {
+        msg.data = NULL;
+    }
 
     BaseType_t ret = xQueueSendToBack(ws_sys_notify_queue, &msg, pdMS_TO_TICKS(10));
     if (ret != pdTRUE) {
         ESP_LOGW(TAG, "SysNotify queue full, dropping: %s", event_type);
-        //cJSON_Delete(data); // если не вошёл — освобождаем
+        cJSON_Delete(msg.data); // освобождаем копию
         return false;
     }
 
-    return true;
+    return true; // успех — очередь владеет копией
 }
 
 void ws_notify_automation_rule_fired(const char* rule_id, const char* trigger_guid) {
@@ -474,7 +493,7 @@ esp_err_t get_from_ws_handler(httpd_req_t *req)
 
         // Печать JSON в общий буфер с защитой мьютексом
         if (xSemaphoreTake(json_buffer_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
-            int len = cJSON_PrintPreallocated(response, json_buffer_for_response, sizeof(json_buffer_for_response), false);
+            int len = cJSON_PrintPreallocated(response, json_buffer_for_response, JSON_BUFFER_SIZE, false);
             if (len > 0) {
                 cJSON_Minify(json_buffer_for_response);
                 httpd_ws_frame_t frame = {
@@ -506,7 +525,7 @@ esp_err_t get_from_ws_handler(httpd_req_t *req)
         cJSON_AddNumberToObject(resp, "tsn", tsn);
 
         if (xSemaphoreTake(json_buffer_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
-            int len = cJSON_PrintPreallocated(resp, json_buffer_for_response, sizeof(json_buffer_for_response), false);
+            int len = cJSON_PrintPreallocated(resp, json_buffer_for_response, JSON_BUFFER_SIZE, false);
             if (len > 0) {
                 cJSON_Minify(json_buffer_for_response);
                 httpd_ws_frame_t frame = {
@@ -943,49 +962,102 @@ httpd_uri_t get_ssdp_description_xml = {
 
 void start_webserver(void)
 {
-    // создаём токен сессии
-    generate_session_token();
-    // Создаём очередь
-    if (!ws_update_queue) {
-        ws_update_queue = xQueueCreate(ZBM_WS_UPDATE_QUEUE_SIZE, sizeof(zbm_ws_update_msg_t));
-        if (!ws_update_queue) {
-            ESP_LOGE(TAG, "Failed to create WS update queue");
-            vSemaphoreDelete(json_buffer_mutex);
-            json_buffer_mutex = NULL;
-            return;
-        }
+    ESP_LOGI(TAG, "Starting web server...");
+
+    // === 1. ГАРАНТИРУЕМ ЧИСТОЕ СОСТОЯНИЕ (очищаем после предыдущего запуска) ===
+    if (ws_update_task_handle) {
+        vTaskDelete(ws_update_task_handle);
+        ws_update_task_handle = NULL;
+        ESP_LOGD(TAG, "Old ws_update_task deleted");
     }
 
-     if (!ws_sys_notify_queue) {
-        ws_sys_notify_queue = xQueueCreate(ZBM_WS_SYS_NOTIFY_QUEUE_SIZE, sizeof(zbm_ws_sys_notify_msg_t));
-        if (!ws_sys_notify_queue) {
-            ESP_LOGE(TAG, "Failed to create WS sys notify queue");
-            return;
-        }
+    if (ws_update_queue) {
+        vQueueDelete(ws_update_queue);
+        ws_update_queue = NULL;
+        ESP_LOGD(TAG, "Old ws_update_queue deleted");
     }
 
-    // Создаём задачу
-    if (!ws_update_task_handle) {
-        xTaskCreatePinnedToCore(ws_update_task,"ws_update_task",4096,NULL,2,&ws_update_task_handle,0);
+    if (ws_sys_notify_queue) {
+        vQueueDelete(ws_sys_notify_queue);
+        ws_sys_notify_queue = NULL;
+        ESP_LOGD(TAG, "Old ws_sys_notify_queue deleted");
+    }
+
+    if (json_buffer_mutex) {
+        vSemaphoreDelete(json_buffer_mutex);
+        json_buffer_mutex = NULL;
+        ESP_LOGD(TAG, "Old json_buffer_mutex deleted");
     }
 
     if (server_handle) {
-        ESP_LOGW(TAG, "Web server already running");
+        httpd_stop(server_handle);
+        server_handle = NULL;
+        ESP_LOGW(TAG, "Old HTTP server stopped");
+    }
+
+    // создаём буфер для JSON
+    json_buffer_for_response = heap_caps_malloc(JSON_BUFFER_SIZE, MALLOC_CAP_SPIRAM);
+    if (!json_buffer_for_response) {
+        ESP_LOGE(TAG, "Failed to allocate JSON buffer in PSRAM");
+    }
+
+    // === 2. Создаём очереди ===
+    ws_update_queue = xQueueCreate(ZBM_WS_UPDATE_QUEUE_SIZE, sizeof(zbm_ws_update_msg_t));
+    if (!ws_update_queue) {
+        ESP_LOGE(TAG, "Failed to create WS update queue");
         return;
     }
+    ESP_LOGI(TAG, "WS update queue created");
 
-    // Создаём мьютекс для JSON-буфера
+    ws_sys_notify_queue = xQueueCreate(ZBM_WS_SYS_NOTIFY_QUEUE_SIZE, sizeof(zbm_ws_sys_notify_msg_t));
+    if (!ws_sys_notify_queue) {
+        ESP_LOGE(TAG, "Failed to create WS sys notify queue");
+        vQueueDelete(ws_update_queue);
+        ws_update_queue = NULL;
+        return;
+    }
+    ESP_LOGI(TAG, "WS sys notify queue created");
+
+    // === 3. Создаём мьютекс ДО создания задачи ===
+    json_buffer_mutex = xSemaphoreCreateMutex();
     if (!json_buffer_mutex) {
-        json_buffer_mutex = xSemaphoreCreateMutex();
-        if (!json_buffer_mutex) {
-            ESP_LOGE(TAG, "Failed to create JSON buffer mutex");
+        ESP_LOGE(TAG, "Failed to create JSON buffer mutex");
+        vQueueDelete(ws_update_queue);
+        vQueueDelete(ws_sys_notify_queue);
+        ws_update_queue = NULL;
+        ws_sys_notify_queue = NULL;
+        return;
+    }
+    ESP_LOGI(TAG, "JSON buffer mutex created");
+
+    // === 4. Создаём задачу ОБНОВЛЕНИЯ WS (только после всех зависимостей) ===
+    if (ws_update_task_handle == NULL) {
+        BaseType_t ret = xTaskCreatePinnedToCore(
+            ws_update_task,
+            "ws_update_task",
+            4096,
+            NULL,
+            2,
+            &ws_update_task_handle,
+            1
+        );
+        if (ret != pdPASS) {
+            ESP_LOGE(TAG, "Failed to create ws_update_task");
+            vSemaphoreDelete(json_buffer_mutex);
+            vQueueDelete(ws_update_queue);
+            vQueueDelete(ws_sys_notify_queue);
+            json_buffer_mutex = NULL;
+            ws_update_queue = NULL;
+            ws_sys_notify_queue = NULL;
             return;
         }
+        ESP_LOGI(TAG, "WS update task created");
     }
 
+    // === 5. Настройка и запуск HTTP-сервера ===
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.stack_size = 17408;
-    config.core_id = 0;
+    config.core_id = 1;
     config.send_wait_timeout = 5;
     config.recv_wait_timeout = 5;
     config.task_priority = 5;
@@ -995,7 +1067,9 @@ void start_webserver(void)
     config.max_open_sockets = 8;
 
     if (httpd_start(&server_handle, &config) == ESP_OK) {
-        // === Сначала: специфичные API и статика ===
+        ESP_LOGI(TAG, "HTTP server started on core %d", config.core_id);
+
+        // === Регистрация обработчиков ===
 
         // SSDP
         httpd_register_uri_handler(server_handle, &get_ssdp_description_xml);
@@ -1003,7 +1077,7 @@ void start_webserver(void)
         // Главная страница
         httpd_register_uri_handler(server_handle, &uri_get_index_html_req);
 
-        //204, ip6
+        // Специальные Android/Windows
         httpd_register_uri_handler(server_handle, &uri_generate_204_windows);
         httpd_register_uri_handler(server_handle, &uri_ipv6check);
 
@@ -1014,7 +1088,7 @@ void start_webserver(void)
         // WebSocket
         httpd_register_uri_handler(server_handle, &uri_get_req_from_ws);
 
-        // === REST API: все /api/... ===
+        // === REST API ===
         httpd_register_uri_handler(server_handle, &uri_zbm_rest_api_get_devices);
         httpd_register_uri_handler(server_handle, &uri_zbm_rest_api_get_device_by_short);
         httpd_register_uri_handler(server_handle, &uri_zbm_rest_api_get_device_by_ieee);
@@ -1026,16 +1100,19 @@ void start_webserver(void)
         httpd_register_uri_handler(server_handle, &uri_active_endpoint);
         httpd_register_uri_handler(server_handle, &uri_simple_desc);
         httpd_register_uri_handler(server_handle, &uri_update_dev_friendly_name);
+
+        // Rules
         httpd_register_uri_handler(server_handle, &api_rules_get);
         httpd_register_uri_handler(server_handle, &api_rule_get);
         httpd_register_uri_handler(server_handle, &api_rule_post);
-        httpd_register_uri_handler(server_handle, &api_rule_delete);//22
+        httpd_register_uri_handler(server_handle, &api_rule_delete);
         httpd_register_uri_handler(server_handle, &api_rule_enable);
         httpd_register_uri_handler(server_handle, &api_rule_disable);
         httpd_register_uri_handler(server_handle, &api_rule_run);
         httpd_register_uri_handler(server_handle, &api_rules_get_vars);
         httpd_register_uri_handler(server_handle, &api_rules_post_vars);
-        // === Behaviors API ===
+
+        // Behaviors
         httpd_register_uri_handler(server_handle, &api_behaviors_get);
         httpd_register_uri_handler(server_handle, &api_behavior_get);
         httpd_register_uri_handler(server_handle, &api_behavior_post);
@@ -1043,8 +1120,8 @@ void start_webserver(void)
         httpd_register_uri_handler(server_handle, &api_behavior_enable);
         httpd_register_uri_handler(server_handle, &api_behavior_disable);
         httpd_register_uri_handler(server_handle, &api_behavior_run);
-        // === SPIFFS API ===
-        // config
+
+        // SPIFFS: config
         httpd_register_uri_handler(server_handle, &uri_spiffs_config_ls);
         httpd_register_uri_handler(server_handle, &uri_spiffs_config_get_file);
         httpd_register_uri_handler(server_handle, &uri_spiffs_config_save_file);
@@ -1066,24 +1143,30 @@ void start_webserver(void)
         httpd_register_uri_handler(server_handle, &uri_spiffs_webui_ls);
         httpd_register_uri_handler(server_handle, &uri_spiffs_webui_get_file);
         httpd_register_uri_handler(server_handle, &uri_spiffs_webui_save_file);
-        httpd_register_uri_handler(server_handle, &uri_spiffs_webui_delete_file);//40
+        httpd_register_uri_handler(server_handle, &uri_spiffs_webui_delete_file);
 
         // backup/restore
         httpd_register_uri_handler(server_handle, &uri_spiffs_backup);
         httpd_register_uri_handler(server_handle, &uri_spiffs_restore);
 
-        // === Статические файлы: от более точных к общим ===
+        // Статика
         httpd_register_uri_handler(server_handle, &uri_static_css);
         httpd_register_uri_handler(server_handle, &uri_static_js);
         httpd_register_uri_handler(server_handle, &uri_static_media);
-
-        // === В самом конце — общий обработчик "/*" ===
         httpd_register_uri_handler(server_handle, &uri_static); // должен быть последним!
     } else {
-        ESP_LOGE(TAG, "Failed to start web server");
+        ESP_LOGE(TAG, "Failed to start HTTP server");
+        // Освобождаем всё, что создали
         vSemaphoreDelete(json_buffer_mutex);
+        vQueueDelete(ws_update_queue);
+        vQueueDelete(ws_sys_notify_queue);
         json_buffer_mutex = NULL;
+        ws_update_queue = NULL;
+        ws_sys_notify_queue = NULL;
+        return;
     }
+
+    ESP_LOGI(TAG, "Web server fully started and ready");
 }
 
 void stop_webserver(void)
@@ -1092,6 +1175,11 @@ void stop_webserver(void)
         httpd_stop(server_handle);
         server_handle = NULL;
         ESP_LOGI(TAG, "Web server stopped");
+    }
+
+    if (json_buffer_for_response) {
+        heap_caps_free(json_buffer_for_response);
+        json_buffer_for_response = NULL;
     }
 
     // Удаляем мьютекс

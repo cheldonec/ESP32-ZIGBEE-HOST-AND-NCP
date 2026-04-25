@@ -3,12 +3,18 @@ import { useState, useEffect } from 'react';
 import './App.css';
 
 // Компоненты
-import DeviceSidebar from './components/DeviceSidebar';
+import Sidebar from './components/Sidebar';
+import Header from './components/Header';
+import Footer from './components/Footer';
 import DeviceDetails from './components/DeviceDetails';
 import Settings from './components/Settings';
 import NotificationProvider from './components/NotificationProvider';
-// ✅ Импортируем useDevices с WebSocket
+import { useNotification } from './context/NotificationContext';
+import Navbar from './components/Navbar';
 import { useDevices } from './hooks/useDevices';
+import BehaviorsPanel from './components/BehaviorsPanel';
+import RuleEditor from './components/RuleEditor';
+import { useVariables } from './hooks/useVariables';
 
 // Хук для координатора
 const useCoordinator = () => {
@@ -35,108 +41,145 @@ const useCoordinator = () => {
   return { coordinator, loading };
 };
 
-
-
 function App() {
   const [currentPath, setCurrentPath] = useState(window.location.hash || '#/');
+  const [selectedItem, setSelectedItem] = useState(null); // { type: 'device', id: '...' }
   const { coordinator } = useCoordinator();
+  const { addToast } = useNotification();
 
-  // ✅ Сначала получаем устройства
+  // 🔥 Запускаем загрузку устройств и переменных при старте
   const { devices: fullDevices } = useDevices({
-  onAttributeUpdate: ({ short, ep, clusterId, attrId, attributeName, value }) => {
-  // Время
-  const now = new Date();
-  const timeStr = now.toLocaleTimeString('ru-RU', {
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit'
+    onAttributeUpdate: ({ attribute, value, isCustomReport, short, ep, clusterId, attrId }) => {
+      const { name } = attribute;
+
+      const iconMap = {
+        OnOff: value === '1' || value === 'true' ? '💡' : '⚫️',
+        Voltage: '🔋',
+        Battery: '⚡',
+        Temperature: '🌡️',
+        Humidity: '💧',
+        Pressure: '📊',
+        LinkQuality: '📶',
+        Default: '📡'
+      };
+
+      const emoji = iconMap[name] || iconMap.Default;
+
+      let readableValue = value;
+      if (name === 'OnOff') {
+        readableValue = value === '1' || value === 'true' ? 'включено' : 'выключено';
+      } else if (name === 'Temperature') {
+        readableValue = `${parseFloat(value).toFixed(1)}°C`;
+      } else if (name === 'Humidity') {
+        readableValue = `${value}%`;
+      } else if (name === 'Voltage') {
+        readableValue = `${parseFloat(value).toFixed(2)} В`;
+      } else if (name === 'Battery') {
+        readableValue = `${value}%`;
+      }
+
+      const source = isCustomReport ? 'репорт' : 'атрибут';
+      const timeStr = new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+      const technical = `[${short}/${ep}] Cl: ${clusterId}, ${source}: ${attrId}`;
+      const message = `${emoji} ${name} → ${readableValue}\n${technical} (${timeStr})`;
+
+      addToast(message);
+    },
+
+    onSystemNotify: ({ type, message, emoji, data }) => {
+      let userMessage = message;
+      if (type === 'device_renamed') {
+        const friendlyName = data.friendly_name || 'Без имени';
+        userMessage = `🔄 Устройство переименовано: ${friendlyName}`;
+      } else if (type === 'zigbee_permit_join_started') {
+        userMessage = '🌐 Сеть Zigbee открыта для новых устройств';
+      } else if (type === 'zigbee_permit_join_stopped') {
+        userMessage = '🛑 Сеть Zigbee закрыта';
+      }
+
+      addToast(`${emoji} ${userMessage}`, 5000);
+    }
   });
 
-  // Иконка
-  const icon = {
-    OnOff: value === '1' || value === 'true' ? '💡' : '⚫️',
-    Temperature: '🌡️',
-    Humidity: '💧',
-    Voltage: '🔋',
-    Pressure: '📊',
-    Battery: '⚡',
-    LinkQuality: '📶',
-    Default: '📡'
-  };
+  // ✅ ЕДИНСТВЕННОЕ место вызова useVariables — при старте приложения
+  const { variables } = useVariables();
 
-  const emoji = icon[attributeName] || icon.Default;
-
-  // Читаемое значение
-  let readableValue = value;
-  if (attributeName === 'OnOff') {
-    readableValue = value === '1' || value === 'true' ? 'включено' : 'выключено';
-  } else if (attributeName === 'Temperature') {
-    readableValue = `${parseFloat(value).toFixed(1)}°C`;
-  } else if (attributeName === 'Humidity') {
-    readableValue = `${value}%`;
-  } else if (attributeName === 'Voltage') {
-    readableValue = `${parseFloat(value).toFixed(2)} В`;
-  } else if (attributeName === 'Battery') {
-    readableValue = `${value}%`;
-  }
-
-  // Формируем подпись с техническими данными
-  const technical = `[${short}/${ep}] Cl: ${clusterId}, Attr: ${attrId}`;
-
-  // Полное сообщение
-  const message = `${emoji} ${attributeName} → ${readableValue}\n${technical} (${timeStr})`;
-
-  addToast(message);
-}
-});
-
-  // 🔁 Храним только IEEE выбранного устройства
-  const [selectedIEEE, setSelectedIEEE] = useState(null);
-
-  // ✅ Всегда получаем актуальное устройство из свежего списка
-  const selectedDevice = fullDevices.find(d => d.ieee_addr === selectedIEEE) || null;
-
-  // Краткий список для сайдбара
-  const briefList = fullDevices.map(dev => ({
-    ieee: dev.ieee_addr,
-    short: parseInt(dev.short_addr.replace('0x', ''), 16),
-    friendly_name: dev.name || dev.friendly_name,
-    online: dev.is_online,
-    linkquality: dev.lqi
-  }));
-
-  // Обработчик выбора устройства
-  const handleSelectDevice = (briefDev) => {
-    setSelectedIEEE(briefDev.ieee);
-  };
-
-  // Состояние для тостов
-  const [toasts, setToasts] = useState([]);
-
-  // Функция добавления уведомления
-  const addToast = (message) => {
-    const id = Date.now() + Math.random();
-    setToasts(prev => [...prev, { id, message }]);
-    setTimeout(() => {
-      setToasts(prev => prev.filter(t => t.id !== id));
-    }, 5000);
-  };
-
-  // Удаление тоста
-  const removeToast = (id) => {
-    setToasts(prev => prev.filter(t => t.id !== id));
-  };
-
-  // Следим за хэшем URL
+  // Для отладки — можно убрать
   useEffect(() => {
-    const onHashChange = () => {
-      setCurrentPath(window.location.hash || '#/');
-    };
+    console.log('✅ [App] Переменные загружены:', variables);
+  }, [variables]);
+
+  // ✅ selectedDevice
+  const selectedDevice = fullDevices.find(d => d.ieee_addr === selectedItem?.id) || null;
+
+  // 🔄 Хеш
+  useEffect(() => {
+    const onHashChange = () => setCurrentPath(window.location.hash || '#/');
     window.addEventListener('hashchange', onHashChange);
     return () => window.removeEventListener('hashchange', onHashChange);
   }, []);
 
-  // Пока нет координатора
+  // serverhealth
+  // ✅ Функция: запуск health-check
+  const startHealthCheck = () => {
+    console.log('✅ [App] WebSocket подключён → запускаем проверку состояния сервера');
+
+    const checkServer = async () => {
+      try {
+        const res = await fetch('/api/get_server_status?t=' + Date.now(), {
+          method: 'GET',
+          cache: 'no-cache'
+        });
+
+        if (!res.ok) return;
+
+        const data = await res.json();
+        const currentToken = data.session_token;
+
+        if (!currentToken) {
+          console.debug('[Health] Нет session_token в ответе');
+          return;
+        }
+
+        const savedToken = localStorage.getItem('server_session_token');
+
+        // Первый запуск: сохраняем токен
+        if (!savedToken) {
+          console.log('✅ [Health] Первый визит. Сохраняем токен:', currentToken);
+          localStorage.setItem('server_session_token', currentToken);
+          return;
+        }
+
+        // Если токен изменился — сервер перезагрузился
+        if (savedToken !== currentToken) {
+          console.log('🔄 Сервер перезагрузился. Старый:', savedToken, 'Новый:', currentToken);
+          localStorage.setItem('server_session_token', currentToken);
+          console.log('🔁 Перезагружаем UI...');
+          window.location.reload();
+        }
+      } catch (err) {
+        console.debug('[Health] Ошибка запроса:', err.message);
+      }
+    };
+
+    // Проверяем сразу и каждые 10 секунд
+    checkServer();
+    const interval = setInterval(checkServer, 10000);
+
+    // Возвращаем функцию очистки
+    return () => clearInterval(interval);
+  };
+
+  // ✅ ЗАПУСК health-check ТОЛЬКО ПОСЛЕ ПОДКЛЮЧЕНИЯ WebSocket
+  useEffect(() => {
+    // Условие: WebSocket существует и открыт
+    if (window.ws && window.ws.readyState === WebSocket.OPEN) {
+      return startHealthCheck(); // ← запускаем
+    }
+  }, [fullDevices]); // ← срабатывает при появлении устройств (после WS)
+  //end serverhealth
+
+  // 🛑 Если нет координатора
   if (!coordinator) {
     return (
       <div className="app-container">
@@ -147,7 +190,7 @@ function App() {
           <div className="device-list">
             <p>Загрузка данных...</p>
           </div>
-          <div className="device-details">
+          <div className="content-area">
             <p>Ожидание подключения к шлюзу...</p>
           </div>
         </div>
@@ -155,9 +198,10 @@ function App() {
     );
   }
 
+  
+
   return (
     <div className="app-container">
-      {/* Шапка */}
       <header className="header">
         <div className="left">
           <div>
@@ -170,37 +214,33 @@ function App() {
         <div className="ieee">{coordinator.ieee_addr}</div>
       </header>
 
-      {/* Навигация */}
-      <nav className="navbar">
-        <a href="#/" className={`nav-link ${currentPath === '#/' ? 'active' : ''}`}>
-          🔌 Устройства
-        </a>
-        <a href="#/links" className={`nav-link ${currentPath === '#/links' ? 'active' : ''}`}>
-          🔗 Связи
-        </a>
-        <a href="#/scenes" className={`nav-link ${currentPath === '#/scenes' ? 'active' : ''}`}>
-          🎬 Сценарии
-        </a>
-        <a href="#/settings" className={`nav-link ${currentPath === '#/settings' ? 'active' : ''}`}>
-          ⚙️ Настройки
-        </a>
-        <a href="#/monitor" className={`nav-link ${currentPath === '#/monitor' ? 'active' : ''}`}>
-          📊 Мониторинг
-        </a>
-      </nav>
+      <Navbar />
 
-      {/* Основной макет */}
       <div className="main-layout">
-        <DeviceSidebar
-          devices={briefList}
-          selectedIEEE={selectedIEEE}
-          onSelect={handleSelectDevice}
+        <Sidebar
+          currentTab={currentPath.replace('#', '')}
+          selectedItem={selectedItem}
+          onSelectItem={(type, id) => setSelectedItem({ type, id })}
+          devices={fullDevices}
         />
 
         <div className="content-area">
-          {currentPath === '#/settings' && <Settings />}
-          {currentPath === '#/' && <DeviceDetails key={selectedIEEE} device={selectedDevice} />}
-          {currentPath !== '#/' && currentPath !== '#/settings' && (
+          {currentPath === '#/settings' && selectedItem?.type === 'settings' && (
+            <Settings activeSection={selectedItem.id} />
+          )}
+          {currentPath === '#/' && selectedItem?.type === 'device' && (
+            <DeviceDetails key={selectedItem.id} device={selectedDevice} />
+          )}
+
+          {currentPath === '#/scenes' && selectedItem?.type === 'scene' && (
+            <BehaviorsPanel sceneId={selectedItem.id} />
+          )}
+
+          {currentPath === '#/rules' && selectedItem?.type === 'rule' && (
+            <RuleEditor ruleId={selectedItem.id} />
+          )}
+
+          {![ '/', '/settings', '/scenes', '/rules'].includes(currentPath.replace('#', '')) && (
             <div className="p-8 text-gray-500">
               <h2 className="text-xl font-semibold">🚧 Страница в разработке</h2>
               <p>{currentPath}</p>
@@ -214,30 +254,15 @@ function App() {
         <span>💾 Heap: 28 KB</span>
         <span>🗜️ Frag: 14%</span>
       </footer>
-
-      {/* Всплывающие уведомления */}
-      <div className="toast-container">
-        {toasts.map(toast => (
-          <div key={toast.id} className="toast-item">
-            <span className="toast-message">{toast.message}</span>
-            <button
-              onClick={() => removeToast(toast.id)}
-              className="toast-close"
-            >
-              ✕
-            </button>
-          </div>
-        ))}
-      </div>
     </div>
   );
 }
 
-// ✅ Оборачиваем App в NotificationProvider
+// ✅ Убрали useServerHealth — он теперь внутри App
 export default function AppWithNotifications() {
   return (
     <NotificationProvider>
-      <App />
-    </NotificationProvider>
+    <App />
+  </NotificationProvider>
   );
 }

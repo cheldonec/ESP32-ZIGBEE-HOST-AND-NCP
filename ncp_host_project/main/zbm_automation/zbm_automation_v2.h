@@ -28,6 +28,7 @@ typedef struct {
     zbm_attr_data_types_t data_type;  // тип данных
     uint16_t data_size;               // размер
     void* p_value;                    // значение (выделено отдельно)
+    void* p_init_value;               // начальное значение при старте
     uint64_t last_update_ms;
     uint8_t idx;
 } zbm_virtual_var_t;
@@ -36,6 +37,14 @@ extern zbm_virtual_var_t zbm_vars[ZB_AUTO_VAR_COUNT];
 
 // Утилиты
 void zbm_var_init(void);
+void zbm_var_set_number(void* buf, zbm_attr_data_types_t type, int num);
+// обновляет и запускае правила
+void zbm_var_update_value(zbm_virtual_var_t* var, void* value, uint16_t size);
+
+// обновляет во время настроек из UI
+bool zbm_var_set_config(uint8_t idx, const char* name, zbm_attr_data_types_t type, void* runtime_value, uint16_t runtime_size, void* init_value, uint16_t init_size);
+bool zbm_var_update_data(void* dst, zbm_attr_data_types_t type, void* src, uint16_t src_size);
+
 void zbm_vars_save_to_storage(void);
 void zbm_var_set_uint8(uint8_t idx, uint8_t value);
 void zbm_var_set_int8(uint8_t idx, int8_t value);
@@ -134,6 +143,15 @@ typedef enum {
 } zb_logic_op_t;
 
 typedef struct {
+    bool enabled;                   // false = always active
+    uint8_t from_hour;              // 0–23
+    uint8_t from_min;               // 0–59
+    uint8_t to_hour;                // 0–23
+    uint8_t to_min;                 // 0–59
+    uint8_t days_of_week;           // битовая маска: bit0=понедельник, bit6=воскресенье, bit7=всегда
+} zb_time_range_t;
+
+typedef struct {
     char id[37];
     char name[64];
     bool enabled;
@@ -145,6 +163,7 @@ typedef struct {
     uint8_t action_count;                       // только разрешающие условия
     zb_trigger_t triggers[ZB_AUTO_MAX_TRIGGERS];    // только разрешающие условия
     zb_action_t actions[ZB_AUTO_MAX_ACTIONS];
+    zb_time_range_t time_range;
 } zb_rule_t;
 
 extern zb_rule_t* zb_rules[ZB_AUTO_MAX_RULES];
@@ -156,6 +175,10 @@ void zb_rules_load_all_from_storage(void);
 bool rule_from_json(cJSON* json, zb_rule_t* out_rule);
 
 cJSON* rule_to_json(const zb_rule_t* rule);
+
+bool is_time_in_range(const zb_time_range_t* tr);
+
+void execute_rule(const zb_rule_t* rule, const char* trigger_guid);
 
 // ========================================================
 //                API
@@ -173,11 +196,11 @@ bool zbm_var_realloc_storage(zbm_virtual_var_t *var);
 
 void zb_automation_v2_init(void);
 
-// обновляет и запускае правила
-void zbm_var_update_value(zbm_virtual_var_t* var, void* value, uint16_t size);
+// функции для rest api 
+bool zb_automation_v2_update_rule_from_json(cJSON* json);
+bool zb_automation_v2_save_rule_to_storage(const char* id);
 
-// обновляет во время настроек из UI
-bool zbm_var_set_config(uint8_t idx, const char* name, zbm_attr_data_types_t type, void* value, uint16_t size);
+
 
 void zb_automation_v2_execute_action(const zb_action_t* act);
 

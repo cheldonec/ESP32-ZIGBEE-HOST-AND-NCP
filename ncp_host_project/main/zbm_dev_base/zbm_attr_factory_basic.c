@@ -7,6 +7,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include <stdbool.h>
+#include "ps_ram_utils.h"
 
 static zbm_cluster_attribute_t* create_attr_zcl_version(void) {
     return create_attr(0x0000, "ZCL Version", ZBM_ATTR_TYPE_U8, sizeof(uint8_t));
@@ -157,7 +158,7 @@ static zbm_cluster_standart_cmd_t* zbm_create_basic_cmd_reset(void)
     }
 
     cmd->id = 0x00;
-    cmd->friendlyname = strdup("Reset to Factory Defaults");
+    cmd->friendlyname = psram_strdup("Reset to Factory Defaults");
     if (!cmd->friendlyname) {
         free(cmd);
         return NULL;

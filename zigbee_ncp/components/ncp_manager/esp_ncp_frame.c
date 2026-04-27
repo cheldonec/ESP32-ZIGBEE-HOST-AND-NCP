@@ -158,5 +158,7 @@ esp_err_t esp_ncp_noti_input(esp_ncp_header_t *src, const void *buffer, uint16_t
     data_header.flags.type = 2;
     
     ESP_LOGW(TAG, "RAM control esp_ncp_noti_input in esp_ncp_frame.c line 160 %lu", esp_get_free_heap_size());
+    ESP_LOGI(TAG, "Free DRAM: %d bytes", heap_caps_get_free_size(MALLOC_CAP_DMA));
+    ESP_LOGI(TAG, "Free IRAM: %d bytes", heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
     return esp_ncp_frame_input(&data_header, buffer, len);
 }

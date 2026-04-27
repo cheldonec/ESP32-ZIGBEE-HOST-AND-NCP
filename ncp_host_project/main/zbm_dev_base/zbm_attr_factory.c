@@ -9,6 +9,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
+#include "ps_ram_utils.h"
 
 //функция создания атрибута
 zbm_cluster_attribute_t* create_attr(uint16_t id, const char* name, zbm_attr_data_types_t type, uint16_t size) {
@@ -23,7 +24,7 @@ zbm_cluster_attribute_t* create_attr(uint16_t id, const char* name, zbm_attr_dat
 
     // Если имя задано — дублируем, иначе используем значение по умолчанию
     const char* friendly_name_str = name ? name : "unk_attr_name";
-    attr->friendlyname = strdup(friendly_name_str);
+    attr->friendlyname = psram_strdup(friendly_name_str);
     if (!attr->friendlyname) {
         free(attr);
         attr = NULL;
@@ -32,7 +33,7 @@ zbm_cluster_attribute_t* create_attr(uint16_t id, const char* name, zbm_attr_dat
 
     attr->p_value = calloc(1, size);
     if (!attr->p_value) {
-        free(attr->friendlyname);
+        heap_caps_free(attr->friendlyname);
         attr->friendlyname = NULL;
         free(attr);
         attr = NULL;

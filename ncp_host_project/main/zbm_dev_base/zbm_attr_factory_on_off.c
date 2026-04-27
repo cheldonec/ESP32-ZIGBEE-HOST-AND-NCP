@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include "zbm_dev_simple_func.h"
 #include "zbm_cmd_types.h"
+#include "ps_ram_utils.h"
 
 /**
  * @brief Создаёт атрибут OnOff для On/Off кластера
@@ -90,7 +91,7 @@ static zbm_cluster_standart_cmd_t* zbm_create_on_off_cmd_off(void)
     }
 
     cmd->id = 0x00;
-    cmd->friendlyname = strdup("Off");
+    cmd->friendlyname = psram_strdup("Off");
     if (!cmd->friendlyname) {
         free(cmd);
         return NULL;
@@ -114,7 +115,7 @@ static zbm_cluster_standart_cmd_t* zbm_create_on_off_cmd_on(void)
     }
 
     cmd->id = 0x01;
-    cmd->friendlyname = strdup("On");
+    cmd->friendlyname = psram_strdup("On");
     if (!cmd->friendlyname) {
         free(cmd);
         return NULL;
@@ -138,7 +139,7 @@ static zbm_cluster_standart_cmd_t* zbm_create_on_off_cmd_toggle(void)
     }
 
     cmd->id = 0x02;
-    cmd->friendlyname = strdup("Toggle");
+    cmd->friendlyname = psram_strdup("Toggle");
     if (!cmd->friendlyname) {
         free(cmd);
         return NULL;
@@ -166,7 +167,7 @@ static zbm_cluster_standart_cmd_t* zbm_create_on_off_cmd_on_with_timed_off(void)
     }
 
     cmd->id = 0x42;
-    cmd->friendlyname = strdup("On With Timed Off");
+    cmd->friendlyname = psram_strdup("On With Timed Off");
     if (!cmd->friendlyname) {
         free(cmd);
         return NULL;
@@ -183,7 +184,7 @@ static zbm_cluster_standart_cmd_t* zbm_create_on_off_cmd_on_with_timed_off(void)
     // Параметр 1: OnOffControl (uint8_t)
     zbm_cluster_cmd_param_t* param1 = (zbm_cluster_cmd_param_t*)calloc(1, sizeof(zbm_cluster_cmd_param_t));
     if (!param1) goto error;
-    param1->friendlyname = strdup("OnOff Control");
+    param1->friendlyname = psram_strdup("OnOff Control");
     param1->data_type = ZBM_CMD_DATA_TYPE_U8;
     param1->data_size = sizeof(uint8_t);
     param1->p_value = calloc(1, sizeof(uint8_t));
@@ -196,7 +197,7 @@ static zbm_cluster_standart_cmd_t* zbm_create_on_off_cmd_on_with_timed_off(void)
     // Параметр 2: OnTime (uint16_t)
     zbm_cluster_cmd_param_t* param2 = (zbm_cluster_cmd_param_t*)calloc(1, sizeof(zbm_cluster_cmd_param_t));
     if (!param2) goto error;
-    param2->friendlyname = strdup("On Time (0.1s)");
+    param2->friendlyname = psram_strdup("On Time (0.1s)");
     param2->data_type = ZBM_CMD_DATA_TYPE_U16;
     param2->data_size = sizeof(uint16_t);
     param2->p_value = calloc(1, sizeof(uint16_t));
@@ -209,7 +210,7 @@ static zbm_cluster_standart_cmd_t* zbm_create_on_off_cmd_on_with_timed_off(void)
     // Параметр 3: OffWaitTime (uint16_t)
     zbm_cluster_cmd_param_t* param3 = (zbm_cluster_cmd_param_t*)calloc(1, sizeof(zbm_cluster_cmd_param_t));
     if (!param3) goto error;
-    param3->friendlyname = strdup("Off Wait Time (0.1s)");
+    param3->friendlyname = psram_strdup("Off Wait Time (0.1s)");
     param3->data_type = ZBM_CMD_DATA_TYPE_U16;
     param3->data_size = sizeof(uint16_t);
     param3->p_value = calloc(1, sizeof(uint16_t));

@@ -11,6 +11,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include "zbm_dev_from_json.h"
+#include "ps_ram_utils.h"
 
 static const char* TAG = "DEV_STORAGE";
 
@@ -125,7 +126,7 @@ if (loaded_coord) {
     if (zbm_coordinator.friendly_name) {
         free(zbm_coordinator.friendly_name);
     }
-    zbm_coordinator.friendly_name = loaded_coord->friendly_name ? strdup(loaded_coord->friendly_name) : NULL;
+    zbm_coordinator.friendly_name = loaded_coord->friendly_name ? psram_strdup(loaded_coord->friendly_name) : NULL;
 
     // Endpoint
     zbm_coordinator.zb_endpoint.endpoint = loaded_coord->zb_endpoint.endpoint;
@@ -172,8 +173,8 @@ if (loaded_coord) {
     if (zbm_coordinator.wifi_ap_password) {
         free(zbm_coordinator.wifi_ap_password);
     }
-    zbm_coordinator.wifi_ap_ssid = loaded_coord->wifi_ap_ssid ? strdup(loaded_coord->wifi_ap_ssid) : NULL;
-    zbm_coordinator.wifi_ap_password = loaded_coord->wifi_ap_password ? strdup(loaded_coord->wifi_ap_password) : NULL;
+    zbm_coordinator.wifi_ap_ssid = loaded_coord->wifi_ap_ssid ? psram_strdup(loaded_coord->wifi_ap_ssid) : NULL;
+    zbm_coordinator.wifi_ap_password = loaded_coord->wifi_ap_password ? psram_strdup(loaded_coord->wifi_ap_password) : NULL;
     zbm_coordinator.wifi_ap_channel = loaded_coord->wifi_ap_channel;
     zbm_coordinator.wifi_ap_max_connections = loaded_coord->wifi_ap_max_connections;
 
@@ -184,11 +185,11 @@ if (loaded_coord) {
     if (zbm_coordinator.wifi_sta_password) {
         free(zbm_coordinator.wifi_sta_password);
     }
-    zbm_coordinator.wifi_sta_ssid = loaded_coord->wifi_sta_ssid ? strdup(loaded_coord->wifi_sta_ssid) : NULL;
-    zbm_coordinator.wifi_sta_password = loaded_coord->wifi_sta_password ? strdup(loaded_coord->wifi_sta_password) : NULL;
+    zbm_coordinator.wifi_sta_ssid = loaded_coord->wifi_sta_ssid ? psram_strdup(loaded_coord->wifi_sta_ssid) : NULL;
+    zbm_coordinator.wifi_sta_password = loaded_coord->wifi_sta_password ? psram_strdup(loaded_coord->wifi_sta_password) : NULL;
     zbm_coordinator.wifi_sta_channel = loaded_coord->wifi_sta_channel;
 
-    zbm_coordinator.hostname = loaded_coord->hostname ? strdup(loaded_coord->hostname) : NULL;
+    zbm_coordinator.hostname = loaded_coord->hostname ? psram_strdup(loaded_coord->hostname) : NULL;
 
     // Освобождаем временный объект
     zbm_free_coordinator(loaded_coord);
@@ -238,7 +239,7 @@ if (loaded_coord) {
     if (zbm_coordinator.friendly_name) {
         free(zbm_coordinator.friendly_name);
     }
-    zbm_coordinator.friendly_name = strdup("Zigbee Coordinator");
+    zbm_coordinator.friendly_name = psram_strdup("Zigbee Coordinator");
 
     // Endpoint: используем стандартные списки
     extern uint16_t inputClusterEP1[];
@@ -267,8 +268,8 @@ if (loaded_coord) {
     }
 
     // === Wi-Fi по умолчанию ===
-    zbm_coordinator.wifi_ap_ssid = strdup("Zigbee-Gateway-Setup");
-    zbm_coordinator.wifi_ap_password = strdup("12345678");
+    zbm_coordinator.wifi_ap_ssid = psram_strdup("Zigbee-Gateway-Setup");
+    zbm_coordinator.wifi_ap_password = psram_strdup("12345678");
     zbm_coordinator.wifi_ap_channel = 6;
     zbm_coordinator.wifi_ap_max_connections = 4;
 

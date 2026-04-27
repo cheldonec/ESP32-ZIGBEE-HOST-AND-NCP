@@ -17,6 +17,7 @@
 #include "zbm_dev_storage_spiffs.h"
 #include "zbm_web_server.h"
 #include "zbm_automation_v2.h"
+#include "ps_ram_utils.h"
 
 
 static const char* TAG = "zbm_dev_simple_func";
@@ -251,7 +252,7 @@ uint8_t zbm_device_apply_reported_value(
         attr->acces = acces;
         attr->data_type = data_type;
         attr->data_size = data_size;
-        attr->friendlyname = attr_friendlyname ? strdup(attr_friendlyname) : NULL;
+        attr->friendlyname = attr_friendlyname ? psram_strdup(attr_friendlyname) : NULL;
         if (attr_friendlyname && !attr->friendlyname) {
             free(attr);
             return 0xFF;
@@ -259,7 +260,7 @@ uint8_t zbm_device_apply_reported_value(
 
         attr->p_value = calloc(1, data_size);
         if (!attr->p_value) {
-            if (attr->friendlyname) free(attr->friendlyname);
+            if (attr->friendlyname) heap_caps_free(attr->friendlyname);
             free(attr);
             return 0xFF;
         }
@@ -317,8 +318,8 @@ uint8_t zbm_device_apply_reported_value(
     } else {
         if (attr_friendlyname && (!attr->friendlyname ||
             strcmp(attr->friendlyname, attr_friendlyname) != 0)) {
-            free(attr->friendlyname);
-            attr->friendlyname = strdup(attr_friendlyname);
+            heap_caps_free(attr->friendlyname);
+            attr->friendlyname = psram_strdup(attr_friendlyname);
             if (!attr->friendlyname) return 0xFF;
         }
         attr->acces = acces;
@@ -494,12 +495,12 @@ uint8_t zbm_update_cluster_custom_report(
         report_cmd->data_size = data_size;
 
         if (cmd_friendlyname) {
-            report_cmd->friendlyname = strdup(cmd_friendlyname);
+            report_cmd->friendlyname = psram_strdup(cmd_friendlyname);
         } else {
             char buf[64];
             const char* name = zbm_get_cluster_friendlyname(cluster_id);
             snprintf(buf, sizeof(buf), "%s_Report_0x%02X", name ? name : "Cluster", cmd_id);
-            report_cmd->friendlyname = strdup(buf);
+            report_cmd->friendlyname = psram_strdup(buf);
         }
         if (!report_cmd->friendlyname) {
             free(report_cmd);
@@ -658,7 +659,7 @@ char* generate_cluster_name(uint16_t cluster_id, bool is_custom)
 {
     const char* base_name = zbm_get_cluster_friendlyname(cluster_id);
     if (base_name) {
-        char* result = strdup(base_name);
+        char* result = psram_strdup(base_name);
         if (!result) {
             ESP_LOGE(TAG, "Failed to strdup cluster name: %s", base_name);
         }
@@ -669,7 +670,7 @@ char* generate_cluster_name(uint16_t cluster_id, bool is_custom)
     char buf[64];
     snprintf(buf, sizeof(buf), "%s 0x%04X", prefix, cluster_id);
 
-    char* result = strdup(buf);
+    char* result = psram_strdup(buf);
     if (!result) {
         ESP_LOGE(TAG, "Failed to strdup generated cluster name: %s", buf);
     }

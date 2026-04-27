@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <esp_log.h>
+#include "ps_ram_utils.h"
 
 
 zbm_dev_endpoint_t* zbm_create_empty_endpoint(void)
@@ -76,7 +77,7 @@ zbm_dev_t* zbm_create_device_obj_by_ieee(const uint8_t* ieee_addr)
     snprintf(temp_name, sizeof(temp_name), "Dev %02X:%02X..%02X",
              ieee_addr[0], ieee_addr[1], ieee_addr[7]);
 
-    dev->friendly_name = strdup(temp_name);
+    dev->friendly_name = psram_strdup(temp_name);
     if (!dev->friendly_name) {
         free(dev);
         return NULL;
@@ -91,7 +92,7 @@ bool zbm_free_dev_endpoint(zbm_dev_endpoint_t* endpoint)
     if (!endpoint) return false;
 
     if (endpoint->friendlyname) {
-        free(endpoint->friendlyname);
+        heap_caps_free(endpoint->friendlyname);
         endpoint->friendlyname = NULL;
     }
 

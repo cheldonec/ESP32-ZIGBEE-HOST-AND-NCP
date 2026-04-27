@@ -2,6 +2,7 @@
 #include <string.h>
 #include "esp_log.h"
 #include "zbm_core_sync.h"
+#include "ps_ram_utils.h"
 
 static const char* TAG = "ZBM_DEV_FROM_JSON";
 
@@ -25,7 +26,7 @@ uint16_t parse_hex16(const char* str) {
 
 // Вспомогательная: безопасное копирование строки
 char* safe_strdup(const char* str) {
-    return str ? strdup(str) : NULL;
+    return str ? psram_strdup(str) : NULL;
 }
 
 // Основная функция восстановления устройства из JSON
@@ -612,7 +613,7 @@ zbm_dev_t* restore_device_from_json(cJSON* json) {
 
                 cJSON* j_friendly = cJSON_GetObjectItem(j_cl, "name");
                 if (j_friendly && cJSON_IsString(j_friendly)) {
-                    free(cluster->friendlyname);
+                    heap_caps_free(cluster->friendlyname);
                     cluster->friendlyname = safe_strdup(j_friendly->valuestring);
                 }
 

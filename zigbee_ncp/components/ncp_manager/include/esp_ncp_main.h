@@ -18,7 +18,7 @@ extern "C" {
 //#define NCP_TASK_STACK       5120
 #define NCP_TASK_STACK       8192
 #define NCP_TASK_PRIORITY    23
-#define NCP_TIMEOUT_MS       10
+#define NCP_TIMEOUT_MS       50
 #define NCP_EVENT_QUEUE_LEN  60
 
 /**

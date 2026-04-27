@@ -9,6 +9,7 @@
 #include "zbm_ncp_connect.h"
 #include "ncp_host_zb_api_to_ncp.h"
 #include "esp_random.h"
+#include "ps_ram_utils.h"
 
 static const char* TAG = "ZBM_REST_API";
 
@@ -287,7 +288,7 @@ esp_err_t zbm_rest_api_post_coordinator_handler(httpd_req_t* req) {
         g_zbm_coordinator->friendly_name = NULL;
     }
     if (new_coord->friendly_name) {
-        g_zbm_coordinator->friendly_name = strdup(new_coord->friendly_name);
+        g_zbm_coordinator->friendly_name = psram_strdup(new_coord->friendly_name);
     }
 
     // PAN ID
@@ -363,13 +364,13 @@ esp_err_t zbm_rest_api_post_coordinator_handler(httpd_req_t* req) {
     // Копируем новые
     g_zbm_coordinator->wifi_mode = new_coord->wifi_mode;
 
-    g_zbm_coordinator->wifi_ap_ssid = new_coord->wifi_ap_ssid ? strdup(new_coord->wifi_ap_ssid) : NULL;
-    g_zbm_coordinator->wifi_ap_password = new_coord->wifi_ap_password ? strdup(new_coord->wifi_ap_password) : NULL;
+    g_zbm_coordinator->wifi_ap_ssid = new_coord->wifi_ap_ssid ? psram_strdup(new_coord->wifi_ap_ssid) : NULL;
+    g_zbm_coordinator->wifi_ap_password = new_coord->wifi_ap_password ? psram_strdup(new_coord->wifi_ap_password) : NULL;
     g_zbm_coordinator->wifi_ap_channel = new_coord->wifi_ap_channel;
     g_zbm_coordinator->wifi_ap_max_connections = new_coord->wifi_ap_max_connections;
 
-    g_zbm_coordinator->wifi_sta_ssid = new_coord->wifi_sta_ssid ? strdup(new_coord->wifi_sta_ssid) : NULL;
-    g_zbm_coordinator->wifi_sta_password = new_coord->wifi_sta_password ? strdup(new_coord->wifi_sta_password) : NULL;
+    g_zbm_coordinator->wifi_sta_ssid = new_coord->wifi_sta_ssid ? psram_strdup(new_coord->wifi_sta_ssid) : NULL;
+    g_zbm_coordinator->wifi_sta_password = new_coord->wifi_sta_password ? psram_strdup(new_coord->wifi_sta_password) : NULL;
     g_zbm_coordinator->wifi_sta_channel = new_coord->wifi_sta_channel;
 
     g_zbm_coordinator->is_sta_valid = 0; // После настройки — ждём подключения
@@ -381,7 +382,7 @@ esp_err_t zbm_rest_api_post_coordinator_handler(httpd_req_t* req) {
     }
     if (new_coord->hostname) {
         ESP_LOGI(TAG, "Updating hostname to: %s", new_coord->hostname);
-        g_zbm_coordinator->hostname = strdup(new_coord->hostname);
+        g_zbm_coordinator->hostname = psram_strdup(new_coord->hostname);
     }
 
     // Освобождаем временный объект
@@ -829,7 +830,7 @@ esp_err_t zbm_rest_api_post_update_dev_friendly_name_handler(httpd_req_t* req) {
         dev->friendly_name = NULL;
     }
     if (new_name && strlen(new_name) > 0) {
-        dev->friendly_name = strdup(new_name);
+        dev->friendly_name = psram_strdup(new_name);
     } else {
         dev->friendly_name = NULL; // можно оставить пустым
     }

@@ -576,11 +576,88 @@ static esp_err_t esp_ncp_zb_read_attr_resp_handler(const esp_zb_zcl_cmd_read_att
     ESP_LOGI(TAG, "Read attribute response: cluster(0x%04x)", message->info.cluster);
 
     const size_t INFO_LEN = sizeof(esp_zb_zcl_cmd_info_t);
+    uint8_t attr_count = 0;
+    size_t total_attrs_data_len = 0;
+
+    // Подсчитываем количество атрибутов и общий размер
+    for (esp_zb_zcl_read_attr_resp_variable_t *var = message->variables; var != NULL; var = var->next) {
+        attr_count++;
+        if (var->status == ESP_ZB_ZCL_STATUS_SUCCESS) {
+            // При успехе: status + attr_id + type + data_size + value
+            total_attrs_data_len += 
+                sizeof(uint8_t) +           // status
+                sizeof(uint16_t) +          // attr_id
+                sizeof(uint8_t) +           // attr_type
+                sizeof(uint16_t) +          // data_size
+                var->attribute.data.size;   // value
+        } else {
+            // При ошибке: только status + attr_id
+            total_attrs_data_len += 
+                sizeof(uint8_t) +           // status
+                sizeof(uint16_t);           // attr_id
+        }
+    }
+
+    uint16_t length = INFO_LEN + 1 + total_attrs_data_len; // info + attr_count + attrs
+    uint8_t *outbuf = calloc(1, length);
+    if (!outbuf) {
+        ESP_LOGE(TAG, "Failed to allocate output buffer");
+        return ESP_ERR_NO_MEM;
+    }
+
+    // Копируем info
+    memcpy(outbuf, &message->info, INFO_LEN);
+
+    // Пишем attr_count
+    outbuf[INFO_LEN] = attr_count;
+
+    // Указатель на начало данных атрибутов
+    uint8_t *ptr = outbuf + INFO_LEN + 1;
+
+    // Сериализуем каждый атрибут
+    for (esp_zb_zcl_read_attr_resp_variable_t *var = message->variables; var != NULL; var = var->next) {
+        ESP_LOGI(TAG, "Serializing attr: id=0x%04x, status=0x%02x", var->attribute.id, var->status);
+
+        *ptr++ = var->status;  // status (1 байт)
+
+        memcpy(ptr, &var->attribute.id, sizeof(uint16_t));
+        ptr += sizeof(uint16_t);
+
+        if (var->status == ESP_ZB_ZCL_STATUS_SUCCESS) {
+            // Только при успехе добавляем type, size, value
+            *ptr++ = var->attribute.data.type;  // attr_type (1 байт)
+
+            // data_size (2 байта, little-endian)
+            memcpy(ptr, &var->attribute.data.size, sizeof(uint16_t));
+            ptr += sizeof(uint16_t);
+
+            // value (если есть)
+            if (var->attribute.data.size > 0 && var->attribute.data.value) {
+                memcpy(ptr, var->attribute.data.value, var->attribute.data.size);
+                ptr += var->attribute.data.size;
+            }
+            // Если size == 0 — value не копируется, но структура уже записана
+        }
+        // Если status != SUCCESS — больше ничего не пишем!
+    }
+
+    *output = outbuf;
+    *outlen = length;
+
+    return ESP_OK;
+}
+
+static esp_err_t esp_ncp_zb_read_attr_resp_handler_old(const esp_zb_zcl_cmd_read_attr_resp_message_t *message, uint8_t **output, uint16_t *outlen)
+{
+    ESP_RETURN_ON_FALSE(message, ESP_FAIL, TAG, "Empty message");
+    ESP_LOGI(TAG, "Read attribute response: cluster(0x%04x)", message->info.cluster);
+
+    const size_t INFO_LEN = sizeof(esp_zb_zcl_cmd_info_t);
     const size_t ATTR_FIXED_LEN = 
         sizeof(uint8_t) +                     // status
         sizeof(uint16_t) +                    // attr_id
         sizeof(esp_zb_zcl_attr_type_t) +      // attr_type
-        sizeof(uint8_t);                      // data_size
+        sizeof(uint16_t);                      // data_size
 
     uint8_t attr_count = 0;
     size_t total_attrs_data_len = 0;
@@ -619,7 +696,7 @@ static esp_err_t esp_ncp_zb_read_attr_resp_handler(const esp_zb_zcl_cmd_read_att
         ptr += sizeof(uint16_t);
 
         *ptr++ = var->attribute.data.type;       // attr_type (1 байт)
-        *ptr++ = (uint8_t)(var->attribute.data.size); // data_size (1 байт)
+        *ptr++ = (uint16_t)(var->attribute.data.size); // data_size (2 байта)
 
         // value (если есть)
         if (var->attribute.data.size > 0 && var->attribute.data.value) {
@@ -843,7 +920,7 @@ static esp_err_t esp_ncp_zb_report_attr_handler_new(const esp_zb_zcl_report_attr
     typedef struct {
         uint16_t id;
         uint8_t  type;
-        uint8_t  size;
+        uint16_t  size;
     } ESP_NCP_ZB_PACKED_STRUCT esp_ncp_zb_attr_data_t;
 
     // Вычисляем длины

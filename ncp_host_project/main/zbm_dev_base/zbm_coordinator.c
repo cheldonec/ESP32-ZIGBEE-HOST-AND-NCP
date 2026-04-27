@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include "ps_ram_utils.h"
 
 static const char* TAG = "ZBM_COORD";
 
@@ -13,8 +14,8 @@ static const char* TAG = "ZBM_COORD";
 
 
 
-uint16_t inputClusterEP1[] = {0x0000, 0x0001, 0x0003, 0x0004, 0x0005, 0x0006, 0x0402, 0x0405, 0xEF00};
-    uint16_t outputClusterEP1[] = {0x0000, 0x0001, 0x0003, 0x0004, 0x0005, 0x0006, 0x0402, 0x0405, 0xEF00};
+uint16_t inputClusterEP1[]  __attribute__((section(".psram"))) = {0x0000, 0x0001, 0x0003, 0x0004, 0x0005, 0x0006, 0x0402, 0x0405, 0xEF00};
+uint16_t outputClusterEP1[]  __attribute__((section(".psram"))) = {0x0000, 0x0001, 0x0003, 0x0004, 0x0005, 0x0006, 0x0402, 0x0405, 0xEF00};
     esp_host_zb_endpoint_t host_endpoint1 = {
         .endpoint = 1,
         .profileId = 0x0104U,                           //HA profile ID
@@ -148,7 +149,7 @@ zbm_coordinator_t* zbm_coordinator_from_json(const cJSON* json) {
     // friendly_name
     cJSON* name_item = cJSON_GetObjectItem(json, "friendly_name");
     if (cJSON_IsString(name_item) && name_item->valuestring) {
-        coord->friendly_name = strdup(name_item->valuestring);
+        coord->friendly_name = psram_strdup(name_item->valuestring);
     }
 
     // short_addr (должен быть 0x0000)
@@ -259,12 +260,12 @@ zbm_coordinator_t* zbm_coordinator_from_json(const cJSON* json) {
     // === Wi-Fi AP ===
     cJSON* ap_ssid_item = cJSON_GetObjectItem(json, "wifi_ap_ssid");
     if (cJSON_IsString(ap_ssid_item) && ap_ssid_item->valuestring && strlen(ap_ssid_item->valuestring) > 0) {
-        coord->wifi_ap_ssid = strdup(ap_ssid_item->valuestring);
+        coord->wifi_ap_ssid = psram_strdup(ap_ssid_item->valuestring);
     }
 
     cJSON* ap_pass_item = cJSON_GetObjectItem(json, "wifi_ap_password");
     if (cJSON_IsString(ap_pass_item) && ap_pass_item->valuestring) {
-        coord->wifi_ap_password = strdup(ap_pass_item->valuestring);
+        coord->wifi_ap_password = psram_strdup(ap_pass_item->valuestring);
     }
 
     cJSON* ap_chan_item = cJSON_GetObjectItem(json, "wifi_ap_channel");
@@ -284,12 +285,12 @@ zbm_coordinator_t* zbm_coordinator_from_json(const cJSON* json) {
     // === Wi-Fi STA ===
     cJSON* sta_ssid_item = cJSON_GetObjectItem(json, "wifi_sta_ssid");
     if (cJSON_IsString(sta_ssid_item) && sta_ssid_item->valuestring && strlen(sta_ssid_item->valuestring) > 0) {
-        coord->wifi_sta_ssid = strdup(sta_ssid_item->valuestring);
+        coord->wifi_sta_ssid = psram_strdup(sta_ssid_item->valuestring);
     }
 
     cJSON* sta_pass_item = cJSON_GetObjectItem(json, "wifi_sta_password");
     if (cJSON_IsString(sta_pass_item) && sta_pass_item->valuestring && strlen(sta_pass_item->valuestring) > 0) {
-        coord->wifi_sta_password = strdup(sta_pass_item->valuestring);
+        coord->wifi_sta_password = psram_strdup(sta_pass_item->valuestring);
     }
 
     cJSON* sta_chan_item = cJSON_GetObjectItem(json, "wifi_sta_channel");
@@ -312,49 +313,49 @@ zbm_coordinator_t* zbm_coordinator_from_json(const cJSON* json) {
 
     item = cJSON_GetObjectItem(json, "ssdp_manufacturer");
     if (cJSON_IsString(item) && item->valuestring && strlen(item->valuestring) > 0) {
-        coord->ssdp_manufacturer = strdup(item->valuestring);
+        coord->ssdp_manufacturer = psram_strdup(item->valuestring);
     }
 
     item = cJSON_GetObjectItem(json, "ssdp_model_name");
     if (cJSON_IsString(item) && item->valuestring && strlen(item->valuestring) > 0) {
-        coord->ssdp_model_name = strdup(item->valuestring);
+        coord->ssdp_model_name = psram_strdup(item->valuestring);
     }
 
     item = cJSON_GetObjectItem(json, "ssdp_model_number");
     if (cJSON_IsString(item) && item->valuestring && strlen(item->valuestring) > 0) {
-        coord->ssdp_model_number = strdup(item->valuestring);
+        coord->ssdp_model_number = psram_strdup(item->valuestring);
     }
 
     item = cJSON_GetObjectItem(json, "ssdp_serial_number");
     if (cJSON_IsString(item) && item->valuestring && strlen(item->valuestring) > 0) {
-        coord->ssdp_serial_number = strdup(item->valuestring);
+        coord->ssdp_serial_number = psram_strdup(item->valuestring);
     }
 
     item = cJSON_GetObjectItem(json, "ssdp_server_name");
     if (cJSON_IsString(item) && item->valuestring && strlen(item->valuestring) > 0) {
-        coord->ssdp_server_name = strdup(item->valuestring);
+        coord->ssdp_server_name = psram_strdup(item->valuestring);
     }
 
     item = cJSON_GetObjectItem(json, "ssdp_schema_url");
     if (cJSON_IsString(item) && item->valuestring && strlen(item->valuestring) > 0) {
-        coord->ssdp_schema_url = strdup(item->valuestring);
+        coord->ssdp_schema_url = psram_strdup(item->valuestring);
     } else {
-        coord->ssdp_schema_url = strdup("/description.xml");
+        coord->ssdp_schema_url = psram_strdup("/description.xml");
     }
 
     item = cJSON_GetObjectItem(json, "ssdp_presentation_url");
     if (cJSON_IsString(item) && item->valuestring && strlen(item->valuestring) > 0) {
-        coord->ssdp_presentation_url = strdup(item->valuestring);
+        coord->ssdp_presentation_url = psram_strdup(item->valuestring);
     } else {
-        coord->ssdp_presentation_url = strdup("/");
+        coord->ssdp_presentation_url = psram_strdup("/");
     }
 
     // === Hostname ===
     cJSON* host_item = cJSON_GetObjectItem(json, "hostname");
     if (cJSON_IsString(host_item) && host_item->valuestring && strlen(host_item->valuestring) > 0) {
-        coord->hostname = strdup(host_item->valuestring);
+        coord->hostname = psram_strdup(host_item->valuestring);
     } else {
-        coord->hostname = strdup("esp32-zigbee"); // дефолт
+        coord->hostname = psram_strdup("esp32-zigbee"); // дефолт
     }
     ESP_LOGI(TAG, "Loaded hostname from JSON: %s", coord->hostname);
 

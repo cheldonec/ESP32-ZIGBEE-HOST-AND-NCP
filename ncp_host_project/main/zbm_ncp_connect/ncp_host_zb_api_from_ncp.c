@@ -275,6 +275,156 @@ static esp_err_t zb_manager_read_attr_resp_fn(const uint8_t *input, uint16_t inl
     ESP_LOGI(TAG, "Read attribute response parsed: src_addr=0x%04x, endpoint=%u, cluster=0x%04x, attr_count=%u",
              info.src_address.u.short_addr, info.src_endpoint, info.cluster, attr_count);
 
+    zbm_dev_t* dev_obj = zbm_find_device_in_devdb_by_short_safe(info.src_address.u.short_addr);
+    if (!dev_obj) {
+        ESP_LOGW(TAG, "Device with short address 0x%04x not found in devdb", info.src_address.u.short_addr);
+    }
+
+    esp_zb_zcl_read_attr_resp_variable_t *variables = NULL;
+    esp_zb_zcl_read_attr_resp_variable_t *tail = NULL;
+
+    for (int i = 0; i < attr_count; i++) {
+        // === ИСПРАВЛЕНО: copied_input + inlen ===
+        if (ptr + 3 > copied_input + inlen) {
+            ESP_LOGE(TAG, "Buffer overflow while parsing attribute %d: insufficient space for status and attr_id", i);
+            goto cleanup;
+        }
+
+        esp_zb_zcl_read_attr_resp_variable_t *var =
+            (esp_zb_zcl_read_attr_resp_variable_t *)calloc(1, sizeof(*var));
+        if (!var) {
+            ESP_LOGE(TAG, "Failed to allocate variable for attribute %d", i);
+            goto cleanup;
+        }
+
+        var->status = *ptr++;
+
+        memcpy(&var->attribute.id, ptr, sizeof(uint16_t));
+        ptr += sizeof(uint16_t);
+
+        ESP_LOGI(TAG, "Parsing attr: id=0x%04x, status=0x%02x", var->attribute.id, var->status);
+
+        if (var->status == ESP_ZB_ZCL_STATUS_SUCCESS) {
+            // Проверяем наличие type и size
+            if (ptr + 3 > copied_input + inlen) {  // type (1) + size (2)
+                ESP_LOGE(TAG, "Buffer overflow: not enough data for type and size of attr 0x%04x", var->attribute.id);
+                free(var);
+                goto cleanup;
+            }
+
+            var->attribute.data.type = *ptr++;
+            var->attribute.data.size = *(uint16_t*)ptr;
+            ptr += sizeof(uint16_t);
+
+            if (var->attribute.data.size > 0) {
+                if (ptr + var->attribute.data.size > copied_input + inlen) {
+                    ESP_LOGE(TAG, "Data overflow for attribute 0x%04x: not enough space for value", var->attribute.id);
+                    free(var);
+                    goto cleanup;
+                }
+
+                var->attribute.data.value = malloc(var->attribute.data.size);
+                if (!var->attribute.data.value) {
+                    ESP_LOGE(TAG, "Failed to allocate value for attribute 0x%04x", var->attribute.id);
+                    free(var);
+                    goto cleanup;
+                }
+                memcpy(var->attribute.data.value, ptr, var->attribute.data.size);
+                ptr += var->attribute.data.size;
+            } else {
+                var->attribute.data.value = NULL;
+            }
+        } else {
+            var->attribute.data.type = 0;
+            var->attribute.data.size = 0;
+            var->attribute.data.value = NULL;
+        }
+
+        var->next = NULL;
+        if (!variables) {
+            variables = var;
+        } else {
+            tail->next = var;
+        }
+        tail = var;
+
+        if (var->status == ESP_ZB_ZCL_STATUS_SUCCESS && dev_obj) {
+            zbm_cluster_role_t role_mask = ZBM_CLUSTER_ROLE_SERVER;
+            const char* attr_friendlyname = NULL;
+            zbm_attr_data_types_t zbm_data_type = (zbm_attr_data_types_t)var->attribute.data.type;
+
+            uint8_t result = zbm_device_apply_reported_value_safe(
+                dev_obj,
+                info.src_endpoint,
+                info.cluster,
+                role_mask,
+                var->attribute.id,
+                attr_friendlyname,
+                ESP_ZB_ZCL_ATTR_ACCESS_READ_ONLY,
+                zbm_data_type,
+                var->attribute.data.size,
+                var->attribute.data.value
+            );
+
+            if (result == 1) {
+                ESP_LOGI(TAG, "✅ Created cluster 0x%04x and attribute 0x%04x on dev 0x%04x", info.cluster, var->attribute.id, info.src_address.u.short_addr);
+                bool saved = zbm_save_device_to_spiffs_safe(dev_obj);
+                if (saved) {
+                    ESP_LOGI(TAG, "💾 Device saved to SPIFFS: dev_0x%04X.json", dev_obj->short_addr);
+                } else {
+                    ESP_LOGE(TAG, "❌ Failed to save device to SPIFFS");
+                }
+            } else {
+                ESP_LOGI(TAG, "🔄 Updated cluster 0x%04x and attribute 0x%04x on dev 0x%04x", info.cluster, var->attribute.id, info.src_address.u.short_addr);
+            }
+        } else if (var->status != ESP_ZB_ZCL_STATUS_SUCCESS) {
+            ESP_LOGW(TAG, "Attribute 0x%04x read failed with status 0x%02x", var->attribute.id, var->status);
+        }
+    }
+
+    ESP_LOGI(TAG, "Successfully processed read attribute response from 0x%04x", info.src_address.u.short_addr);
+    free(copied_input);
+    return ESP_OK;
+
+cleanup:
+    while (variables) {
+        esp_zb_zcl_read_attr_resp_variable_t *tmp = variables;
+        variables = variables->next;
+        if (tmp->attribute.data.value) {
+            free(tmp->attribute.data.value);
+        }
+        free(tmp);
+    }
+    free(copied_input);
+    return ESP_ERR_INVALID_SIZE;
+}
+
+static esp_err_t zb_manager_read_attr_resp_fn_old(const uint8_t *input, uint16_t inlen)
+{
+    if (!input || inlen < sizeof(esp_zb_zcl_cmd_info_t) + 1) {
+        ESP_LOGE(TAG, "Invalid input or insufficient length: %u", inlen);
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    uint8_t* copied_input = calloc(1, inlen);
+    if (!copied_input) {
+        ESP_LOGE(TAG, "Failed to allocate copy buffer");
+        return ESP_ERR_NO_MEM;
+    }
+    memcpy(copied_input, input, inlen);
+
+    const uint8_t *ptr = copied_input;
+    const size_t INFO_LEN = sizeof(esp_zb_zcl_cmd_info_t);
+
+    // Извлекаем info
+    esp_zb_zcl_cmd_info_t info;
+    memcpy(&info, ptr, INFO_LEN);
+    ptr += INFO_LEN;
+
+    uint8_t attr_count = *ptr++;
+    ESP_LOGI(TAG, "Read attribute response parsed: src_addr=0x%04x, endpoint=%u, cluster=0x%04x, attr_count=%u",
+             info.src_address.u.short_addr, info.src_endpoint, info.cluster, attr_count);
+
     // Поиск устройства
     zbm_dev_t* dev_obj = zbm_find_device_in_devdb_by_short_safe(info.src_address.u.short_addr);
     if (!dev_obj) {
@@ -406,159 +556,6 @@ cleanup:
     return ESP_ERR_INVALID_SIZE;
 }
 
-static esp_err_t zb_manager_read_attr_resp_fn_old(const uint8_t *input, uint16_t inlen)
-{
-    if (!input || inlen < sizeof(esp_zb_zcl_cmd_info_t) + 1) {
-        ESP_LOGE(TAG, "Invalid input or insufficient length: %u", inlen);
-        return ESP_ERR_INVALID_ARG;
-    }
-
-    uint8_t* copied_input = calloc(1,inlen);
-    memcpy(copied_input, input, inlen);
-
-    const uint8_t *ptr = copied_input;
-    const size_t INFO_LEN = sizeof(esp_zb_zcl_cmd_info_t);
-
-    // Извлекаем info
-    esp_zb_zcl_cmd_info_t info;
-    memcpy(&info, ptr, INFO_LEN);
-    ptr += INFO_LEN;
-
-    uint8_t attr_count = *ptr++;
-    ESP_LOGI(TAG, "Read attribute response parsed: src_addr=0x%04x, endpoint=%u, cluster=0x%04x, attr_count=%u",
-             info.src_address.u.short_addr, info.src_endpoint, info.cluster, attr_count);
-
-    // Поиск устройства по short_addr
-    zbm_dev_t* dev_obj = zbm_find_device_in_devdb_by_short_safe(info.src_address.u.short_addr);
-    if (!dev_obj) {
-        ESP_LOGW(TAG, "Device with short address 0x%04x not found in devdb, skipping value update", info.src_address.u.short_addr);
-        // Всё равно парсим, чтобы освободить память
-    }
-
-    esp_zb_zcl_read_attr_resp_variable_t *variables = NULL;
-    esp_zb_zcl_read_attr_resp_variable_t *tail = NULL;
-
-    const size_t ATTR_FIXED_LEN = 
-        sizeof(uint8_t) +                    // status
-        sizeof(uint16_t) +                   // attr_id
-        sizeof(uint8_t) +                    // attr_type
-        sizeof(uint16_t);                     // data_size
-
-    for (int i = 0; i < attr_count; i++) {
-        if (ptr + ATTR_FIXED_LEN > input + inlen) {
-            ESP_LOGE(TAG, "Buffer overflow while parsing attribute %d", i);
-            goto cleanup;
-        }
-
-        esp_zb_zcl_read_attr_resp_variable_t *var = 
-            (esp_zb_zcl_read_attr_resp_variable_t *)calloc(1, sizeof(*var));
-        if (!var) {
-            ESP_LOGE(TAG, "Failed to allocate variable for attribute %d", i);
-            return ESP_ERR_NO_MEM;
-        }
-
-        var->status = *ptr++;  // status
-        memcpy(&var->attribute.id, ptr, sizeof(uint16_t));  ptr += sizeof(uint16_t);
-        var->attribute.data.type = *ptr++;  // attr_type
-               
-        uint16_t data_size = *(uint16_t*)ptr; // data_size
-        ptr += sizeof(uint16_t);
-        var->attribute.data.size = data_size;
-
-        if (data_size > 0) {
-            if (ptr + data_size > input + inlen) {
-                ESP_LOGE(TAG, "Data overflow for attribute 0x%04x", var->attribute.id);
-                free(var);
-                goto cleanup;
-            }
-
-            var->attribute.data.value = malloc(data_size);
-            if (!var->attribute.data.value) {
-                ESP_LOGE(TAG, "Failed to allocate value for attribute 0x%04x", var->attribute.id);
-                free(var);
-                goto cleanup;
-            }
-            memcpy(var->attribute.data.value, ptr, data_size);
-            ptr += data_size;
-        } else {
-            var->attribute.data.value = NULL;
-        }
-
-        var->next = NULL;
-        if (!variables) {
-            variables = var;
-        } else {
-            tail->next = var;
-        }
-        tail = var;
-
-        ESP_LOGI(TAG, "Parsed attr: id=0x%04x, status=0x%02x, type=0x%02x, size=%u",
-                 var->attribute.id, var->status, var->attribute.data.type, data_size);
-
-        // Применяем значение, если статус успех
-        if (var->status == ESP_ZB_ZCL_STATUS_SUCCESS && dev_obj) {
-            // Определяем role_mask: если команда пришла от сервера, то это SERVER_READ
-            // Здесь info — это ответ от устройства, значит оно играет роль сервера
-            zbm_cluster_role_t role_mask = ZBM_CLUSTER_ROLE_SERVER;
-
-            // Получаем friendlyname (можно улучшить через базу, пока NULL)
-            const char* attr_friendlyname = NULL; // или генерировать/брать из маппинга
-
-            // Конвертируем тип данных ZCL → zbm_attr_data_types_t (упрощённо)
-            zbm_attr_data_types_t zbm_data_type = (zbm_attr_data_types_t)var->attribute.data.type;
-
-            uint8_t result = zbm_device_apply_reported_value_safe(
-                dev_obj,
-                info.src_endpoint,
-                info.cluster,
-                role_mask,
-                var->attribute.id,
-                attr_friendlyname,
-                ESP_ZB_ZCL_ATTR_ACCESS_READ_ONLY,  // только чтение
-                zbm_data_type,
-                data_size,
-                var->attribute.data.value
-            );
-
-            if (result == 1) {
-                ESP_LOGI(TAG, "✅ Created cluster 0x%04x and attribute  0x%04x on dev 0x%04x", info.cluster, var->attribute.id, info.src_address.u.short_addr);
-                bool saved = zbm_save_device_to_spiffs_safe(dev_obj);
-                if (saved) {
-                    ESP_LOGI(TAG, "💾 Device saved to SPIFFS: dev_0x%04X.json", dev_obj->short_addr);
-                } else {
-                    ESP_LOGE(TAG, "❌ Failed to save device to SPIFFS");
-                }
-            } else {
-                ESP_LOGI(TAG, "🔄 Updated cluster 0x%04x and attribute  0x%04x on dev 0x%04x", info.cluster, var->attribute.id, info.src_address.u.short_addr);
-            }
-        } else if (var->status != ESP_ZB_ZCL_STATUS_SUCCESS) {
-            ESP_LOGW(TAG, "Attribute 0x%04x read failed with status 0x%02x", var->attribute.id, var->status);
-        }
-    }
-
-
-    ESP_LOGI(TAG, "Successfully processed read attribute response from 0x%04x", info.src_address.u.short_addr);
-    free(copied_input);
-    copied_input = NULL;
-    ESP_LOGI(TAG, " HEAP: %u bytes free, largest: %u", 
-             esp_get_free_heap_size(), 
-             heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
-    return ESP_OK;
-
-cleanup:
-    // Очистка всех выделенных переменных
-    while (variables) {
-        esp_zb_zcl_read_attr_resp_variable_t *tmp = variables;
-        variables = variables->next;
-        if (tmp->attribute.data.value) {
-            free(tmp->attribute.data.value);
-        }
-        free(tmp);
-    }
-    free(copied_input);
-    copied_input = NULL;
-    return ESP_ERR_INVALID_SIZE;
-}
 
 
 /**
@@ -801,6 +798,12 @@ static esp_err_t zb_manager_simple_desc_resp_fn(const uint8_t *input, uint16_t i
 
     return ESP_OK;
 }
+static esp_err_t zb_manager_signal_zb_stack_failure_event_fn(const uint8_t *input, uint16_t inlen)
+{
+    ESP_LOGI(TAG, "ZB Stack Failure: RESTARTING Connection");
+    zbm_host_reinit_on_ncp_foulture();
+    return ESP_OK;
+}
 
 const esp_host_zb_func_t host_zb_api_from_ncp_func_table[] = {
     {ESP_NCP_NETWORK_FORMNETWORK, esp_host_zb_form_network_fn},
@@ -823,6 +826,7 @@ const esp_host_zb_func_t host_zb_api_from_ncp_func_table[] = {
     {ZB_MANAGER_CUSTOM_CLUSTER_REPORT , zb_manager_custom_cluster_rep_event_fn }, 
     {ZB_MANAGER_DISCOVERY_ATTR_RESP, zb_manager_disc_attr_resp_fn},*/
     {ZB_MANAGER_NOSTANDART_CLUSTER_CMD_REPORT, zb_manager_nostandart_cluster_cmd_resp_fn},
+    {ZB_MANAGER_SIGNAL_ZB_STACK_FAILURE_EVENT, zb_manager_signal_zb_stack_failure_event_fn}
 };
 
 const uint8_t host_zb_api_from_ncp_func_table_size = sizeof(host_zb_api_from_ncp_func_table) / sizeof(esp_host_zb_func_t);

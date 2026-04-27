@@ -13,6 +13,7 @@ file(GLOB_RECURSE SRCS_dir
     "${CMAKE_CURRENT_LIST_DIR}/zbm_REST_api/*.c"
     "${CMAKE_CURRENT_LIST_DIR}/zbm_ncp_connect/*.c"
     "${CMAKE_CURRENT_LIST_DIR}/SNTP_TIME/*.c"
+    "${CMAKE_CURRENT_LIST_DIR}/PS_RAM_UTILS/*.c"
     
 )
 
@@ -20,7 +21,7 @@ list(APPEND SRCS_var ${SRCS_dir})
 
 set(INC_DIR_var
     "." "zbm_dev_base" "zbm_automation" "wifi_manager" 
-    "zbm_web_server" "zbm_spiffs_manager" "zbm_REST_api" "zbm_ncp_connect" "SNTP_TIME"
+    "zbm_web_server" "zbm_spiffs_manager" "zbm_REST_api" "zbm_ncp_connect" "SNTP_TIME" "PS_RAM_UTILS"
 )
 
 # =============================================================== #

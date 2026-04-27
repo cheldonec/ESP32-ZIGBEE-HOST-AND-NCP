@@ -11,19 +11,49 @@
 
 #include "ncp_zb_manager_main.h"
 #include "zb_manager.h"
+#include "esp_random.h"
+#include "esp_system.h"
 //#include "esp_ncp_frame.h"
 
 static const char *TAG = "MAIN_MODULE";
 
-
-
 void app_main(void)
 {
+    
     //ESP_ERROR_CHECK(nvs_flash_init());
     ESP_LOGW(TAG, "RAM control on start %lu", esp_get_free_heap_size());
     ESP_ERROR_CHECK(esp_ncp_init(NCP_HOST_CONNECTION_MODE_UART));
     ESP_ERROR_CHECK(esp_ncp_start());
     ESP_LOGW(TAG, "RAM control after NCP Start %lu", esp_get_free_heap_size());
+
+    // имитация stack assert
+    //vTaskDelay(10000 / portTICK_PERIOD_MS); 
+    //esp_restart();
+    // Решение - ждём некоторое время и отправляем на хост инфу, что мы ребутнулись
+    vTaskDelay(10000 / portTICK_PERIOD_MS);
+    
+    esp_zb_ieee_addr_t ieee_addr;
+    memset(&ieee_addr, 0, sizeof(ieee_addr));
+
+    esp_zb_get_long_address(ieee_addr);
+    ESP_LOGI(TAG, "ZB IEEE ADDR: %02X:%02X:%02X:%02X:%02X:%02X:%02X:%02X", ieee_addr[0], ieee_addr[1], ieee_addr[2], ieee_addr[3], ieee_addr[4], ieee_addr[5], ieee_addr[6], ieee_addr[7]);
+    // Проверяем, что адрес не нулевой
+    bool is_zero_addr = true;
+    for (int i = 0; i < sizeof(esp_zb_ieee_addr_t); i++) {
+        if (ieee_addr[i] != 0) {
+            is_zero_addr = false;
+            break;
+        }
+    }
+
+    if (is_zero_addr == true)
+    {
+        esp_ncp_header_t ncp_header = { 
+            .sn = esp_random() % 0xFF,
+        };
+        ncp_header.id = ZB_MANAGER_SIGNAL_ZB_STACK_FAILURE_EVENT;
+        esp_ncp_noti_input(&ncp_header, NULL, 0);
+    }
 
     //esp_zb_set_log_level(ESP_ZB_LOG_LEVEL_DEBUG);
     /**************** ZIGBEE ****************/

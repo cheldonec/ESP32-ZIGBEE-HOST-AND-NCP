@@ -238,6 +238,27 @@ static void ESP_ZIGBEE_Task(void *pvParameters)
     //zb_manager_init_t *init_ctx = (zb_manager_init_t *)pvParameters;
     zb_manager_t *init_ctx = (zb_manager_t *)pvParameters;
     
+    if (esp_zb_aps_src_binding_table_size_set(64) != ESP_OK) // таблица записей когда нас забиндили
+    {
+        ESP_LOGW(TAG, "esp_zb_aps_src_binding_table_size_set failed");
+    }
+    if (esp_zb_aps_dst_binding_table_size_set(64) != ESP_OK) // bind_req->req_dst_addr = 0000 таблица когда мы биндим
+    {
+        ESP_LOGW(TAG, "esp_zb_aps_dst_binding_table_size_set failed");
+    }
+    if (esp_zb_io_buffer_size_set(160) != ESP_OK)
+    {
+        ESP_LOGW(TAG, "esp_zb_io_buffer_size_set failed");
+    }
+    if (esp_zb_scheduler_queue_size_set(160)!= ESP_OK)
+    {
+        ESP_LOGW(TAG, "esp_zb_scheduler_queue_size_set failed");
+    }
+    if (esp_zb_overall_network_size_set(128)!= ESP_OK) 
+    {
+        ESP_LOGW(TAG, "esp_zb_overall_network_size_set failed");
+    }
+
     #if CONFIG_OPENTHREAD_SPINEL_ONLY
     esp_radio_spinel_register_rcp_failure_handler(rcp_error_handler, ESP_RADIO_SPINEL_ZIGBEE);
     #endif
@@ -275,22 +296,15 @@ static void ESP_ZIGBEE_Task(void *pvParameters)
         //esp_zb_core_action_handler_register(init_ctx->action_handler);
     //} else 
     //esp_zb_core_action_handler_register(zb_action_handler); // если без NCP
-    if (esp_zb_aps_src_binding_table_size_set(64) != ESP_OK) // таблица записей когда нас забиндили
-    {
-        ESP_LOGW(TAG, "esp_zb_aps_src_binding_table_size_set failed");
-    }
-    if (esp_zb_aps_dst_binding_table_size_set(16) != ESP_OK) // bind_req->req_dst_addr = 0000 таблица когда мы биндим
-    {
-        ESP_LOGW(TAG, "esp_zb_aps_dst_binding_table_size_set failed");
-    }
-    if (esp_zb_io_buffer_size_set(160) != ESP_OK)
-    {
-        ESP_LOGW(TAG, "esp_zb_io_buffer_size_set failed");
-    }
-    if (esp_zb_scheduler_queue_size_set(160)!= ESP_OK)
-    {
-        ESP_LOGW(TAG, "esp_zb_scheduler_queue_size_set failed");
-    }
+    
+
+    // попытка вылечить падение стэка
+    
+    int8_t power = 0;
+    esp_zb_get_tx_power(&power);
+    ESP_LOGI(TAG, "esp_zb_get_tx_power power = %d", power); // 20 макимальное стоит по умолчанию
+
+    //
     esp_zb_core_action_handler_register(esp_ncp_zb_action_handler); // NCP
     
     // временно отключаем регистрацию RAW команды
@@ -418,7 +432,9 @@ init_zb_event_manager_t;
 
 esp_err_t zb_manager_init()
 {
+    
     esp_err_t ret = nvs_flash_init();
+    //ESP_ERROR_CHECK(nvs_flash_erase());
     if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
         ESP_ERROR_CHECK(nvs_flash_erase());
         ret = nvs_flash_init();

@@ -9,6 +9,7 @@
 // === Заменяем pthread на FreeRTOS ===
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
+#include "ps_ram_utils.h"
 
 static const char* TAG = "ZBM_CORE_SYNC";
 static SemaphoreHandle_t g_zbm_core_mutex = NULL;
@@ -197,7 +198,7 @@ bool zbm_device_manager_add_endpoint_safe(zbm_dev_t* dev, uint8_t endpoint_id,
     ep->device_id = device_id;
 
     if (friendlyname) {
-        ep->friendlyname = strdup(friendlyname);
+        ep->friendlyname = psram_strdup(friendlyname);
         if (!ep->friendlyname) {
             free(ep);
             zbm_core_sync_unlock();
@@ -427,7 +428,7 @@ void zbm_device_apply_simple_descriptor_safe(zbm_dev_t* dev,
 
         char ep_name[32];
         snprintf(ep_name, sizeof(ep_name), "EP %d", endpoint_id);
-        ep->friendlyname = strdup(ep_name);
+        ep->friendlyname = psram_strdup(ep_name);
         if (!ep->friendlyname) {
             free(ep);
             ESP_LOGE("SD", "Failed to allocate endpoint name");
@@ -439,7 +440,7 @@ void zbm_device_apply_simple_descriptor_safe(zbm_dev_t* dev,
         zbm_dev_endpoint_t** new_array = realloc(dev->endpoints_array,
             (dev->endpoints_count + 1) * sizeof(zbm_dev_endpoint_t*));
         if (!new_array) {
-            free(ep->friendlyname);
+            heap_caps_free(ep->friendlyname);
             free(ep);
             ESP_LOGE("SD", "Failed to grow endpoints array");
             zbm_core_sync_unlock();

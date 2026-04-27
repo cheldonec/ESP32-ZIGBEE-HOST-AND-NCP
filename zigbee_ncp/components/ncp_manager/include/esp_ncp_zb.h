@@ -148,6 +148,7 @@ typedef struct {
 #define ZB_MANAGER_DISCOVERY_ATTR_CMD               0x5571
 #define ZB_MANAGER_DISCOVERY_ATTR_RESP              0x5572
 #define ZB_MANAGER_NOSTANDART_CLUSTER_CMD_REPORT    0x5573
+#define ZB_MANAGER_SEND_ZCL_CMD_TO_CLUSTER_REQ      0x5574
 
 #define ZB_MANAGER_DEV_ASSOCIATED_EVENT               0x7001
 #define ZB_MANAGER_DEV_UPDATE_EVENT                   0x7002
@@ -158,6 +159,7 @@ typedef struct {
 #define ZB_MANAGER_ON_OFF_ON_WITH_TIMED_OFF_CMD_REQ       0x7006
 
 #define ZB_MANAGER_BASIC_RESET_CMD_REQ                            0x7007
+#define ZB_MANAGER_SIGNAL_ZB_STACK_FAILURE_EVENT                  0x7008
 
 /**
  * @brief   Process the frame ID on the NCP and response it to the host.

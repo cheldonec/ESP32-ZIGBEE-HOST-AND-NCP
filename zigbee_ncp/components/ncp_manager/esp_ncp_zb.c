@@ -1990,6 +1990,10 @@ static esp_err_t zb_manager_simple_desc_req_fn(const uint8_t *input, uint16_t in
 
 static void esp_zb_zdo_active_ep_cb(esp_zb_zdp_status_t zdo_status, uint8_t ep_count, uint8_t *ep_id_list, void *user_ctx)
 {
+    if (zdo_status != ESP_ZB_ZDP_STATUS_SUCCESS) {
+        ESP_LOGI(TAG, "ZDO status: %d", zdo_status);
+        return;
+    }
     for (int i = 0; i < ep_count; i++) {
             ESP_LOGI(TAG, "Endpoint ID List: %d", ep_id_list[i]);
     }
@@ -2580,6 +2584,140 @@ static esp_err_t zb_manager_disc_attr_req_fn(const uint8_t *input, uint16_t inle
     return (*output) ? ESP_OK : ESP_ERR_NO_MEM;
 }
 
+static void zb_manager_send_zcl_cmd_to_cluster_req_zboss_callback(zb_uint8_t param)
+{
+    zb_bufid_t bufid = param;
+    /*zb_uint8_t *status = ZB_BUF_GET_PARAM(bufid, zb_uint8_t);
+
+    //ESP_LOGI(TAG, "zb_manager_send_zcl_cmd_to_cluster_req_zboss_callback, status=%d", status);
+
+    if (status == 0) {
+        ESP_LOGI(TAG, "✅ ZCL command successfully sent over the air");
+    } else {
+        ESP_LOGE(TAG, "❌ Failed to send ZCL command, status=%d", status);
+    }*/
+    ESP_LOGI(TAG, "zb_manager_send_zcl_cmd_to_cluster_req_zboss_callback free PARAMS");
+    zb_buf_free(bufid);  // освобождаем буфер
+}
+
+//temp
+
+//end temp
+static esp_err_t zb_manager_send_zcl_cmd_to_cluster_req_fn(const uint8_t *input,uint16_t inlen,uint8_t **output,uint16_t *outlen)
+{
+    ESP_LOGI(TAG, "zb_manager_send_zcl_cmd_to_cluster_req_fn");
+    // === 🔹 HEX-ЛОГ: сырые данные, полученные от хоста ===
+    ESP_LOGI(TAG, "Raw buffer received from host (length %u):", inlen);
+    ESP_LOG_BUFFER_HEX_LEVEL("NCP_RX", input, inlen, ESP_LOG_INFO);
+
+    typedef struct {
+        esp_zb_zcl_basic_cmd_t  zcl_basic_cmd;
+        uint8_t                 address_mode;
+        uint8_t                 flags;
+        uint16_t                manuf_code;
+        uint16_t                cluster_id;
+        uint8_t                 cmd_id;
+        uint8_t                 cmd_params_count;
+        uint16_t                cmd_params_size;
+    } __attribute__((packed)) zbm_zb_send_cluster_cmd_t;
+
+    uint8_t tsn = 0xFF;  // значение по умолчанию при ошибке
+    *outlen = sizeof(uint8_t);
+    *output = calloc(1, *outlen);
+    if (!*output) {
+        return ESP_ERR_NO_MEM;
+    }
+
+    // Проверка размера заголовка
+    if (inlen < sizeof(zbm_zb_send_cluster_cmd_t)) {
+        ESP_LOGE(TAG, "Buffer too small for zbm_zb_send_cluster_cmd_t");
+        memcpy(*output, &tsn, *outlen);
+        return ESP_FAIL;
+    }
+
+    const uint8_t *buf = input;
+    const zbm_zb_send_cluster_cmd_t *req = (const zbm_zb_send_cluster_cmd_t*)buf;
+    const uint8_t *tlv_ptr = buf + sizeof(zbm_zb_send_cluster_cmd_t);
+    const uint8_t *tlv_end = buf + inlen;
+
+    // Проверка соответствия объявленного и реального размера параметров
+    if (req->cmd_params_size != (tlv_end - tlv_ptr)) {
+        ESP_LOGE(TAG, "Parameter size mismatch: declared=%u, actual=%u",
+                 req->cmd_params_size, (unsigned)(tlv_end - tlv_ptr));
+        memcpy(*output, &tsn, *outlen);
+        return ESP_FAIL;
+    }
+
+    if (esp_zb_lock_acquire(500/portTICK_PERIOD_MS))
+    {
+        
+        // === Выделяем буфер ZBOSS ===
+        zb_bufid_t zboss_buf = zb_buf_get_out(); //ZB_ZCL_DISABLE_DEFAULT_RESPONSE
+        if (!zboss_buf) {
+            ESP_LOGE(TAG, "Failed to allocate ZBOSS buffer");
+            memcpy(*output, &tsn, *outlen);
+            return ESP_FAIL;
+        }
+        zb_uint8_t frame_controll = req->flags;
+        
+        zb_uint16_t manuf_code = req->manuf_code;
+        zb_uint8_t cmd_id = req->cmd_id;
+        //zb_uint8_t tsn = 0xff; //tsn = ZB_ZCL_GET_SEQ_NUM();
+        zb_uint8_t* ptr = zb_zcl_start_command_header(zboss_buf, frame_controll, manuf_code, cmd_id, &tsn);
+        if (req->cmd_params_count > 0)
+        {
+            const uint8_t *param_ptr = tlv_ptr;
+            while (param_ptr < tlv_end) {
+                if (param_ptr + 3 > tlv_end) {
+                    ESP_LOGE(TAG, "Malformed TLV: not enough data for header");
+                    zb_buf_free(zboss_buf);
+                    memcpy(*output, &tsn, *outlen);
+                    return ESP_FAIL;
+                }
+
+                uint8_t data_type = *param_ptr++;
+                uint16_t data_size = *(uint16_t*)param_ptr;
+                param_ptr += 2;
+
+                if (param_ptr + data_size > tlv_end) {
+                    ESP_LOGE(TAG, "TLV value out of bounds");
+                    zb_buf_free(zboss_buf);
+                    memcpy(*output, &tsn, *outlen);
+                    return ESP_FAIL;
+                }
+                ESP_LOG_BUFFER_HEX_LEVEL("NCP_RX", param_ptr, data_size, ESP_LOG_INFO);
+                // Копируем значение (тип игнорируем — уже проверено на хосте)
+                memcpy(ptr, param_ptr, data_size);
+                ptr += data_size;
+                param_ptr += data_size;
+            
+            }
+        }
+
+        zb_addr_u dst_addr;
+        dst_addr.addr_short = req->zcl_basic_cmd.dst_addr_u.addr_short;
+
+        //zb_uint8_t dst_address_mode = ZB_APS_ADDR_MODE_16_ENDP_PRESENT; 
+        zb_uint8_t dst_address_mode = req->address_mode;
+        zb_uint8_t dst_endpoint = req->zcl_basic_cmd.dst_endpoint;
+        zb_uint16_t profile = 0x0104;
+        zb_uint16_t cluster = req->cluster_id;
+        zb_uint8_t local_endpoint = 0x01;
+       
+        zb_zcl_finish_and_send_packet(zboss_buf, ptr, &dst_addr,  dst_address_mode, dst_endpoint, local_endpoint,
+            profile, cluster, zb_manager_send_zcl_cmd_to_cluster_req_zboss_callback);
+        
+        /*ZB_ZCL_ON_OFF_SEND_TOGGLE_REQ(zboss_buf, addr, ZB_APS_ADDR_MODE_16_ENDP_PRESENT, dst_endpoint, local_endpoint, ZB_AF_HA_PROFILE_ID, 
+            ZB_ZCL_DISABLE_DEFAULT_RESPONSE, zb_manager_send_zcl_cmd_to_cluster_req_zboss_callback)*/
+        
+            esp_zb_lock_release();
+    }
+    // === Успешно: возвращаем TSN ===
+    memcpy(*output, &tsn, *outlen);
+    ESP_LOGI(TAG, "Manual ZCL cmd 0x%02x sent (TSN=%d)", req->cmd_id, tsn);
+    return ESP_OK;
+}
+
 static const esp_ncp_zb_func_t ncp_zb_func_table[] = {
     {ESP_NCP_NETWORK_INIT, esp_ncp_zb_network_init_fn},
     {ESP_NCP_NETWORK_PAN_ID_SET, esp_ncp_zb_pan_id_set_fn},
@@ -2649,6 +2787,7 @@ static const esp_ncp_zb_func_t ncp_zb_func_table[] = {
     {ZB_MANAGER_NODE_DESC_REQ, zb_manager_node_desc_req_fn},
     {ZB_MANAGER_REPORT_CONFIG_CMD, zb_manager_report_config_req_fn},
     {ZB_MANAGER_DISCOVERY_ATTR_CMD, zb_manager_disc_attr_req_fn},
+    {ZB_MANAGER_SEND_ZCL_CMD_TO_CLUSTER_REQ, zb_manager_send_zcl_cmd_to_cluster_req_fn},
     /********************** ZB_MANAGER_CLUSTERS_CMD **********************/
     /* ON_OFF*/
     {ZB_MANAGER_ON_OFF_MAIN_CMD_REQ, zb_manager_on_of_main_cmd_req_fn},

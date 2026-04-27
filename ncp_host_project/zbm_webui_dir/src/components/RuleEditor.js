@@ -32,13 +32,12 @@ export default function RuleEditor({ ruleId, onDeviceRename }) {
     console.log('🔍 Current rule time_range:', allRules.find(r => r.id === ruleId)?.time_range);
   }, [ruleId, allRules]);
 
-  // === Основной эффект: создание/обновление ruleData ===
+  // === ОСНОВНОЙ ЭФФЕКТ: только при изменении ruleId или allRules ===
   useEffect(() => {
-    if (!allRules || !allDevices || !realVariables) return;
+    if (!allRules || !ruleId) return;
 
     const rule = allRules.find(r => r.id === ruleId);
 
-    // Если правило найдено — преобразуем его
     if (rule) {
       console.log('✅ [RuleEditor] Loading existing rule with time_range:', rule.time_range);
 
@@ -53,7 +52,7 @@ export default function RuleEditor({ ruleId, onDeviceRename }) {
               var: t.guid,
               guid: t.guid,
               cond: ['eq', 'ne', 'gt', 'lt', 'gte', 'lte'][t.cond] || 'eq',
-              value: typeof t.value !== 'undefined' ? String(t.value) : '',
+              value: typeof t.value === 'undefined' ? '' : String(t.value),
               dataType: realVariables.find(v => v.guid === t.guid)?.type ?? null
             }
           : path
@@ -66,7 +65,7 @@ export default function RuleEditor({ ruleId, onDeviceRename }) {
               cluster: path.cluster.id,
               attrOrRep: path.attr.guid,
               cond: ['eq', 'ne', 'gt', 'lt', 'gte', 'lte'][t.cond] || 'eq',
-              value: typeof t.value !== 'undefined' ? String(t.value) : '',
+              value: typeof t.value === 'undefined' ? '' : String(t.value),
               dataType: path.attr.type ?? null
             }
           : null;
@@ -90,7 +89,7 @@ export default function RuleEditor({ ruleId, onDeviceRename }) {
               guid: rule.cause_trigger.guid,
               var: rule.cause_trigger.guid,
               cond: ['eq', 'ne', 'gt', 'lt', 'gte', 'lte'][rule.cause_trigger.cond] || 'eq',
-              value: String(rule.cause_trigger.value || '')
+              value: typeof rule.cause_trigger.value === 'undefined' ? '' : String(rule.cause_trigger.value)
             }
           : causePath
           ? {
@@ -169,39 +168,70 @@ export default function RuleEditor({ ruleId, onDeviceRename }) {
               days: []
             }
       });
-
-      return;
+    } else {
+      console.log('🆕 [RuleEditor] Creating new rule template');
+      setRuleData({
+        id: ruleId,
+        name: 'Новое правило',
+        enabled: true,
+        priority: 0,
+        execMode: 'first',
+        logicOp: 'or',
+        cause: {
+          sourceType: 'attr_rep',
+          guid: '',
+          device: '',
+          ep: '',
+          cluster: '',
+          attrOrRep: '',
+          cond: 'eq',
+          value: '1'
+        },
+        allowingTriggers: [],
+        actions: [],
+        time_range: {
+          enabled: false,
+          from: '00:00',
+          to: '23:59',
+          days: []
+        }
+      });
     }
+  }, [ruleId, allRules]); // ⚠️ ВАЖНО: убрали allDevices и realVariables
 
-    // === Новое правило ===
-    console.log('🆕 [RuleEditor] Creating new rule template');
-    setRuleData({
-      id: ruleId,
-      name: 'Новое правило',
-      enabled: true,
-      priority: 0,
-      execMode: 'first',
-      logicOp: 'or',
-      cause: {
-        sourceType: 'attr_rep',
-        guid: '',
-        device: '',
-        ep: '',
-        cluster: '',
-        attrOrRep: '',
-        cond: 'eq',
-        value: '1'
-      },
-      allowingTriggers: [],
-      actions: [],
-      time_range: {
-        enabled: false,
-        from: '00:00',
-        to: '23:59',
-        days: []
+  // === ДОПОЛНИТЕЛЬНЫЙ ЭФФЕКТ: обновление dataType при изменении устройств или переменных ===
+  useEffect(() => {
+    if (!ruleData || !allDevices || !realVariables) return;
+
+    const updateDataType = (item) => {
+      if (!item.guid) return item;
+
+      let dataType = null;
+      if (item.guid.startsWith('var_')) {
+        const varIdx = parseInt(item.guid.replace('var_', ''), 10);
+        const variable = realVariables.find(v => v.idx === varIdx);
+        dataType = variable?.type ?? null;
+      } else {
+        const path = resolveGuidPath(item.guid, allDevices);
+        dataType = path?.attr?.type ?? null;
       }
-    });
-  }, [ruleId, allRules, allDevices, realVariables]); // ✅ Все зависимости
+
+      return { ...item, dataType };
+    };
+
+    setRuleData(prev => ({
+      ...prev,
+      cause: updateDataType(prev.cause),
+      allowingTriggers: prev.allowingTriggers.map(updateDataType),
+      actions: prev.actions.map(a => {
+        if (a.type === 'set_var') {
+          const variable = realVariables.find(v => v.guid === a.target);
+          return { ...a, dataType: variable?.type ?? null };
+        }
+        return a;
+      })
+    }));
+  }, [ruleData, allDevices, realVariables]);
 
   if (!ruleData) {
     return <div>Загрузка правила...</div>;
@@ -214,7 +244,8 @@ export default function RuleEditor({ ruleId, onDeviceRename }) {
       return;
     }
 
-    if (!ruleData.cause.value || isNaN(Number(ruleData.cause.value))) {
+    const causeValue = ruleData.cause.value;
+    if (causeValue === '' || isNaN(Number(causeValue))) {
       alert('❌ Укажите корректное значение для условия');
       return;
     }
@@ -232,7 +263,8 @@ export default function RuleEditor({ ruleId, onDeviceRename }) {
           alert(`❌ В действии ${i + 1}: не выбрана переменная`);
           return;
         }
-        if (!a.value || (isNaN(Number(a.value)) && typeof a.value !== 'string')) {
+        const value = a.value;
+        if (value === '' || (isNaN(Number(value)) && typeof value !== 'string')) {
           alert(`❌ В действии ${i + 1}: укажите корректное значение`);
           return;
         }
@@ -318,7 +350,7 @@ export default function RuleEditor({ ruleId, onDeviceRename }) {
           body.actions.push({ type: 1, var_idx: fakeVar.idx, value: actionValue });
         } else {
           let actionValue = 0;
-          const valStr = a.value || '0';
+          const valStr = typeof a.value === 'undefined' ? '0' : String(a.value);
           switch (varData.type) {
             case 0x20: actionValue = Math.max(0, Math.min(255, parseInt(valStr, 10))) || 0; break;
             case 0x28: actionValue = Math.max(-128, Math.min(127, parseInt(valStr, 10))) || 0; break;

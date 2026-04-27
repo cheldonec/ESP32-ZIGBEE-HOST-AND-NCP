@@ -141,6 +141,7 @@ typedef enum {
 #define ZB_MANAGER_ON_OFF_ON_WITH_TIMED_OFF_CMD_REQ       0x7006
 
 #define ZB_MANAGER_BASIC_RESET_CMD_REQ                            0x7007
+#define ZB_MANAGER_SIGNAL_ZB_STACK_FAILURE_EVENT                  0x7008
 
 
 /**

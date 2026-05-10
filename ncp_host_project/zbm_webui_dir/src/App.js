@@ -26,6 +26,10 @@ function App() {
   const [isWsConnected, setIsWsConnected] = useState(false); // Флаг подключения WS
   const { addToast } = useNotification();
   const { isReady: isServerReady } = useServerStatus(); // ← ждём сервер
+  const { memory } = useServerStatus();
+  const usedRamPercent = memory ? memory.used_percent.toFixed(1) : '?';
+  const heapFreeKb = memory ? (memory.free / 1024).toFixed(0) : '?';
+  const fragPercent = memory ? memory.fragmentation_percent.toFixed(1) : '?';
   // Инициализация WebSocket и подписка на события
   useEffect(() => {
     // Подписываемся на системные уведомления
@@ -248,9 +252,9 @@ function App() {
       </div>
 
       <footer className="footer">
-        <span>🧠 RAM: 48%</span>
-        <span>💾 Heap: 28 KB</span>
-        <span>🗜️ Frag: 14%</span>
+        <span>🧠 RAM: {usedRamPercent}%</span>
+        <span>💾 Heap: {heapFreeKb} KB</span>
+        <span>🗜️ Frag: {fragPercent}%</span>
       </footer>
     </div>
   );

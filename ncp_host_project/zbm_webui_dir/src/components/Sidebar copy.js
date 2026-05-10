@@ -1,8 +1,6 @@
 // src/components/Sidebar.js
 import { useState } from 'react';
-import { useDevices } from '../hooks/useDevices';
-import DeviceSidebar from './DeviceSidebar';
-
+//import DeviceSidebar from './DeviceSidebar';
 import RulesSidebar from './RulesSidebar';
 
 const SETTINGS_ITEMS = [
@@ -11,18 +9,17 @@ const SETTINGS_ITEMS = [
   { id: 'variables', label: 'Переменные', icon: '🔢' },
 ];
 
-export default function Sidebar({ currentTab, selectedItem, onSelectItem }) {
+export default function Sidebar({ currentTab, selectedItem, onSelectItem, devices }) {
   const [editingIEEE, setEditingIEEE] = useState(null);
-  const { devices } = useDevices();
 
   // Краткий список для UI
-  const briefDevices = devices.map(dev => ({
+  const briefDevices = devices?.map(dev => ({
     ieee: dev.ieee_addr,
     short: parseInt(dev.short_addr.replace('0x', ''), 16),
     friendly_name: dev.name || dev.friendly_name,
     online: dev.is_online,
     linkquality: dev.lqi
-  }));
+  })) || [];
 
   const handleSelectDevice = (dev) => {
     onSelectItem('device', dev.ieee);
@@ -146,7 +143,6 @@ export default function Sidebar({ currentTab, selectedItem, onSelectItem }) {
         onSelect={onSelectItem}
         onAddRule={(newId) => {
           console.log('🆕 Создано новое правило:', newId);
-          // Здесь можно отправить запрос на сервер
         }}
       />
     );
@@ -175,7 +171,6 @@ export default function Sidebar({ currentTab, selectedItem, onSelectItem }) {
     );
   }
   
-  // По умолчанию — пусто
   return (
     <div className="device-list">
       <h2 className="sidebar-header">📋 {currentTab}</h2>

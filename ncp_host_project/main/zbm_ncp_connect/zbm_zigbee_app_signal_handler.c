@@ -204,6 +204,11 @@ bool zbm_zigbee_app_signal_handler(local_esp_zb_app_signal_t *signal_s)
                         ESP_LOGW(TAG, "ESP_ZB_ZDO_SIGNAL_DEVICE_UPDATE Error Sending Tuya Magic");
                     } 
 
+                    if (cmd_req.attr_field != NULL)
+                    {
+                        free(cmd_req.attr_field);
+                        cmd_req.attr_field = NULL;
+                    }
                     
                     if (old_short_addr != 0x0000)
                     {
@@ -240,6 +245,16 @@ bool zbm_zigbee_app_signal_handler(local_esp_zb_app_signal_t *signal_s)
                     if (dev_auth->authorization_type == 0x02)
                     {
                         ESP_LOGI(TAG, "ESP_ZB_ZDO_SIGNAL_DEVICE_AUTHORIZED with Authorization type for SE through CBKE 0x%4x", dev_auth->short_addr);
+                    }
+                    // здесь запускаем цепочку activeep->simpledesc->discoveryattr->readattr
+                    if(device_in_base)
+                    {
+                        esp_err_t ret = zbm_to_ncp_req_active_endpoint_req(dev_auth->short_addr, NULL, &device_in_base->short_addr);
+                        if (ret == ESP_OK) {
+                            ESP_LOGI(TAG, "✅ Active Endpoint Request sent");
+                        } else {
+                            ESP_LOGE(TAG, "❌ Failed to send Active Endpoint Request");
+                        }
                     }
                 }
             }

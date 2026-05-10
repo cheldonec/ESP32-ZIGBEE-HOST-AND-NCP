@@ -17,7 +17,7 @@
 #define HOST_TIMEOUT_MS       10
 #define HOST_EVENT_QUEUE_LEN  32
 */
-#define HOST_TASK_STACK               5120      // Было: 8192
+#define HOST_TASK_STACK               8192      // Было: 8192
 #define HOST_TASK_PRIORITY            16        // Было: 23 (слишком высокий)
 #define HOST_TIMEOUT_MS               50        // Было 10
 #define HOST_EVENT_QUEUE_LEN          64        // Было: 24

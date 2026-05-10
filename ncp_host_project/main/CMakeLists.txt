@@ -29,7 +29,12 @@ set(INC_DIR_var
 # =============================================================== #
 
 # Переменные окружения и пути
+# ДЛЯ REACT 
 set(WEB_STATIC_DIR ${CMAKE_SOURCE_DIR}/zbm_webui_dir/build)
+
+# ДЛЯ ALPINE 
+#set(WEB_STATIC_DIR ${CMAKE_SOURCE_DIR}/zbm_alpine_ui)
+
 set(QUIRKS_JSON_DIR ${CMAKE_SOURCE_DIR}/zbm_quirks_dir)
 set(CONF_JSON_DIR ${CMAKE_SOURCE_DIR}/zbm_conf_dir)
 set(CERTS_DIR ${CMAKE_SOURCE_DIR}/zbm_certs_dir)

@@ -1,5 +1,5 @@
 // src/utils/guidUtils.js
-import { fromZigbeeType } from './zigbeeTypes';
+//import { fromZigbeeType } from './zigbeeTypes';
 
 /**
  * Парсит GUID в структуру

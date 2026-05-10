@@ -13,7 +13,8 @@
 
 //функция создания атрибута
 zbm_cluster_attribute_t* create_attr(uint16_t id, const char* name, zbm_attr_data_types_t type, uint16_t size) {
-    zbm_cluster_attribute_t* attr = (zbm_cluster_attribute_t*)calloc(1, sizeof(zbm_cluster_attribute_t));
+    //zbm_cluster_attribute_t* attr = (zbm_cluster_attribute_t*)calloc(1, sizeof(zbm_cluster_attribute_t));
+    zbm_cluster_attribute_t* attr = heap_caps_malloc(sizeof(zbm_cluster_attribute_t), MALLOC_CAP_SPIRAM);
     if (!attr) return NULL;
 
     attr->id = id;
@@ -26,7 +27,7 @@ zbm_cluster_attribute_t* create_attr(uint16_t id, const char* name, zbm_attr_dat
     const char* friendly_name_str = name ? name : "unk_attr_name";
     attr->friendlyname = psram_strdup(friendly_name_str);
     if (!attr->friendlyname) {
-        free(attr);
+        heap_caps_free(attr);
         attr = NULL;
         return NULL;
     }
@@ -35,7 +36,7 @@ zbm_cluster_attribute_t* create_attr(uint16_t id, const char* name, zbm_attr_dat
     if (!attr->p_value) {
         heap_caps_free(attr->friendlyname);
         attr->friendlyname = NULL;
-        free(attr);
+        heap_caps_free(attr);
         attr = NULL;
         return NULL;
     }
@@ -49,16 +50,16 @@ bool zbm_free_cluster_attribute(zbm_cluster_attribute_t* attr)
     if (!attr) return false;
 
     if (attr->friendlyname) {
-        free(attr->friendlyname);
+        heap_caps_free(attr->friendlyname);
         attr->friendlyname = NULL;
     }
 
     if (attr->p_value) {
-        free(attr->p_value);
+        heap_caps_free(attr->p_value);
         attr->p_value = NULL;
     }
 
-    free(attr);
+    heap_caps_free(attr);
     return true;
 }
 /**

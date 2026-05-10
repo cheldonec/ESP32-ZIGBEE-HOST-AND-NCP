@@ -1035,9 +1035,9 @@ void start_webserver(void)
         BaseType_t ret = xTaskCreatePinnedToCore(
             ws_update_task,
             "ws_update_task",
-            4096,
+            8192,
             NULL,
-            2,
+            8,
             &ws_update_task_handle,
             1
         );

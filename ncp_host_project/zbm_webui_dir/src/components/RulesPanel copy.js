@@ -782,13 +782,14 @@ export default function RulesPanel({ ruleId }) {
                     </table>
                     </div>
                 )}
-
                 <button
+                    type="button"
                     onClick={() => removeAction(a.id)}
-                    className="text-red-400 hover:text-red-300 text-sm mt-2 md:mt-0 md:ml-2"
-                >
-                    ✕ Удалить
-                </button>
+                    aria-label="Удалить элемент"
+                    className="absolute top-2 right-2 w-6 h-6 bg-red-600 hover:bg-red-500 text-white rounded-full flex items-center justify-center text-sm font-bold transition-colors duration-200 shadow-md hover:shadow-lg focus:outline-none focus:ring-2 focus:ring-red-400"
+                  >
+                    ×
+                  </button>
                 </div>
             );
             })}

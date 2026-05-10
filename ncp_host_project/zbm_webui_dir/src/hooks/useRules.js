@@ -1,58 +1,149 @@
-// src/hooks/useRules.js
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
+import { api } from '../api/httpClient';
+import { subscribeToWebSocket } from '../api/websocket';
 
-export const useRules = () => {
-  const [rules, setRules] = useState([]);
-  const [loading, setLoading] = useState(true);
+// 🟩 Глобальный кэш правил и флаг
+let rulesCache = [];
+let hasLoaded = false;
+
+// 🔁 Универсальная функция с повторными попытками
+const fetchWithRetry = async (fetchFn, maxRetries = 2, delayMs = 300) => {
+  for (let i = 0; i <= maxRetries; i++) {
+    try {
+      return await fetchFn();
+    } catch (err) {
+      if (i === maxRetries) throw err;
+      console.warn(`🔁 Повтор запроса правила (попытка ${i + 1})`, err.message);
+      await new Promise(resolve => setTimeout(resolve, delayMs));
+    }
+  }
+};
+
+export const useRules = ({ enabled = true } = {}) => {
+  const [rules, setRules] = useState(rulesCache);
+  const [loading, setLoading] = useState(() => !hasLoaded);
   const [error, setError] = useState(null);
 
-  const reload = async () => {
+  const loadAllRules = useCallback(async () => {
+    if (hasLoaded) {
+      console.log('🟡 [useRules] Загрузка пропущена — уже загружены ранее');
+      return;
+    }
+
+    console.log('🔁 [useRules] Начало загрузки всех правил...');
     try {
-      const res = await fetch('/api/rules');
-      if (!res.ok) throw new Error('Failed to fetch rules list');
-      const briefList = await res.json();
+      setLoading(true);
+      setError(null);
 
-      const fullRulesPromises = briefList.map(async (brief) => {
+      const briefList = await api.getRulesList();
+      console.log('✅ [useRules] Получен краткий список:', briefList);
+
+      if (!briefList.length) {
+        console.log('ℹ️ [useRules] Нет правил — оставляем предыдущие');
+        return;
+      }
+
+      const validRules = [];
+
+      for (const brief of briefList) {
         try {
-          const detailRes = await fetch(`/api/rule/${brief.id}`);
-          if (!detailRes.ok) return null;
-          return await detailRes.json();
+          console.log(`📥 [useRules] Загружаю правило: ${brief.id}`);
+          const rule = await fetchWithRetry(() => api.getRuleById(brief.id));
+          console.log(`✅ [useRules] Успешно загружено правило: ${brief.id}`, rule);
+          validRules.push(rule);
         } catch (err) {
-          console.warn(`Failed to load rule ${brief.id}:`, err);
-          return null;
+          console.warn(`❌ Не удалось загрузить правило после повторов: ${brief.id}`, err);
         }
-      });
 
-      const fullRules = (await Promise.allSettled(fullRulesPromises))
-        .filter(p => p.status === 'fulfilled' && p.value !== null)
-        .map(p => p.value);
+        await new Promise(resolve => setTimeout(resolve, 200));
+      }
 
-      setRules(fullRules);
+      console.log('✅ [useRules] Все правила обработаны. Загружено:', validRules.length);
+
+      rulesCache = validRules;
+      setRules(validRules);
+      hasLoaded = true;
     } catch (err) {
-      console.error('💥 Failed to load rules:', err);
+      console.error('💥 [useRules] Критическая ошибка при загрузке правил:', err);
       setError(err.message);
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
   useEffect(() => {
-    // Первая загрузка
-    reload();
-    
-    // Подписка на внешние изменения (например, от useDevices через WebSocket)
-    const handleRulesChange = () => {
-      console.log('🔁 External event: rules changed — reloading...');
-      reload();
+    if (!enabled) return;
+    loadAllRules();
+  }, [loadAllRules, enabled]);
+
+  useEffect(() => {
+    const unsubscribe = subscribeToWebSocket((data) => {
+      setRules(prev => {
+        let nextRules = [...prev];
+
+        if (data.type === 'rule_update' || data.type === 'rule_create') {
+          const existsIndex = nextRules.findIndex(r => r.id === data.rule.id);
+          if (existsIndex > -1) {
+            nextRules[existsIndex] = data.rule;
+            console.log(`✏️ [WS] Обновлено правило: ${data.rule.id}`);
+          } else {
+            nextRules.push(data.rule);
+            console.log(`🆕 [WS] Добавлено новое правило: ${data.rule.id}`);
+          }
+        }
+
+        if (data.type === 'rule_delete') {
+          nextRules = nextRules.filter(r => r.id !== data.id);
+          console.log(`🗑️ [WS] Удалено правило: ${data.id}. Осталось: ${nextRules.length}`);
+        }
+
+        rulesCache = nextRules;
+        return nextRules;
+      });
+    });
+
+    return () => unsubscribe();
+  }, []);
+
+  useEffect(() => {
+    const handleRuleUpdated = (e) => {
+      const { action, rule: updatedRule } = e.detail;
+
+      setRules(prev => {
+        let nextRules = [...prev];
+
+        if (action === 'delete') {
+          nextRules = nextRules.filter(r => r.id !== updatedRule.id);
+        } else if (action === 'create' || action === 'update') {
+          const existsIndex = nextRules.findIndex(r => r.id === updatedRule.id);
+          if (existsIndex > -1) {
+            nextRules[existsIndex] = updatedRule;
+          } else {
+            nextRules.push(updatedRule);
+          }
+        }
+
+        rulesCache = nextRules;
+        return nextRules;
+      });
     };
 
-    window.addEventListener('rules_changed', handleRulesChange);
+    window.addEventListener('rule_updated', handleRuleUpdated);
+    return () => window.removeEventListener('rule_updated', handleRuleUpdated);
+  }, []);
 
-    // Очистка — убираем слушатель
-    return () => {
-      window.removeEventListener('rules_changed', handleRulesChange);
-    };
-  }, []); // ← пустой массив: запускается один раз при монтировании
+  const reload = useCallback(() => {
+    console.log('🔁 [useRules] Принудительная перезагрузка правил...');
+    hasLoaded = false;
+    rulesCache = [];
+    setRules([]);
+    setLoading(true);
+    loadAllRules();
+  }, [loadAllRules]);
+
+  useEffect(() => {
+    console.log('📊 [useRules] Хук обновлён → rules:', rules.length, 'loading:', loading);
+  }, [rules, loading]);
 
   return { rules, loading, error, reload };
 };

@@ -230,6 +230,14 @@ zbm_dev_t* zbm_find_device_in_devdb_by_short_safe(uint16_t short_addr) {
     zbm_core_sync_unlock();
     return dev;
 }
+zbm_dev_endpoint_t* zbm_find_endpoint_by_id_safe(zbm_dev_t* dev, uint8_t endpoint_id)
+{
+    zbm_dev_endpoint_t* ep = NULL;
+    zbm_core_sync_lock();
+        ep = zbm_find_endpoint_by_id(dev, endpoint_id);
+    zbm_core_sync_unlock();
+    return ep;
+}
 
 zbm_dev_t* zbm_find_device_in_devdb_by_ieee_safe(const uint8_t* ieee_addr) {
     zbm_core_sync_lock();

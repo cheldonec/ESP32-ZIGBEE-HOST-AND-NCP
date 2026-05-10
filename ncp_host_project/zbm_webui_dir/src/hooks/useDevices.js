@@ -1,15 +1,23 @@
 // src/hooks/useDevices.js
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
+
+import { api } from '../api/httpClient';
+import { subscribeToWebSocket } from '../api/websocket';
 import { fromZigbeeType } from '../utils/zigbeeTypes';
 
-export const useDevices = ({ onAttributeUpdate, onSystemNotify } = {}) => {
-  const [devices, setDevices] = useState([]);
-  const [loading, setLoading] = useState(true);
+// 🟩 Глобальный кэш и флаг
+let devicesCache = [];
+let hasLoadedDevices = false;
+
+export const useDevices = ({ onAttributeUpdate, onSystemNotify, enabled = true } = {}) => {
+  const [devices, setDevices] = useState(devicesCache);
+  const [loading, setLoading] = useState(() => !hasLoadedDevices);
   const [error, setError] = useState(null);
 
   const onAttributeUpdateRef = useRef();
   const onSystemNotifyRef = useRef();
+
   useEffect(() => {
     onAttributeUpdateRef.current = onAttributeUpdate;
   }, [onAttributeUpdate]);
@@ -23,119 +31,21 @@ export const useDevices = ({ onAttributeUpdate, onSystemNotify } = {}) => {
     devicesRef.current = devices;
   }, [devices]);
 
-  // --- 1. Загрузка устройств ---
-  const loadDevices = async () => {
-    try {
-      console.log('🔍 Начало загрузки устройств...');
-      const res = await fetch('/api/devices');
-      if (!res.ok) throw new Error('Failed to fetch device list');
-      const briefList = await res.json();
-      console.log('📋 Получен краткий список устройств:', briefList);
-
-      const fullDevicesPromises = briefList.map(async (dev) => {
-        const addrNum = typeof dev.short === 'string' ? parseInt(dev.short, 16) : dev.short;
-        const addrHex = addrNum.toString(16).toUpperCase().padStart(4, '0');
-        const detailRes = await fetch(`/api/device/by_short?addr=0x${addrHex}`);
-        if (!detailRes.ok) {
-          console.warn(`⚠️ Не удалось загрузить детали для устройства 0x${addrHex}`);
-          return null;
-        }
-        const fullDevice = await detailRes.json();
-        console.log(`✅ Загружено устройство: ${fullDevice.name || fullDevice.ieee_addr}`, fullDevice);
-        return fullDevice;
-      });
-
-      const fullDevices = await Promise.allSettled(fullDevicesPromises);
-      const validDevices = fullDevices
-        .filter(p => p.status === 'fulfilled' && p.value !== null)
-        .map(p => p.value);
-
-      console.log('🎉 Все устройства загружены:', validDevices);
-      setDevices(validDevices);
-    } catch (err) {
-      console.error('💥 Failed to load devices:', err);
-      setError(err.message);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  // --- 2. WebSocket ---
-  useEffect(() => {
-    let ws = null;
-    let isReconnecting = false;
-
-    const connectWebSocket = () => {
-      if (isReconnecting) return;
-      isReconnecting = true;
-
-      console.log('🚀 Подключение WebSocket...');
-      ws = new WebSocket(`ws://${window.location.host}/ws`);
-
-      ws.onopen = () => {
-        console.log('✅ WebSocket соединение установлено');
-        isReconnecting = false;
-        window.ws = ws;
-      };
-
-      ws.onmessage = (e) => {
-        try {
-          const data = JSON.parse(e.data);
-          console.log('📩 Получено сообщение через WebSocket:', data); // ← ключевой вывод
-
-          if (data.event === 'attribute_updated') {
-            console.log('⚡ АТРИБУТ ОБНОВЛЁН:', data); // ← очень важно!
-            updateDeviceAttribute(data);
-          } else if (data.event === 'system_notify') {
-            console.log('🔔 СИСТЕМНОЕ УВЕДОМЛЕНИЕ:', data);
-            handleSystemNotify(data);
-          } else {
-            console.log('❓ Неизвестное событие:', data.event);
-          }
-        } catch (err) {
-          console.error('❌ Ошибка парсинга WebSocket:', e.data, err);
-        }
-      };
-
-      ws.onerror = (err) => {
-        console.error('⚠️ Ошибка WebSocket:', err);
-      };
-
-      ws.onclose = () => {
-        console.log('🔁 WebSocket закрыт, переподключение через 3 сек...');
-        window.ws = null;
-        setTimeout(connectWebSocket, 3000);
-      };
-    };
-
-    // Запуск
-    loadDevices();        // Загрузка один раз
-    connectWebSocket();   // Подключение WS
-
-    // Очистка
-    return () => {
-      if (ws) ws.close();
-    };
-  }, []); // ← один раз при монтировании
-
   // --- Обработчики ---
   const refreshDeviceByShort = async (shortAddr) => {
     try {
-      console.log(`🔄 Обновление устройства по short_addr: ${shortAddr}`);
-      const res = await fetch(`/api/device/by_short?addr=${shortAddr}`);
-      if (!res.ok) {
-        console.warn(`❌ Не удалось обновить устройство: ${shortAddr}`);
-        return;
-      }
-      const updatedDevice = await res.json();
-      console.log(`✅ Устройство обновлено:`, updatedDevice);
-      setDevices(prev => prev.map(d => d.short_addr === shortAddr ? updatedDevice : d));
+      const updatedDevice = await api.getDeviceByShort(shortAddr);
+      setDevices(prev => {
+        const updated = prev.map(d => d.short_addr === shortAddr ? updatedDevice : d);
+        devicesCache = updated; // обновляем кэш
+        return updated;
+      });
     } catch (err) {
-      console.error('💥 Ошибка при обновлении устройства:', err);
+      console.warn(`❌ Не удалось обновить устройство: ${shortAddr}`, err);
     }
   };
 
-  const updateDeviceAttribute = (update) => {
+  const updateDeviceAttribute = useCallback((update) => {
     const { guid, type, value_bytes } = update;
     if (!guid || !Array.isArray(value_bytes)) {
       console.warn('⚠️ Некорректные данные атрибута:', update);
@@ -176,7 +86,6 @@ export const useDevices = ({ onAttributeUpdate, onSystemNotify } = {}) => {
       return;
     }
 
-    // 🔍 Выводим подробности обновления атрибута
     console.group(`⚡ Обновление атрибута: ${foundDevice.name || foundDevice.ieee_addr}`);
     console.log('🔹 Устройство:', foundDevice.name || foundDevice.ieee_addr);
     console.log('🔹 Endpoint:', foundEp.id);
@@ -207,6 +116,7 @@ export const useDevices = ({ onAttributeUpdate, onSystemNotify } = {}) => {
           });
         });
       });
+      devicesCache = updated; // ⬅️ Обновляем кэш
       return updated;
     });
 
@@ -227,9 +137,9 @@ export const useDevices = ({ onAttributeUpdate, onSystemNotify } = {}) => {
         isCustomReport
       });
     }
-  };
+  }, []);
 
-  const handleSystemNotify = (data) => {
+  const handleSystemNotify = useCallback((data) => {
     const { type, message } = data;
     let emoji = 'ℹ️';
     if (type === 'zigbee_permit_join_started') emoji = '🔓';
@@ -240,12 +150,10 @@ export const useDevices = ({ onAttributeUpdate, onSystemNotify } = {}) => {
     console.groupEnd();
 
     if (type === 'var_updated') {
-      console.log('🔔 Передача события: variables_changed');
       window.dispatchEvent(new CustomEvent('variables_changed'));
     }
 
     if (type === 'rule_updated' || type === 'rule_deleted') {
-      console.log('🔔 Передача события: rules_changed');
       window.dispatchEvent(new CustomEvent('rules_changed'));
     }
 
@@ -267,14 +175,87 @@ export const useDevices = ({ onAttributeUpdate, onSystemNotify } = {}) => {
       const { ieee_addr, friendly_name } = data.data || {};
       if (ieee_addr) {
         console.log(`✏️ Переименование устройства: ${friendly_name} (${ieee_addr})`);
-        setDevices(prev => prev.map(d =>
-          d.ieee_addr === ieee_addr
-            ? { ...d, name: friendly_name, friendly_name }
-            : d
-        ));
+        setDevices(prev => {
+          const updated = prev.map(d =>
+            d.ieee_addr === ieee_addr
+              ? { ...d, name: friendly_name, friendly_name }
+              : d
+          );
+          devicesCache = updated; // ⬅️ Обновляем кэш
+          return updated;
+        });
       }
     }
-  };
+  }, []);
+
+  // Основной эффект: загрузка устройств
+  useEffect(() => {
+    if (!enabled) return;
+    if (hasLoadedDevices) {
+      console.log('🟡 [useDevices] Загрузка пропущена — устройства уже загружены');
+      return;
+    }
+
+    const fetchWithRetry = async (addr, maxRetries = 2, delayMs = 300) => {
+      for (let i = 0; i <= maxRetries; i++) {
+        try {
+          return await api.getDeviceByShort(addr);
+        } catch (err) {
+          if (i === maxRetries) throw err;
+          console.warn(`🔁 Повтор запроса к ${addr} (попытка ${i + 1})`);
+          await new Promise(resolve => setTimeout(resolve, delayMs));
+        }
+      }
+    };
+
+    const loadDevices = async () => {
+      try {
+        setLoading(true);
+        const briefList = await api.getDevices();
+
+        const fullDevices = [];
+
+        for (const dev of briefList) {
+          const addrNum = typeof dev.short === 'string' ? parseInt(dev.short, 16) : dev.short;
+          const addrHex = addrNum.toString(16).toUpperCase().padStart(4, '0');
+          const addr = `0x${addrHex}`;
+
+          try {
+            const fullDevice = await fetchWithRetry(addr);
+            console.log(`✅ Успешно загружено устройство:`, fullDevice.name || addr);
+            fullDevices.push(fullDevice);
+          } catch (err) {
+            console.warn(`❌ Не удалось загрузить устройство после повторов: ${addr}`, err);
+          }
+
+          await new Promise(resolve => setTimeout(resolve, 300));
+        }
+
+        setDevices(fullDevices);
+        devicesCache = fullDevices;
+        hasLoadedDevices = true;
+      } catch (err) {
+        setError(err.message);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    const handleWebSocketMessage = (data) => {
+      if (data.event === 'attribute_updated') {
+        updateDeviceAttribute(data);
+      } else if (data.event === 'system_notify') {
+        handleSystemNotify(data);
+      }
+    };
+
+    loadDevices();
+    const unsubscribe = subscribeToWebSocket(handleWebSocketMessage);
+
+    return () => {
+      unsubscribe();
+    };
+  }, [updateDeviceAttribute, handleSystemNotify, enabled]);
 
   return { devices, loading, error };
 };

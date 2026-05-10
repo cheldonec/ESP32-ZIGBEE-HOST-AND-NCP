@@ -1,6 +1,9 @@
 // src/components/DeviceDetails.js
-import { fromZigbeeType, ZigbeeTypes, ZigbeeTypeNames } from '../utils/zigbeeTypes';
+
 import { useState } from 'react';
+import { fromZigbeeType, ZigbeeTypeNames } from '../utils/zigbeeTypes';
+import { api } from '../api/httpClient';
+//import { subscribeToWebSocket, initWebSocket } from '../api/websocket';
 
 export default function DeviceDetails({ device }) {
   // ✅ Перенесены внутрь компонента
@@ -154,13 +157,7 @@ export default function DeviceDetails({ device }) {
               onClick={async () => {
                 const short = parseInt(device.short_addr.replace('0x', ''), 16);
                 try {
-                  const res = await fetch('/api/zdo/active_endpoint_req', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ short_addr: short })
-                  });
-
-                  const data = await res.json();
+                  const data = await api.activeEndpointRequest(short);
                   if (data.status === 'success') {
                     alert(`✅ Запрос отправлен: Active Endpoint для 0x${short.toString(16).toUpperCase()}`);
                   } else {
@@ -196,6 +193,16 @@ export default function DeviceDetails({ device }) {
                   e.stopPropagation();
                   const short = parseInt(device.short_addr.replace('0x', ''), 16);
                   try {
+                    const data = await api.simpleDescriptorRequest(short, ep.id);
+                    if (data.status === 'success') {
+                      alert(`✅ Запрос отправлен: Simple Descriptor для EP ${ep.id}, 0x${short.toString(16).toUpperCase()}`);
+                    } else {
+                      alert(`❌ Ошибка: ${data.message}`);
+                    }
+                  } catch (err) {
+                    alert(`Ошибка сети: ${err.message}`);
+                  }
+                  /*try {
                     const res = await fetch('/api/zdo/simple_desc', {
                       method: 'POST',
                       headers: { 'Content-Type': 'application/json' },
@@ -213,7 +220,7 @@ export default function DeviceDetails({ device }) {
                     }
                   } catch (err) {
                     alert(`Ошибка сети: ${err.message}`);
-                  }
+                  }*/
                 }}
                 title={`Запросить Simple Descriptor для EP ${ep.id}`}
               >

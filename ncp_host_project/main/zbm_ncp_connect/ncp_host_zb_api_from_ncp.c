@@ -1,4 +1,5 @@
 #include "ncp_host_zb_api_from_ncp.h"
+#include "ncp_host_zb_api_to_ncp.h"
 #include "ncp_host_zb_api.h"
 #include "zbm_zigbee_app_signal_handler.h"
 //#include "zbm_ncp_connect.h"
@@ -685,18 +686,22 @@ static esp_err_t zb_manager_active_ep_resp_fn(const uint8_t *input, uint16_t inl
     );
 
     if (result == 0xFF) {
-        ESP_LOGD(TAG, "Active EP response processing failed or no valid endpoints");
-        return ESP_OK;
+        ESP_LOGW(TAG, "Active EP response processing failed or no valid endpoints");
+        return ESP_FAIL;
     }
-
+   ESP_LOGW(TAG, "result: %d", result);
     // === Если были изменения — сохраняем и уведомляем ===
     // Даже если result == 0 (обновление), можно обновить last_seen_ms
     // Но чаще всего нас интересует создание новых эндпоинтов → result == 1
+   zbm_save_device_to_spiffs_safe(dev);
+    
 
     if (result == 1) {
         // Что-то новое добавилось → точно надо сохранить
         zbm_save_device_to_spiffs_safe(dev);
         cJSON *data = cJSON_CreateObject();
+        ESP_LOGI(TAG, "✅ Active EP response processing success and create ep -> next send simpledesc");
+        
         // Отправляем только short_addr
         if (dev->short_addr != 0xFFFE) {
             char short_str[16];
@@ -714,58 +719,105 @@ static esp_err_t zb_manager_active_ep_resp_fn(const uint8_t *input, uint16_t inl
         // Пока — только если создано
     }
 
+    // отправляем simple_desc
+        for (int i = 0; i < zdo_resp->ep_count; i++) {
+            uint8_t endpoint_id = ep_list[i];
+            esp_err_t ret = zbm_to_ncp_req_simple_desc_req(
+                dev->short_addr,
+                endpoint_id,
+                NULL,                           // user_cb
+                &dev->short_addr     // user_ctx
+            );
+
+            if (ret == ESP_OK) {
+                ESP_LOGI(TAG, "✅ Simple Descriptor Request sent to 0x%04X, EP=%d", dev->short_addr, endpoint_id);
+            } else {
+                ESP_LOGE(TAG, "❌ Failed to send Simple Descriptor Request");
+            }
+        }
+        // конец simple_desc продолжаем уведомления
+
     return ESP_OK;
 }
 
 static esp_err_t zb_manager_simple_desc_resp_fn(const uint8_t *input, uint16_t inlen)
 {
-    ESP_LOGW(TAG, "zb_manager_simple_desc_resp_fn");
+    ESP_LOGW(TAG, "zb_manager_simple_desc_resp_fn: received response, inlen=%d", inlen);
     typedef struct {
         local_esp_zb_zdp_status_t zdo_status;
         esp_zb_user_cb_t    find_usr;
         local_esp_zb_af_simple_desc_1_1_t simple_desc; 
     } ESP_ZNSP_ZB_PACKED_STRUCT zb_manager_simple_desc_resp_pack_t;
 
-    zb_manager_simple_desc_resp_pack_t *pkg  = (zb_manager_simple_desc_resp_pack_t *)input;
+    zb_manager_simple_desc_resp_pack_t *pkg = (zb_manager_simple_desc_resp_pack_t *)input;
+
     // 1. Вызываем callback (user_cb) с user_ctx
-    if (pkg ->find_usr.user_cb) {
-        local_esp_zb_zdo_simple_desc_callback_t zdo_simple_desc_callback = (local_esp_zb_zdo_simple_desc_callback_t)pkg ->find_usr.user_cb;
-        zdo_simple_desc_callback(pkg ->zdo_status, (local_esp_zb_af_simple_desc_1_1_t*)(&pkg ->simple_desc), (void *)pkg ->find_usr.user_ctx);
+    if (pkg->find_usr.user_cb) {
+        local_esp_zb_zdo_simple_desc_callback_t zdo_simple_desc_callback = (local_esp_zb_zdo_simple_desc_callback_t)pkg->find_usr.user_cb;
+        ESP_LOGD(TAG, "Invoking user callback for Simple Desc");
+        zdo_simple_desc_callback(pkg->zdo_status, (local_esp_zb_af_simple_desc_1_1_t*)(&pkg->simple_desc), (void *)pkg->find_usr.user_ctx);
     }
 
     // === Пропускаем ошибки ===
-    if (pkg->zdo_status != 0x00) {
+    if (pkg->zdo_status != ESP_ZB_ZDP_STATUS_SUCCESS) {
         ESP_LOGW(TAG, "ZDO Simple Desc failed: status=0x%02x", pkg->zdo_status);
         return ESP_OK;
     }
+    ESP_LOGI(TAG, "ZDO Simple Descriptor Response SUCCESS for device");
 
     // === Извлекаем short_addr из user_ctx ===
-    uint16_t* short_addr = (uint16_t*)pkg->find_usr.user_ctx;
-    if (short_addr == 0 || short_addr == 0xFFFF || short_addr == 0xFFFE) {
-        ESP_LOGW(TAG, "Invalid short_addr in user_ctx: 0x%04X", short_addr);
+    uint16_t* short_addr_ptr = (uint16_t*)pkg->find_usr.user_ctx;
+    if (!short_addr_ptr || *short_addr_ptr == 0xFFFF || *short_addr_ptr == 0xFFFE) {
+        ESP_LOGW(TAG, "Invalid or null short_addr in user_ctx: 0x%04X", short_addr_ptr ? *short_addr_ptr : 0);
         return ESP_OK;
     }
+    uint16_t short_addr = *short_addr_ptr;
+    ESP_LOGI(TAG, "Processing Simple Descriptor for short_addr=0x%04X", short_addr);
 
     // === Находим устройство ===
-    zbm_dev_t* dev = zbm_find_device_in_devdb_by_short_safe(*short_addr);
+    zbm_dev_t* dev = zbm_find_device_in_devdb_by_short_safe(short_addr);
     if (!dev) {
-        ESP_LOGW(TAG, "Device not found by short_addr=0x%04X", *short_addr);
+        ESP_LOGW(TAG, "Device not found by short_addr=0x%04X", short_addr);
         return ESP_OK;
     }
-
+    ESP_LOGI(TAG, "Found device: nwk_addr=0x%04X , endpoints_count=%d",
+             dev->short_addr, dev->endpoints_count);
+    
     // === Извлекаем данные из simple_desc ===
     local_esp_zb_af_simple_desc_1_1_t* desc = &pkg->simple_desc;
     uint8_t  endpoint_id     = desc->endpoint;
     uint16_t device_id       = desc->app_device_id;
+    uint8_t  profile_id      = desc->app_profile_id;
     uint8_t  in_count        = desc->app_input_cluster_count;
     uint8_t  out_count       = desc->app_output_cluster_count;
     uint16_t* input_clusters = desc->app_cluster_list;
     uint16_t* output_clusters = in_count > 0 ? &desc->app_cluster_list[in_count] : NULL;
-
-    // Если out_count == 0, то output_clusters может быть не определён
+    
+    zbm_dev_endpoint_t* ep = NULL;
+    ep = zbm_find_endpoint_by_id_safe(dev, desc->endpoint);
+    if (ep)
+    {
+        ep->device_id = device_id;
+    }
+    
     if (out_count == 0) {
         output_clusters = NULL;
     }
+
+    ESP_LOGI(TAG, "Simple Descriptor: ep=%d, profile_id=0x%04X, device_id=0x%04X, in_clusters=%d, out_clusters=%d",
+             endpoint_id, profile_id, device_id, in_count, out_count);
+
+    // === Логируем входящие кластеры ===
+    for (int i = 0; i < in_count; i++) {
+        ESP_LOGI(TAG, "  Input cluster[%d] = 0x%04X", i, input_clusters[i]);
+    }
+
+    /*if (out_count > 0) {
+    // === Логируем исходящие кластеры ===
+        for (int i = 0; i < out_count; i++) {
+            ESP_LOGI(TAG, "  Output cluster[%d] = 0x%04X", i, output_clusters[i]);
+        }
+    }*/
 
     // === Проверим: есть ли вообще кластеры? ===
     if (in_count == 0 && out_count == 0) {
@@ -774,7 +826,6 @@ static esp_err_t zb_manager_simple_desc_resp_fn(const uint8_t *input, uint16_t i
     }
 
     // === Применяем дескриптор ===
-    // Функция сама под мьютексом → можно вызывать напрямую
     zbm_device_apply_simple_descriptor_safe(
         dev,
         endpoint_id,
@@ -783,21 +834,147 @@ static esp_err_t zb_manager_simple_desc_resp_fn(const uint8_t *input, uint16_t i
         output_clusters, out_count
     );
 
-     // Даже если эндпоинт был, могли добавиться кластеры
     zbm_save_device_to_spiffs_safe(dev);
+    ESP_LOGI(TAG, "Applied and saved Simple Descriptor for dev=0x%04X, ep=%d", short_addr, endpoint_id);
 
+    // === Отправляем discovery_attr для входящих кластеров ===
+    if (in_count > 0 && input_clusters) {
+        for (int i = 0; i < in_count; i++) {
+            uint16_t cluster_id = input_clusters[i];
+            ESP_LOGI(TAG, "Sending DISCOVERY ATTR for cluster=0x%04X, ep=%d -> dst_short=0x%04X",
+                     cluster_id, endpoint_id, dev->short_addr);
+
+            esp_zb_zcl_disc_attr_cmd_t cmd_req = {0};
+            cmd_req.address_mode = ESP_ZB_APS_ADDR_MODE_16_ENDP_PRESENT;
+            cmd_req.cluster_id = cluster_id;
+            cmd_req.direction = 0; // To Server
+            cmd_req.dis_defalut_resp = 1;
+            cmd_req.max_attr_number = 30;
+            cmd_req.start_attr_id = 0;
+
+            // Заполняем адрес назначения
+            cmd_req.zcl_basic_cmd.dst_addr_u.addr_short = dev->short_addr;
+            cmd_req.zcl_basic_cmd.dst_endpoint = endpoint_id;
+            cmd_req.zcl_basic_cmd.src_endpoint = 1; 
+
+            // Логируем полную структуру запроса
+            ESP_LOGD(TAG, "DISC_ATTR_CMD: dst=0x%04X, ep=%d, src_ep=1, cluster=0x%04X, start_id=0, max=30",
+                     dev->short_addr, endpoint_id, cluster_id);
+
+            uint8_t tsn = zb_manager_disc_attr_cmd_req(&cmd_req);
+            if (tsn != 0xff) {
+                ESP_LOGI(TAG, "✅ DISCOVERY ATTR SEND: TSN=%d, cluster=0x%04X, ep=%d", tsn, cluster_id, endpoint_id);
+            } else {
+                ESP_LOGE(TAG, "❌ Failed to send DISCOVERY ATTR: cluster=0x%04X, ep=%d", cluster_id, endpoint_id);
+            }
+        }
+    } else {
+        ESP_LOGD(TAG, "No input clusters → skipping DISCOVERY ATTR");
+    }
+
+    // === Уведомление через WebSocket ===
     cJSON *data = cJSON_CreateObject();
     char short_str[16];
     snprintf(short_str, sizeof(short_str), "0x%04X", dev->short_addr);
     cJSON_AddStringToObject(data, "short_addr", short_str);
+    cJSON_AddNumberToObject(data, "endpoint", endpoint_id);
+    cJSON_AddNumberToObject(data, "input_clusters", in_count);
+    cJSON_AddNumberToObject(data, "output_clusters", out_count);
 
     zbm_ws_send_sys_notify("device_updated", "Device structure updated from Simple Descriptor", data);
     cJSON_Delete(data);
-    ESP_LOGI(TAG, "✅ Applied Simple Descriptor for dev=0x%04X, ep=%d, in=%d, out=%d",
+
+    ESP_LOGI(TAG, "✅ Completed processing Simple Descriptor for dev=0x%04X, ep=%d, in=%d, out=%d",
              short_addr, endpoint_id, in_count, out_count);
 
     return ESP_OK;
 }
+
+static esp_err_t zb_manager_disc_attr_resp_fn(const uint8_t *input, uint16_t inlen)
+{
+    ESP_LOGI(TAG, "Received ZB_MANAGER_DISCOVERY_ATTR_RESP, len=%u", inlen);
+
+    if (inlen < sizeof(esp_zb_zcl_cmd_info_t) + 1) {
+        ESP_LOGE(TAG, "Invalid length for discover attr response");
+        return ESP_ERR_INVALID_SIZE;
+    }
+
+    // Копируем RAW-данные, чтобы передать в worker
+    uint8_t *raw_copy = malloc(inlen);
+    if (!raw_copy) {
+        ESP_LOGE(TAG, "Failed to allocate raw_copy");
+        return ESP_ERR_NO_MEM;
+    }
+    memcpy(raw_copy, input, inlen);
+
+    // Проверим: устройство уже известно? Если да — шлём в action_worker, иначе в pairing?
+    esp_zb_zcl_cmd_info_t *info = (esp_zb_zcl_cmd_info_t *)raw_copy;
+    zbm_dev_t *dev_info = NULL;
+    dev_info = zbm_find_device_in_devdb_by_short_safe(info->src_address.u.short_addr);
+    if (!dev_info)
+    {
+        ESP_LOGW(TAG, "Device not found in devdb, skipping value update");
+        free(raw_copy);
+        raw_copy = NULL;
+        return ESP_FAIL;
+    }
+    if(info->status!=ESP_OK)
+    {
+        ESP_LOGE(TAG, "Error in discovery attr response: %d", info->status);
+        free(raw_copy);
+        raw_copy = NULL;
+        return ESP_FAIL;
+    }
+    uint16_t src_addr = info->src_address.u.short_addr;
+    uint8_t ep = info->dst_endpoint;
+    uint16_t cluster_id = info->cluster;
+
+    uint8_t attr_count = raw_copy[sizeof(esp_zb_zcl_cmd_info_t)];
+    const uint8_t *ptr = raw_copy + sizeof(esp_zb_zcl_cmd_info_t) + 1;
+
+    ESP_LOGI(TAG, "Discovery result: short=0x%04x, ep=%d, cluster=0x%04x, count=%d", src_addr, ep, cluster_id, attr_count);
+
+    uint16_t attributes[attr_count];
+    for (int i = 0; i < attr_count; i++) {
+        uint16_t attr_id = (ptr[1] << 8) | ptr[0];
+        zbm_attr_data_types_t attr_type = ptr[2];
+        ESP_LOGI(TAG, "  Attr[0x%04x] Type=0x%02x", attr_id, attr_type);
+        ptr += 3;
+        attributes[i] = attr_id;
+    }
+    
+    esp_zb_zcl_read_attr_cmd_t cmd_req;
+    cmd_req.address_mode = ESP_ZB_APS_ADDR_MODE_16_ENDP_PRESENT;
+    cmd_req.zcl_basic_cmd.src_endpoint = 1;
+    cmd_req.zcl_basic_cmd.dst_endpoint = 1;
+    cmd_req.zcl_basic_cmd.dst_addr_u.addr_short = dev_info->short_addr;
+    cmd_req.clusterID = cluster_id;
+    cmd_req.dis_defalut_resp = 1;
+    cmd_req.manuf_specific = 0;
+    cmd_req.manuf_code = 0x0000;
+    //uint16_t attributes[]={0x0004, 0x0000, 0x0001, 0x0005, 0x0007, 0xfffe};
+    cmd_req.attr_number = sizeof(attributes) / sizeof(attributes[0]);
+    cmd_req.attr_field = calloc(1,sizeof(attributes[0]) * cmd_req.attr_number);
+    memcpy(cmd_req.attr_field, attributes, sizeof(uint16_t) * cmd_req.attr_number);
+    //send cmd
+    uint8_t tsn = 0xff;
+    tsn = zbm_to_ncp_req_read_attributes(&cmd_req);
+    if (tsn != 0xff)
+    {
+        ESP_LOGI(TAG, "ZB_MANAGER_DISCOVERY_ATTR_RESP Send READ ATTR with TSN = %d", tsn );
+    }else
+    {
+        ESP_LOGW(TAG, "ZB_MANAGER_DISCOVERY_ATTR_RESP Error Sending TREAD ATTR");
+    }
+    if (cmd_req.attr_field != NULL)
+    {
+        free(cmd_req.attr_field);
+        cmd_req.attr_field = NULL;
+    }
+
+    return ESP_OK;
+}
+
 static esp_err_t zb_manager_signal_zb_stack_failure_event_fn(const uint8_t *input, uint16_t inlen)
 {
     ESP_LOGI(TAG, "ZB Stack Failure: RESTARTING Connection");
@@ -823,8 +1000,8 @@ const esp_host_zb_func_t host_zb_api_from_ncp_func_table[] = {
     {ZB_MANAGER_SIMPLE_DESC_RESP, zb_manager_simple_desc_resp_fn},
     /*{ZB_MANAGER_NODE_DESC_RSP, zb_manager_node_desc_resp_fn},
     {ZB_MANAGER_REPORT_CONFIG_RESP, zb_manager_report_config_resp_fn},
-    {ZB_MANAGER_CUSTOM_CLUSTER_REPORT , zb_manager_custom_cluster_rep_event_fn }, 
-    {ZB_MANAGER_DISCOVERY_ATTR_RESP, zb_manager_disc_attr_resp_fn},*/
+    {ZB_MANAGER_CUSTOM_CLUSTER_REPORT , zb_manager_custom_cluster_rep_event_fn },*/ 
+    {ZB_MANAGER_DISCOVERY_ATTR_RESP, zb_manager_disc_attr_resp_fn},
     {ZB_MANAGER_NOSTANDART_CLUSTER_CMD_REPORT, zb_manager_nostandart_cluster_cmd_resp_fn},
     {ZB_MANAGER_SIGNAL_ZB_STACK_FAILURE_EVENT, zb_manager_signal_zb_stack_failure_event_fn}
 };

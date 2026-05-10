@@ -172,7 +172,7 @@ void* create_cluster(uint16_t cluster_id, zbm_cluster_role_t role_mask, bool is_
     if (is_custom) {
         zbm_custom_cluster_t* cluster = calloc(1, sizeof(zbm_custom_cluster_t));
         if (!cluster) {
-            free(friendly_name);
+            heap_caps_free(friendly_name);
             return NULL;
         }
         cluster->id = cluster_id;

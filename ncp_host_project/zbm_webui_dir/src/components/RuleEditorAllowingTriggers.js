@@ -1,6 +1,6 @@
 // src/components/RuleEditorAllowingTriggers.js
 import { useState } from 'react';
-import { formatDataType } from './variables';
+import { formatDataType } from '../utils/variables';
 
 const conditionTypes = [
   { value: 'eq', label: 'равно' },
@@ -63,7 +63,7 @@ export default function RuleEditorAllowingTriggers({ devices, variables, trigger
 
             // Атрибут/репорт
             const device = devices.find(d => d.ieee_addr === trigger.device);
-            const ep = device?.endpoints.find(e => e.id === parseInt(trigger.ep));
+            //const ep = device?.endpoints.find(e => e.id === parseInt(trigger.ep));
             const cluster = getClusterOptions(device, trigger.ep).find(c => c.id === parseInt(trigger.cluster));
             const attrOrRep = !isVarMode && trigger.attrOrRep
               ? getAttrRepOptions(cluster)?.find(a => a.value === trigger.attrOrRep)
@@ -287,11 +287,14 @@ export default function RuleEditorAllowingTriggers({ devices, variables, trigger
                 </div>
 
                 {/* Кнопка удаления */}
+                
                 <button
+                  type="button"
                   onClick={() => onRemove(trigger.id)}
-                  className="absolute top-2 right-2 text-red-400 hover:text-red-300 text-lg"
+                  aria-label="Удалить элемент"
+                  className="delete-button"
                 >
-                  ✕
+                  ×
                 </button>
               </div>
             );

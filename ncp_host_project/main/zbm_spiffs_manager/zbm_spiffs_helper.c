@@ -199,7 +199,7 @@ cJSON* read_json_from_file(const char* path) {
     fseek(f, 0, SEEK_END);
     long size = ftell(f);
     ESP_LOGI(TAG, "📊 File size: %ld bytes", size);
-    if (size <= 0 || size > 8 * 1024) {
+    if (size <= 0 || size > 12 * 1024) {
         ESP_LOGE(TAG, "❌ Invalid size: %ld", size);
         fclose(f);
         return NULL;

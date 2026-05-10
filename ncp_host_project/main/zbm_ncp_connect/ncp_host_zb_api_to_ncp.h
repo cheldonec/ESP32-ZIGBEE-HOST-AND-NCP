@@ -41,6 +41,8 @@ esp_err_t zbm_to_ncp_req_simple_desc_req(uint16_t addr_of_interest, uint8_t endp
 
 
 // ===============================  ZCL ==========================================
+uint8_t zb_manager_disc_attr_cmd_req(esp_zb_zcl_disc_attr_cmd_t *cmd_req);
+
 //return the transaction sequence number
 uint8_t zbm_to_ncp_req_read_attributes(esp_zb_zcl_read_attr_cmd_t *cmd_req);
 

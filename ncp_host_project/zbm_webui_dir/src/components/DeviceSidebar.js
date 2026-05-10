@@ -13,19 +13,8 @@ export default function DeviceSidebar({ devices, selectedIEEE, onSelect }) {
 
   const handleSave = async (dev) => {
     try {
-      const res = await fetch('/api/device/update_friendly_name', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          ieee_addr: dev.ieee,
-          friendly_name: editValue.trim() || ''
-        })
-      });
-
-      const data = await res.json();
-      if (data.status !== 'success') {
-        alert(`Ошибка: ${data.message}`);
-      }
+      await api.updateFriendlyName(dev.ieee, editValue.trim() || '');
+      // ✅ Успешно
     } catch (err) {
       alert(`Сеть недоступна: ${err.message}`);
     } finally {

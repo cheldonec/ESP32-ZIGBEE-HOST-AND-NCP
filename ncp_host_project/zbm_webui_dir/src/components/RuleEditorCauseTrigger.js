@@ -1,7 +1,7 @@
 // src/components/RuleEditorCauseTrigger.js
 import { useEffect } from 'react';
-import { virtualVariables, getVariable, formatDataType } from './variables';
-
+//import { virtualVariables, getVariable, formatDataType } from './variables';
+import { formatDataType } from '../utils/variables';
 const conditionTypes = [
   { value: 'eq', label: 'равно' },
   { value: 'ne', label: 'не равно' },
@@ -43,14 +43,14 @@ export default function RuleEditorCauseTrigger({ devices, cause, onChange, varia
   const isVarMode = sourceType === 'variable';
 
   const selectedDevice = devices.find(d => d.ieee_addr === cause.device);
-  const selectedEp = selectedDevice?.endpoints.find(e => e.id === parseInt(cause.ep));
+  //const selectedEp = selectedDevice?.endpoints.find(e => e.id === parseInt(cause.ep));
   const selectedCluster = getClusterOptions(selectedDevice, cause.ep).find(c => c.id === parseInt(cause.cluster));
   const selectedAttrOrRep = getAttrRepOptions(selectedCluster).find(a => a.value === cause.attrOrRep);
 
   const selectedVar = isVarMode ? variables.find(v => v.guid === cause.var) : null;
 
   // === Сброс эндпоинта при смене устройства ===
-  useEffect(() => {
+  /*useEffect(() => {
     if (cause.device && !cause.ep) {
       // Можно оставить пустым, но если хочешь — выбрать первый EP
     }
@@ -62,7 +62,7 @@ export default function RuleEditorCauseTrigger({ devices, cause, onChange, varia
       // Можно выбрать первый кластер
     }
   }, [cause.ep]);
-
+*/
   const updateCause = (updates) => {
     onChange({ ...cause, ...updates });
   };
@@ -106,7 +106,7 @@ export default function RuleEditorCauseTrigger({ devices, cause, onChange, varia
 
         {/* Блок: Переменная */}
         {isVarMode && (
-          <div className="space-y-3 ml-4 border-l-2 border-gray-700 pl-4">
+          <div className="form-section-indent">
             <div className="form-row">
               <label className="form-label">Переменная</label>
               <select
@@ -253,8 +253,8 @@ export default function RuleEditorCauseTrigger({ devices, cause, onChange, varia
         )}
 
         {/* Условие и значение */}
-        <div className="flex flex-wrap gap-4 ml-4">
-          <div className="form-row flex-1 min-w-[150px]">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 ml-4">
+          <div className="form-row">
             <label className="form-label">Условие</label>
             <select
               value={cause.cond}
@@ -267,11 +267,11 @@ export default function RuleEditorCauseTrigger({ devices, cause, onChange, varia
             </select>
           </div>
 
-          <div className="form-row flex-1 min-w-[150px]">
+          <div className="form-row">
             <label className="form-label">Значение</label>
             <input
               type="text"
-              value={cause.value || ''}
+              value={cause.value !== undefined && cause.value !== null ? String(cause.value) : ''}
               onChange={(e) => updateCause({ value: e.target.value })}
               placeholder="1, true..."
               className="form-input"

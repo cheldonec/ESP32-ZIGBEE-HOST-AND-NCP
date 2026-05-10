@@ -1,5 +1,5 @@
 // src/components/NotificationProvider.js
-import { useState, useCallback, createContext } from 'react';
+import { useState, useCallback } from 'react';
 import Toast from './Toast';
 import { NotificationContext } from '../context/NotificationContext';
 

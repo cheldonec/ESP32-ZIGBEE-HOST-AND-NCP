@@ -1,8 +1,8 @@
-// src/components/Settings.js
 import { useState, useEffect, useMemo } from 'react';
-import { useVariables } from '../hooks/useVariables';
+import { useCoordinator } from '../hooks/useCoordinator';
+import { api } from '../api/httpClient';
 
-export default function Settings({ activeSection = 'network'}) {
+export default function Settings({ activeSection = 'network', reloadVariables }) {
   const [config, setConfig] = useState({
     pan_id: '',
     radio_channel: '',
@@ -26,6 +26,7 @@ export default function Settings({ activeSection = 'network'}) {
   const [showApPassword, setShowApPassword] = useState(false);
   const [showStaPassword, setShowStaPassword] = useState(false);
 
+  // Загрузка конфигурации координатора
   useEffect(() => {
     const loadConfig = async () => {
       try {
@@ -103,18 +104,9 @@ export default function Settings({ activeSection = 'network'}) {
       return;
     }
 
-    fetch('/api/post/coordinator', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    })
-      .then(res => res.json())
-      .then(data => {
-        if (data.success) {
-          setStatus('✅ Настройки сохранены');
-        } else {
-          setStatus('❌ Ошибка: ' + (data.message || 'неизвестная'));
-        }
+    api.updateCoordinator(payload)
+      .then(() => {
+        setStatus('✅ Настройки сохранены');
       })
       .catch(err => {
         setStatus('❌ Не удалось сохранить');
@@ -123,7 +115,7 @@ export default function Settings({ activeSection = 'network'}) {
       .finally(() => {
         setIsSaving(false);
       });
-  };
+    };
 
   const handleReboot = () => {
     if (window.confirm('Перезагрузить устройство?')) {
@@ -136,10 +128,10 @@ export default function Settings({ activeSection = 'network'}) {
       });
     }
   };
-  
+
   // === Переменные (внутри Settings.js) ===
   const VariablesSettings = () => {
-    const { variables, reload } = useVariables();
+    const { variables } = useCoordinator(); // ← берём из хука
     const [localVars, setLocalVars] = useState([]);
     const [savingIdx, setSavingIdx] = useState(null); // индекс переменной, которая сохраняется
 
@@ -152,14 +144,13 @@ export default function Settings({ activeSection = 'network'}) {
       { value: 0x44, label: 'long_char_string' },
     ];
 
-    // Инициализация
+    // Инициализация локального состояния
     useEffect(() => {
       if (variables.length > 0) {
         setLocalVars(prev => {
           const map = new Map(prev.map(v => [v.idx, v]));
           return variables.map(v => {
             const current = map.get(v.idx);
-            // Сохраняем изменения пользователя в имени и init_value
             return {
               ...v,
               name: current ? current.name : v.name,
@@ -210,19 +201,9 @@ export default function Settings({ activeSection = 'network'}) {
       };
 
       try {
-        const res = await fetch(`/api/post/var/${v.idx}`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload),
-        });
-
-        if (res.ok) {
-          //await reload(); // один раз
-          //setLocalVars(variables.map(v => ({ ...v }))); // синхронизируем
-          setStatus('✅ Переменная сохранена');
-        } else {
-          setStatus('❌ Ошибка при сохранении');
-        }
+        await api.updateVariable(v.idx, payload);
+        setStatus('✅ Переменная сохранена');
+        reloadVariables(); // ← принудительно обновляем список
       } catch (err) {
         console.error('Ошибка сохранения:', err);
         setStatus('❌ Не удалось сохранить');
@@ -306,7 +287,6 @@ export default function Settings({ activeSection = 'network'}) {
             </tbody>
           </table>
 
-          {/* Убрали общую кнопку */}
           <div className="mt-4 text-xs text-gray-500">
             Изменения сохраняются по одной переменной.
           </div>
@@ -315,7 +295,7 @@ export default function Settings({ activeSection = 'network'}) {
     );
   };
 
-  // ✅ Сохраняем элемент, чтобы не пересоздавать при каждом рендере
+  // Оптимизация: не пересоздаём компонент при каждом рендере
   const variablesSettingsElement = useMemo(() => <VariablesSettings />, []);
 
   const renderSection = () => {
@@ -325,7 +305,6 @@ export default function Settings({ activeSection = 'network'}) {
           <div className="panel-header">📶 Параметры сети</div>
           <div className="panel-body">
             <form onSubmit={handleSubmit} className="form-fields">
-              {/* ... остальные поля формы ... */}
               <div className="form-row">
                 <label className="form-label">Сервер</label>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flex: 1 }}>
@@ -513,7 +492,6 @@ export default function Settings({ activeSection = 'network'}) {
     }
 
     if (activeSection === 'variables') {
-      //return <VariablesSettings variables={variables} onSave={() => setStatus('✅ Переменные сохранены')} />;
       return variablesSettingsElement;
     }
 

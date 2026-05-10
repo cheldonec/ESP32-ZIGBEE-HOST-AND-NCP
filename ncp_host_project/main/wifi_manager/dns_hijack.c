@@ -117,7 +117,7 @@ void init_dns_hijack() {
         dns_task_handle = NULL;
     }
     ESP_LOGI(TAG, "Starting DNS hijack task...");
-    xTaskCreatePinnedToCore(dns_server_task, "dns_server_task", 2048, NULL, 5, &dns_task_handle, 1);
+    xTaskCreatePinnedToCore(dns_server_task, "dns_server_task", 4096, NULL, 5, &dns_task_handle, 1);
 }
 
 void deinit_dns_hijack() {

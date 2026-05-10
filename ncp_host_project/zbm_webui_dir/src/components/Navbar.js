@@ -2,6 +2,8 @@
 import { useState, useEffect } from 'react';
 import { useNotification } from '../context/NotificationContext';
 import { useNetworkStatus } from '../hooks/useNetworkStatus';
+import { api } from '../api/httpClient';
+//import { subscribeToWebSocket, initWebSocket } from '../api/websocket';
 
 const tabs = [
   { name: 'Устройства', path: '/', icon: '🔌' },
@@ -32,27 +34,12 @@ export default function Navbar() {
 
   const togglePermitJoin = async () => {
     try {
-      const newJoiningState = !isJoining;
-
-      console.log(`📡 Sending toggle_permit_join: ${newJoiningState ? 'OPEN' : 'CLOSE'}`);
-
-      const res = await fetch('/api/post/zbnetwork/open_close', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          cmd: 'toggle_permit_join',
-          duration: newJoiningState ? duration : 0
-        })
-      });
-
-      if (!res.ok) {
-        const text = await res.text();
-        throw new Error(`HTTP ${res.status}: ${text}`);
-      }
-
-      console.log('✅ Command sent successfully. Waiting for state update via WebSocket...');
+      // Если сеть закрыта (isJoining === false), то открываем на `duration` секунд
+      // Если открыта (isJoining === true), то закрываем (передаём 0)
+      const newDuration = isJoining ? 0 : duration;
+      await api.togglePermitJoin(newDuration);
+      console.log('✅ Команда toggle_permit_join отправлена:', newDuration ? `на ${newDuration} сек` : 'закрытие сети');
     } catch (err) {
-      console.error('❌ Error in togglePermitJoin:', err);
       addToast(`❌ Ошибка: ${err.message}`, 5000);
     }
   };

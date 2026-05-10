@@ -74,5 +74,8 @@ typedef struct local_esp_zb_af_simple_desc_1_1_t {
  */
 typedef void (*local_esp_zb_zdo_simple_desc_callback_t)(local_esp_zb_zdp_status_t zdo_status, local_esp_zb_af_simple_desc_1_1_t *simple_desc, void *user_ctx);
 
+/*****************************************************************************************************************************
+ * @brief Structure of discovery attributes request of ZCL command
+ */
 
 #endif

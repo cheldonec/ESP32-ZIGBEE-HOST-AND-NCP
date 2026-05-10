@@ -248,6 +248,7 @@ body {
 }
 
 .device-item {
+  position: relative;
   padding: 12px 16px;
   border-bottom: 1px solid #2c2c2c;
   cursor: pointer;
@@ -694,6 +695,23 @@ code {
   background: #b91c1c;
 }
 
+.btn-secondary {
+  background: transparent;
+  color: #9ca3af;
+  border: 1px solid #374151;
+  padding: 7px 15px;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.btn-secondary:hover {
+  background: #374151;
+  color: white;
+}
+
 .settings-footer {
   max-width: 600px;
   margin: 16px auto 0;
@@ -815,4 +833,186 @@ code {
 .btn-icon:disabled {
   opacity: 0.6;
   cursor: not-allowed;
+}
+
+.form-section-indent {
+  margin-left: 16px;
+  padding-left: 16px;
+  border-left: 2px solid #333;
+}
+
+.form-section-indent > .form-row {
+  margin-bottom: 12px;
+}
+
+.form-condition-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  margin-left: 16px;
+}
+
+.form-condition-row .form-row {
+  flex: 1;
+  min-width: 150px;
+}
+
+/* Универсальная кнопка удаления */
+.delete-button {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 24px;
+  height: 24px;
+  background-color: #dc2626; /* красный */
+  color: white;
+  border: none;
+  border-radius: 50%;
+  font-size: 14px;
+  font-weight: bold;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+}
+
+.delete-button:hover {
+  background-color: #b91c1c;
+  transform: scale(1.1);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
+}
+
+.delete-button:focus {
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(239, 68, 68, 0.5);
+}
+
+/* Кнопка "Добавить" (текстовая) */
+.add-button {
+  padding: 6px 12px;
+  background-color: #059669;
+  color: white;
+  border: none;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.add-button:hover {
+  background-color: #047857;
+  transform: translateY(-1px);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+/* Кнопка "Добавить" (иконка в сайдбаре) */
+.add-icon-button {
+  background: none;
+  border: none;
+  font-size: 18px;
+  color: #60a5fa;
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 4px;
+  transition: color 0.2s;
+}
+
+.add-icon-button:hover {
+  color: #3b82f6;
+  background-color: #2c2c2c;
+}
+
+.rule-action-item {
+  position: relative;
+  background: rgba(30, 30, 30, 0.7);
+  padding: 16px;
+  border: 1px solid #333;
+  border-radius: 8px;
+  margin-bottom: 12px;
+}
+
+.rule-action-header {
+  margin-bottom: 12px;
+  font-size: 14px;
+  color: #ddd;
+}
+
+.rule-action-remove {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  width: 24px;
+  height: 24px;
+  background-color: #dc2626;
+  color: white;
+  border: none;
+  border-radius: 50%;
+  font: bold 16px/1 sans-serif;
+  cursor: pointer;
+  z-index: 10;
+  transition: all 0.2s ease;
+}
+
+.rule-action-remove:hover {
+  background-color: #b91c1c;
+  transform: scale(1.1);
+}
+
+.form-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+  font-size: 13px;
+}
+
+.form-row label {
+  width: 100px;
+  color: #ccc;
+}
+
+.form-row select,
+.form-row input {
+  flex: 1;
+  padding: 6px 10px;
+  background: #242424;
+  border: 1px solid #444;
+  border-radius: 4px;
+  color: white;
+  font-size: 13px;
+}
+
+.btn-primary {
+  padding: 8px 16px;
+  background: #2563eb;
+  color: white;
+  border: none;
+  border-radius: 6px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.btn-primary:hover {
+  background: #4c54d2;
+}
+
+.btn-add-action {
+  padding: 6px 12px;
+  background: #059669;
+  color: white;
+  border: none;
+  border-radius: 6px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.btn-add-action:hover {
+  background: #047857;
 }

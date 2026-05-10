@@ -244,4 +244,19 @@ typedef struct zbm_send_zcl_cmd_to_cluster_cmd_s {
     zbm_cluster_standart_cmd_t *cmd_object;
 } zbm_send_zcl_cmd_to_cluster_cmd_t;
 
+
+typedef struct esp_zb_zcl_disc_attr_cmd_s {
+    esp_zb_zcl_basic_cmd_t zcl_basic_cmd;   /*!< Basic command info */
+    esp_zb_zcl_address_mode_t address_mode; /*!< APS addressing mode constants refer to esp_zb_zcl_address_mode_t */
+    uint16_t cluster_id;                    /*!< The cluster identifier for which the attribute is discovered. */
+    struct {
+        uint8_t manuf_specific   : 2;       /*!< Sent as manufacturer extension with code. */
+        uint8_t direction        : 1;       /*!< The command direction, refer to esp_zb_zcl_cmd_direction_t */
+        uint8_t dis_defalut_resp : 1;       /*!< Disable default response for this command. */
+    };
+    uint16_t manuf_code;                    /*!< The manufacturer code sent with the command. */
+    uint16_t start_attr_id;                 /*!< The attribute identifier at which to begin the attribute discover */
+    uint8_t max_attr_number;                /*!< The maximum number of attribute identifiers that are to be returned in the resulting Discover Attributes Response command*/
+} esp_zb_zcl_disc_attr_cmd_t;
+
 #endif

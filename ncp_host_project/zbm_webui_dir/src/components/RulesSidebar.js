@@ -1,43 +1,31 @@
 // src/components/RulesSidebar.js
 import { useRules } from '../hooks/useRules';
+import { api } from '../api/httpClient';
 
-export default function RulesSidebar({ selectedRuleId, onSelect, onAddRule }) {
-  const { rules, loading, reload } = useRules(); // добавили reload
+export default function RulesSidebar({ selectedRuleId, onSelect }) {
+  const { rules, loading } = useRules();
 
   const handleAdd = async () => {
     const newRuleTemplate = {
       name: 'Новое правило',
       enabled: true,
       priority: 0,
-      exec_mode: 0, // ZB_RULE_EXEC_FIRST
-      allowing_logic_op: 0, // OR
-      cause_trigger: {
-        guid: '',
-        cond: 0,
-        expected_type: 1,
-        value: 1
-      },
+      exec_mode: 0,
+      allowing_logic_op: 0,
+      cause_trigger: { guid: '', cond: 0, expected_type: 1, value: 1 },
       allowing_triggers: [],
       actions: []
     };
 
     try {
-      const res = await fetch('/api/rule', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(newRuleTemplate)
-      });
-
-      if (!res.ok) throw new Error('Save failed');
-
-      const result = await res.json();
+      const result = await api.createRule(newRuleTemplate);
       const newId = result.id;
 
-      // Перезагружаем список правил, чтобы обновить индекс
-      reload();
+      window.dispatchEvent(new CustomEvent('rule_updated', {
+        detail: { action: 'create', rule: { ...newRuleTemplate, id: newId } }
+      }));
 
-      // Переходим к редактированию
-      onSelect('rule', newId);
+      onSelect('rule', newId); // можно оставить как есть — ID нужен для выбора
     } catch (err) {
       alert('Ошибка создания правила');
       console.error(err);
@@ -47,8 +35,11 @@ export default function RulesSidebar({ selectedRuleId, onSelect, onAddRule }) {
   const handleDelete = async (id) => {
     if (!window.confirm('Удалить правило?')) return;
     try {
-      await fetch(`/api/rule/${id}`, { method: 'DELETE' });
-      reload(); // обновляем список
+      await api.deleteRule(id);
+
+      window.dispatchEvent(new CustomEvent('rule_updated', {
+        detail: { action: 'delete', id }
+      }));
     } catch (err) {
       alert('Ошибка удаления');
     }
@@ -57,9 +48,7 @@ export default function RulesSidebar({ selectedRuleId, onSelect, onAddRule }) {
   if (loading && rules.length === 0) {
     return (
       <div className="device-list">
-        <div className="sidebar-header">
-          <span>📋 Правила</span>
-        </div>
+        <div className="sidebar-header"><span>📋 Правила</span></div>
         <p className="text-center text-gray-500 mt-4">Загрузка...</p>
       </div>
     );
@@ -69,7 +58,7 @@ export default function RulesSidebar({ selectedRuleId, onSelect, onAddRule }) {
     <div className="device-list">
       <div className="sidebar-header flex justify-between items-center">
         <span>📋 Правила</span>
-        <button onClick={handleAdd} className="text-blue-400 hover:text-blue-300 text-sm">➕</button>
+        <button onClick={handleAdd} className="add-icon-button">➕</button>
       </div>
 
       <nav className="device-list-content">
@@ -78,7 +67,11 @@ export default function RulesSidebar({ selectedRuleId, onSelect, onAddRule }) {
         ) : (
           rules.map((rule) => (
             <div key={rule.id} className={`device-item ${selectedRuleId === rule.id ? 'selected' : ''}`}>
-              <div className="device-item-content" onClick={() => onSelect('rule', rule.id)}>
+              <div
+                className="device-item-content"
+                onClick={() => onSelect('rule', rule.id)}
+                title={`ID: ${rule.id}`}
+              >
                 <div className="device-text">
                   <div className="device-name">{rule.name}</div>
                   <div className="device-meta">{rule.enabled ? 'Включено' : 'Отключено'}</div>
@@ -87,14 +80,17 @@ export default function RulesSidebar({ selectedRuleId, onSelect, onAddRule }) {
                   {rule.enabled ? 'On' : 'Off'}
                 </span>
               </div>
+
               <button
+                type="button"
                 onClick={(e) => {
                   e.stopPropagation();
                   handleDelete(rule.id);
                 }}
-                className="text-red-400 hover:text-red-300 text-xs"
+                aria-label="Удалить правило"
+                className="rule-action-remove"
               >
-                ✕
+                ×
               </button>
             </div>
           ))

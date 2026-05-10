@@ -1,11 +1,10 @@
-// src/App.js
 import { useState, useEffect } from 'react';
 import './App.css';
 
 // Компоненты
 import Sidebar from './components/Sidebar';
-import Header from './components/Header';
-import Footer from './components/Footer';
+//import Header from './components/Header';
+//import Footer from './components/Footer';
 import DeviceDetails from './components/DeviceDetails';
 import Settings from './components/Settings';
 import NotificationProvider from './components/NotificationProvider';
@@ -14,44 +13,25 @@ import Navbar from './components/Navbar';
 import { useDevices } from './hooks/useDevices';
 import BehaviorsPanel from './components/BehaviorsPanel';
 import RuleEditor from './components/RuleEditor';
-import { useVariables } from './hooks/useVariables';
-
-// Хук для координатора
-const useCoordinator = () => {
-  const [coordinator, setCoordinator] = useState(null);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    const load = async () => {
-      try {
-        const res = await fetch('/api/get/coordinator');
-        if (res.ok) {
-          const data = await res.json();
-          setCoordinator(data);
-        }
-      } catch (err) {
-        console.error('Failed to load coordinator:', err);
-      } finally {
-        setLoading(false);
-      }
-    };
-    load();
-  }, []);
-
-  return { coordinator, loading };
-};
+import { useCoordinator } from './hooks/useCoordinator';
+import { api } from './api/httpClient';
+import { initWebSocket } from './api/websocket'; // <-- только инициализация
+import { useRules } from './hooks/useRules';
 
 function App() {
   const [currentPath, setCurrentPath] = useState(window.location.hash || '#/');
-  const [selectedItem, setSelectedItem] = useState(null); // { type: 'device', id: '...' }
-  const { coordinator } = useCoordinator();
+  const [selectedItem, setSelectedItem] = useState(null);
   const { addToast } = useNotification();
 
-  // 🔥 Запускаем загрузку устройств и переменных при старте
+  // 🔥 Инициализируем WebSocket как можно раньше
+  useEffect(() => {
+    initWebSocket();
+  }, []);
+
+  // 🔥 Запускаем загрузку устройств
   const { devices: fullDevices } = useDevices({
     onAttributeUpdate: ({ attribute, value, isCustomReport, short, ep, clusterId, attrId }) => {
       const { name } = attribute;
-
       const iconMap = {
         OnOff: value === '1' || value === 'true' ? '💡' : '⚫️',
         Voltage: '🔋',
@@ -85,7 +65,6 @@ function App() {
 
       addToast(message);
     },
-
     onSystemNotify: ({ type, message, emoji, data }) => {
       let userMessage = message;
       if (type === 'device_renamed') {
@@ -96,90 +75,71 @@ function App() {
       } else if (type === 'zigbee_permit_join_stopped') {
         userMessage = '🛑 Сеть Zigbee закрыта';
       }
-
       addToast(`${emoji} ${userMessage}`, 5000);
     }
   });
 
-  // ✅ ЕДИНСТВЕННОЕ место вызова useVariables — при старте приложения
-  const { variables } = useVariables();
+  // 🔧 Берём координатор и переменные из нового хука
+  const { coordinator, variables, reloadVariables } = useCoordinator();
 
-  // Для отладки — можно убрать
+  // 🔧 Загружаем правила и их перезагрузку
+  const { rules: allRules, loading: rulesLoading, reload: reloadRules } = useRules();
+
+  // Лог — теперь будет только после полной загрузки
   useEffect(() => {
-    console.log('✅ [App] Переменные загружены:', variables);
+    if (variables.length > 0) {
+      console.log('✅ [App] Переменные загружены:', variables);
+    }
   }, [variables]);
 
-  // ✅ selectedDevice
-  const selectedDevice = fullDevices.find(d => d.ieee_addr === selectedItem?.id) || null;
-
-  // 🔄 Хеш
+  // Хеш
   useEffect(() => {
     const onHashChange = () => setCurrentPath(window.location.hash || '#/');
     window.addEventListener('hashchange', onHashChange);
     return () => window.removeEventListener('hashchange', onHashChange);
   }, []);
 
-  // serverhealth
-  // ✅ Функция: запуск health-check
-  const startHealthCheck = () => {
-    console.log('✅ [App] WebSocket подключён → запускаем проверку состояния сервера');
-
-    const checkServer = async () => {
-      try {
-        const res = await fetch('/api/get_server_status?t=' + Date.now(), {
-          method: 'GET',
-          cache: 'no-cache'
-        });
-
-        if (!res.ok) return;
-
-        const data = await res.json();
-        const currentToken = data.session_token;
-
-        if (!currentToken) {
-          console.debug('[Health] Нет session_token в ответе');
-          return;
-        }
-
-        const savedToken = localStorage.getItem('server_session_token');
-
-        // Первый запуск: сохраняем токен
-        if (!savedToken) {
-          console.log('✅ [Health] Первый визит. Сохраняем токен:', currentToken);
-          localStorage.setItem('server_session_token', currentToken);
-          return;
-        }
-
-        // Если токен изменился — сервер перезагрузился
-        if (savedToken !== currentToken) {
-          console.log('🔄 Сервер перезагрузился. Старый:', savedToken, 'Новый:', currentToken);
-          localStorage.setItem('server_session_token', currentToken);
-          console.log('🔁 Перезагружаем UI...');
-          window.location.reload();
-        }
-      } catch (err) {
-        console.debug('[Health] Ошибка запроса:', err.message);
-      }
-    };
-
-    // Проверяем сразу и каждые 10 секунд
-    checkServer();
-    const interval = setInterval(checkServer, 10000);
-
-    // Возвращаем функцию очистки
-    return () => clearInterval(interval);
-  };
-
-  // ✅ ЗАПУСК health-check ТОЛЬКО ПОСЛЕ ПОДКЛЮЧЕНИЯ WebSocket
+  // ✅ Health-check: только после WebSocket
   useEffect(() => {
-    // Условие: WebSocket существует и открыт
-    if (window.ws && window.ws.readyState === WebSocket.OPEN) {
-      return startHealthCheck(); // ← запускаем
-    }
-  }, [fullDevices]); // ← срабатывает при появлении устройств (после WS)
-  //end serverhealth
+    if (window.ws?.readyState === WebSocket.OPEN) {
+      console.log('✅ [App] WebSocket подключён → запускаем health-check');
 
-  // 🛑 Если нет координатора
+      const checkServer = async () => {
+        try {
+          const data = await api.getServerStatus();
+          const currentToken = data.session_token;
+
+          if (!currentToken) {
+            console.debug('[Health] Нет session_token');
+            return;
+          }
+
+          const savedToken = localStorage.getItem('server_session_token');
+
+          if (!savedToken) {
+            console.log('✅ [Health] Сохраняем токен:', currentToken);
+            localStorage.setItem('server_session_token', currentToken);
+            return;
+          }
+
+          if (savedToken !== currentToken) {
+            console.log('🔄 Сервер перезагрузился. Перезагружаем UI...');
+            localStorage.setItem('server_session_token', currentToken);
+            window.location.reload();
+          }
+        } catch (err) {
+          console.debug('[Health] Ошибка:', err.message);
+        }
+      };
+
+      checkServer();
+      const interval = setInterval(checkServer, 10000);
+      return () => clearInterval(interval);
+    }
+  }, []);
+
+
+  // 🛑 Если нет координатора — показываем заглушку
   if (!coordinator) {
     return (
       <div className="app-container">
@@ -198,18 +158,14 @@ function App() {
     );
   }
 
-  
+  const selectedDevice = fullDevices.find(d => d.ieee_addr === selectedItem?.id) || null;
 
   return (
     <div className="app-container">
       <header className="header">
         <div className="left">
-          <div>
-            <span>🌀</span> <strong>Zigbee:</strong> PAN {coordinator.pan_id} | CH {coordinator.radio_channel}
-          </div>
-          <div>
-            <span>📶</span> <strong>AP:</strong> {coordinator.wifi_ap_ssid || 'N/A'}
-          </div>
+          <div><span>🌀</span> <strong>Zigbee:</strong> PAN {coordinator.pan_id} | CH {coordinator.radio_channel}</div>
+          <div><span>📶</span> <strong>AP:</strong> {coordinator.wifi_ap_ssid || 'N/A'}</div>
         </div>
         <div className="ieee">{coordinator.ieee_addr}</div>
       </header>
@@ -226,20 +182,25 @@ function App() {
 
         <div className="content-area">
           {currentPath === '#/settings' && selectedItem?.type === 'settings' && (
-            <Settings activeSection={selectedItem.id} />
+            <Settings activeSection={selectedItem.id} reloadVariables={reloadVariables} />
           )}
           {currentPath === '#/' && selectedItem?.type === 'device' && (
             <DeviceDetails key={selectedItem.id} device={selectedDevice} />
           )}
-
           {currentPath === '#/scenes' && selectedItem?.type === 'scene' && (
             <BehaviorsPanel sceneId={selectedItem.id} />
           )}
-
           {currentPath === '#/rules' && selectedItem?.type === 'rule' && (
-            <RuleEditor ruleId={selectedItem.id} />
+            // ✅ Показываем RuleEditor только после загрузки правил
+            rulesLoading ? (
+              <div className="p-8 text-center text-gray-400">
+                <div className="animate-spin inline-block w-6 h-6 border-t-2 border-b-2 border-blue-500 rounded-full mr-3"></div>
+                Загрузка правил...
+              </div>
+            ) : (
+              <RuleEditor ruleId={selectedItem.id} />
+            )
           )}
-
           {![ '/', '/settings', '/scenes', '/rules'].includes(currentPath.replace('#', '')) && (
             <div className="p-8 text-gray-500">
               <h2 className="text-xl font-semibold">🚧 Страница в разработке</h2>
@@ -258,11 +219,10 @@ function App() {
   );
 }
 
-// ✅ Убрали useServerHealth — он теперь внутри App
 export default function AppWithNotifications() {
   return (
     <NotificationProvider>
-    <App />
-  </NotificationProvider>
+      <App />
+    </NotificationProvider>
   );
 }

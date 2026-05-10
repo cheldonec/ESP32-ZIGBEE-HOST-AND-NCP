@@ -55,6 +55,7 @@ zbm_cluster_attribute_t** zbm_create_on_off_attr_array(zbm_cluster_role_t role_m
     }
 
     zbm_cluster_attribute_t** attr_array = calloc(5, sizeof(zbm_cluster_attribute_t*));
+    //zbm_cluster_attribute_t** attr_array = heap_caps_malloc(5*sizeof(zbm_cluster_attribute_t*), MALLOC_CAP_SPIRAM);
     if (!attr_array) return NULL;
 
     zbm_cluster_attribute_t* attrs[5] = {

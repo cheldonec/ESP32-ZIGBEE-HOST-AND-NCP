@@ -201,6 +201,95 @@ esp_err_t zbm_rest_api_post_rule_handler(httpd_req_t* req) {
 
     // === Теперь сохраняем на диск ===
     if (!zb_automation_v2_save_rule_to_storage(rule_id)) {
+        ESP_LOGE(TAG, "Failed to save rule %s to SPIFFS, but it's active in memory", rule_id);
+    }
+
+    cJSON_Delete(rule_json);
+
+    // Уведомление WebSocket
+    cJSON* notify_data = cJSON_CreateObject();
+    cJSON_AddStringToObject(notify_data, "id", rule_id);
+    cJSON_AddStringToObject(notify_data, "action", "rule_updated");
+    zbm_ws_send_sys_notify("rule_updated", "Rule saved", notify_data);
+    cJSON_Delete(notify_data);
+
+    // ✅ ПРАВИЛЬНЫЙ СПОСОБ: используем cJSON для формирования ответа
+    cJSON* response = cJSON_CreateObject();
+    cJSON_AddBoolToObject(response, "success", true);
+    cJSON_AddStringToObject(response, "id", rule_id);
+    char* response_str = cJSON_PrintUnformatted(response);
+    cJSON_Delete(response);
+
+    if (!response_str) {
+        httpd_resp_send_500(req);
+        return ESP_OK;
+    }
+
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    httpd_resp_send(req, response_str, strlen(response_str)); // ✅ Точная длина
+    free(response_str); // ✅ Не забываем освободить
+
+    return ESP_OK;
+}
+esp_err_t zbm_rest_api_post_rule_handler_old(httpd_req_t* req) {
+    ESP_LOGI(TAG, "REQ /api/rule (POST)");
+
+    if (req->content_len > 4096) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Request too large");
+        return ESP_OK;
+    }
+
+    char* body = calloc(1, req->content_len + 1);
+    if (!body) {
+        httpd_resp_send_500(req);
+        return ESP_OK;
+    }
+
+    int received = httpd_req_recv(req, body, req->content_len);
+    if (received <= 0) {
+        free(body);
+        httpd_resp_send_500(req);
+        return ESP_OK;
+    }
+    body[received] = '\0';
+
+    cJSON* rule_json = cJSON_Parse(body);
+    free(body);
+
+    if (!rule_json) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid JSON");
+        return ESP_OK;
+    }
+
+    // Генерация ID, если нет
+    cJSON* rule_id_obj = cJSON_GetObjectItem(rule_json, "id");
+    const char* rule_id = rule_id_obj ? rule_id_obj->valuestring : NULL;
+
+    char id[9];
+    if (!rule_id || strlen(rule_id) == 0) {
+        generate_rule_id(id, sizeof(id));
+        cJSON_AddStringToObject(rule_json, "id", id);
+        rule_id = id;
+        ESP_LOGI(TAG, "Generated new rule ID: %s", rule_id);
+    }
+
+    // Валидация имени
+    if (!cJSON_GetObjectItem(rule_json, "name")) {
+        cJSON_Delete(rule_json);
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Field 'name' is required");
+        return ESP_OK;
+    }
+
+    // === КЛЮЧЕВОЙ МОМЕНТ: обновляем in-memory движок ===
+    if (!zb_automation_v2_update_rule_from_json(rule_json)) {
+        cJSON_Delete(rule_json);
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to update rule in engine");
+        return ESP_OK;
+    }
+
+    // === Теперь сохраняем на диск ===
+    if (!zb_automation_v2_save_rule_to_storage(rule_id)) {
         // Но даже если не сохранилось — правило уже работает!
         ESP_LOGE(TAG, "Failed to save rule %s to SPIFFS, but it's active in memory", rule_id);
     }
@@ -288,10 +377,18 @@ esp_err_t zbm_rest_api_delete_rule_handler(httpd_req_t* req) {
     zbm_ws_send_sys_notify("rule_deleted", "Rule deleted", notify_data);
     cJSON_Delete(notify_data);
 
-    const char* response = "{\"success\": true}";
+    /*const char* response = "{\"success\": true}";
     httpd_resp_set_type(req, "application/json");
     httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
-    httpd_resp_send(req, response, HTTPD_RESP_USE_STRLEN);
+    httpd_resp_send(req, response, HTTPD_RESP_USE_STRLEN);*/
+    cJSON* del_response = cJSON_CreateObject();
+    cJSON_AddBoolToObject(del_response, "success", true);
+    char* del_str = cJSON_PrintUnformatted(del_response);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    httpd_resp_send(req, del_str, strlen(del_str));
+    free(del_str);
+    cJSON_Delete(del_response);
 
     return ESP_OK;
 }

@@ -1,6 +1,6 @@
 // src/components/Sidebar.js
 import { useState } from 'react';
-import DeviceSidebar from './DeviceSidebar';
+//import DeviceSidebar from './DeviceSidebar';
 import RulesSidebar from './RulesSidebar';
 
 const SETTINGS_ITEMS = [

@@ -4,50 +4,65 @@ import './App.css';
 
 // Компоненты
 import Sidebar from './components/Sidebar';
-import Header from './components/Header';
-import Footer from './components/Footer';
+import Navbar from './components/Navbar';
 import DeviceDetails from './components/DeviceDetails';
 import Settings from './components/Settings';
 import NotificationProvider from './components/NotificationProvider';
 import { useNotification } from './context/NotificationContext';
-import Navbar from './components/Navbar';
-import { useDevices } from './hooks/useDevices';
 import BehaviorsPanel from './components/BehaviorsPanel';
 import RuleEditor from './components/RuleEditor';
-import { useVariables } from './hooks/useVariables';
 
-// Хук для координатора
-const useCoordinator = () => {
-  const [coordinator, setCoordinator] = useState(null);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    const load = async () => {
-      try {
-        const res = await fetch('/api/get/coordinator');
-        if (res.ok) {
-          const data = await res.json();
-          setCoordinator(data);
-        }
-      } catch (err) {
-        console.error('Failed to load coordinator:', err);
-      } finally {
-        setLoading(false);
-      }
-    };
-    load();
-  }, []);
-
-  return { coordinator, loading };
-};
+// Хуки
+import { useDevices } from './hooks/useDevices';
+import { useCoordinator } from './hooks/useCoordinator';
+import { useRules } from './hooks/useRules';
+import { initWebSocket, subscribeToWebSocket, sendWebSocketMessage } from './api/websocket';
+import { api } from './api/httpClient';
+import { useServerStatus } from './hooks/useServerStatus';
 
 function App() {
   const [currentPath, setCurrentPath] = useState(window.location.hash || '#/');
   const [selectedItem, setSelectedItem] = useState(null);
-  const { coordinator } = useCoordinator();
+  const [isWsConnected, setIsWsConnected] = useState(false); // Флаг подключения WS
   const { addToast } = useNotification();
+  const { isReady: isServerReady } = useServerStatus(); // ← ждём сервер
+  // Инициализация WebSocket и подписка на события
+  useEffect(() => {
+    // Подписываемся на системные уведомления
+    const unsubscribe = subscribeToWebSocket((data) => {
+      if (data.event === 'system_notify') {
+        let emoji = 'ℹ️';
+        if (data.type === 'zigbee_permit_join_started') emoji = '🔓';
+        if (data.type === 'zigbee_permit_join_stopped') emoji = '🔒';
+        addToast(`${emoji} ${data.message}`, 5000);
+      }
 
-  // 🔥 Запускаем загрузку устройств
+      if (data.type === 'rule_updated' || data.type === 'rule_deleted') {
+        window.dispatchEvent(new CustomEvent('rules_changed'));
+      }
+      if (data.type === 'var_updated') {
+        window.dispatchEvent(new CustomEvent('variables_changed'));
+      }
+    });
+
+    // Слушаем событие успешного подключения
+    const onWebSocketOpen = () => {
+      console.log('🟢 WebSocket открыт → разрешаем загрузку');
+      setIsWsConnected(true);
+    };
+
+    window.addEventListener('websocket_open', onWebSocketOpen);
+
+    // Инициализируем WebSocket
+    initWebSocket();
+
+    return () => {
+      window.removeEventListener('websocket_open', onWebSocketOpen);
+      unsubscribe();
+    };
+  }, [addToast]);
+
+  // Загружаем данные только после подключения WebSocket
   const { devices: fullDevices } = useDevices({
     onAttributeUpdate: ({ attribute, value, isCustomReport, short, ep, clusterId, attrId }) => {
       const { name } = attribute;
@@ -84,81 +99,83 @@ function App() {
 
       addToast(message);
     },
-    onSystemNotify: ({ type, message, emoji, data }) => {
-      let userMessage = message;
-      if (type === 'device_renamed') {
-        const friendlyName = data.friendly_name || 'Без имени';
-        userMessage = `🔄 Устройство переименовано: ${friendlyName}`;
-      } else if (type === 'zigbee_permit_join_started') {
-        userMessage = '🌐 Сеть Zigbee открыта для новых устройств';
-      } else if (type === 'zigbee_permit_join_stopped') {
-        userMessage = '🛑 Сеть Zigbee закрыта';
-      }
-      addToast(`${emoji} ${userMessage}`, 5000);
-    }
+    enabled: isWsConnected
   });
 
-  // ✅ Переменные
-  const { variables } = useVariables();
+  const { coordinator, variables, reloadVariables } = useCoordinator({ enabled: isWsConnected });
+  const { rules: allRules, loading: rulesLoading, reload: reloadRules } = useRules({ enabled: isWsConnected });
 
-  // Лог при обновлении переменных
-  useEffect(() => {
-    console.log('✅ [App] Переменные загружены:', variables);
-  }, [variables]);
-
-  // Хеш
+  // Хеш-роутинг
   useEffect(() => {
     const onHashChange = () => setCurrentPath(window.location.hash || '#/');
     window.addEventListener('hashchange', onHashChange);
     return () => window.removeEventListener('hashchange', onHashChange);
   }, []);
 
-  // ✅ Health-check: только после WebSocket
+  // Health-check: проверка токена сессии
   useEffect(() => {
-    if (window.ws?.readyState === WebSocket.OPEN) {
-      console.log('✅ [App] WebSocket подключён → запускаем health-check');
+    if (!isWsConnected) return;
 
-      const checkServer = async () => {
-        try {
-          const res = await fetch('/api/get_server_status?t=' + Date.now(), {
-            method: 'GET',
-            cache: 'no-cache'
-          });
+    const checkServer = async () => {
+      try {
+        const data = await api.getServerStatus(); // ← лучше через httpClient
+        const currentToken = data.session_token;
+        const savedToken = localStorage.getItem('server_session_token');
 
-          if (!res.ok) return;
-          const data = await res.json();
-          const currentToken = data.session_token;
-
-          if (!currentToken) {
-            console.debug('[Health] Нет session_token');
-            return;
-          }
-
-          const savedToken = localStorage.getItem('server_session_token');
-
-          if (!savedToken) {
-            console.log('✅ [Health] Сохраняем токен:', currentToken);
-            localStorage.setItem('server_session_token', currentToken);
-            return;
-          }
-
-          if (savedToken !== currentToken) {
-            console.log('🔄 Сервер перезагрузился. Перезагружаем UI...');
-            localStorage.setItem('server_session_token', currentToken);
-            window.location.reload();
-          }
-        } catch (err) {
-          console.debug('[Health] Ошибка:', err.message);
+        if (!savedToken) {
+          // Первый запуск — просто сохраняем
+          localStorage.setItem('server_session_token', currentToken);
+        } else if (savedToken !== currentToken) {
+          // Только если токен изменился во время работы
+          console.log('🔄 Сервер перезагрузился. Перезагружаем UI...');
+          localStorage.setItem('server_session_token', currentToken);
+          window.location.reload();
         }
-      };
+      } catch (err) {
+        console.debug('[Health] Ошибка:', err.message);
+      }
+    };
 
-      checkServer();
-      const interval = setInterval(checkServer, 10000);
-      return () => clearInterval(interval);
-    }
-  }, [fullDevices]); // Зависит от появления устройств
+    checkServer();
+    const interval = setInterval(checkServer, 10000);
+    return () => clearInterval(interval);
+  }, [isWsConnected]);
 
-  // 🛑 Если нет координатора — показываем заглушку
+  // 🛑 Пока сервер не готов
+  if (!isServerReady) {
+    return (
+      <div className="app-container">
+        <header className="header">
+          <div className="left">🌀 Ожидание сервера...</div>
+        </header>
+        <div className="main-layout">
+          <div className="content-area text-center">
+            <p>Подключение к шлюзу...</p>
+            <p className="text-sm text-gray-500 mt-2">Пытаемся связаться с сервером</p>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // 🛑 Пока WebSocket не подключён
+  if (!isWsConnected) {
+    return (
+      <div className="app-container">
+        <header className="header">
+          <div className="left">🔄 Устанавливаем соединение...</div>
+        </header>
+        <div className="main-layout">
+          <div className="content-area text-center">
+            <p>Соединение с WebSocket...</p>
+            <p className="text-sm text-gray-500 mt-2">Ожидаем подключения к шине Zigbee</p>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // 🛑 Координатор не загружен
   if (!coordinator) {
     return (
       <div className="app-container">
@@ -167,10 +184,12 @@ function App() {
         </header>
         <div className="main-layout">
           <div className="device-list">
-            <p>Загрузка данных...</p>
+            <p>Данные не получены. Проверьте подключение.</p>
           </div>
           <div className="content-area">
-            <p>Ожидание подключения к шлюзу...</p>
+            <button onClick={() => window.location.reload()} className="btn-primary">
+              Перезагрузить
+            </button>
           </div>
         </div>
       </div>
@@ -201,7 +220,7 @@ function App() {
 
         <div className="content-area">
           {currentPath === '#/settings' && selectedItem?.type === 'settings' && (
-            <Settings activeSection={selectedItem.id} />
+            <Settings activeSection={selectedItem.id} reloadVariables={reloadVariables} />
           )}
           {currentPath === '#/' && selectedItem?.type === 'device' && (
             <DeviceDetails key={selectedItem.id} device={selectedDevice} />
@@ -210,7 +229,14 @@ function App() {
             <BehaviorsPanel sceneId={selectedItem.id} />
           )}
           {currentPath === '#/rules' && selectedItem?.type === 'rule' && (
-            <RuleEditor ruleId={selectedItem.id} />
+            rulesLoading ? (
+              <div className="p-8 text-center text-gray-400">
+                <div className="animate-spin inline-block w-6 h-6 border-t-2 border-b-2 border-blue-500 rounded-full mr-3"></div>
+                Загрузка правил...
+              </div>
+            ) : (
+              <RuleEditor ruleId={selectedItem.id} />
+            )
           )}
           {![ '/', '/settings', '/scenes', '/rules'].includes(currentPath.replace('#', '')) && (
             <div className="p-8 text-gray-500">

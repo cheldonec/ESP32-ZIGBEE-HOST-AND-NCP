@@ -279,6 +279,52 @@ uint8_t zbm_to_ncp_req_read_attributes(esp_zb_zcl_read_attr_cmd_t *cmd_req)
     return output;
 }
 
+uint8_t zb_manager_disc_attr_cmd_req(esp_zb_zcl_disc_attr_cmd_t *cmd_req)
+{
+    typedef struct {
+        esp_zb_zcl_basic_cmd_t zcl_basic_cmd;                   /*!< Basic command info */
+        uint8_t  address_mode;                                  /*!< APS addressing mode constants refer to esp_zb_zcl_address_mode_t */
+        uint16_t cluster_id;                                    /*!< The cluster identifier for which the attribute is discovered. */
+        uint8_t manuf_specific;                                 /*!< Sent as manufacturer extension with code. */
+        uint8_t direction;                                      /*!< The command direction, refer to esp_zb_zcl_cmd_direction_t (ESP_ZB_ZCL_CMD_DIRECTION_TO_SRV)*/
+        uint8_t dis_defalut_resp;                               /*!< Disable default response for this command. */
+        uint16_t manuf_code;                    /*!< The manufacturer code sent with the command. */
+        uint16_t start_attr_id;                 /*!< The attribute identifier at which to begin the attribute discover */
+        uint8_t max_attr_number;                /*!< The maximum number of attribute identifiers that are to be returned in the resulting Discover Attributes Response command*/
+    } ESP_ZNSP_ZB_PACKED_STRUCT zb_manager_disc_attr_cmd_req_t;
+
+    zb_manager_disc_attr_cmd_req_t data = {0};
+    data.address_mode = cmd_req->address_mode;
+    if (cmd_req->address_mode == ESP_ZB_APS_ADDR_MODE_64_ENDP_PRESENT) {
+        memcpy(&data.zcl_basic_cmd.dst_addr_u.addr_long, cmd_req->zcl_basic_cmd.dst_addr_u.addr_long, 8);
+    } else {
+        data.zcl_basic_cmd.dst_addr_u.addr_short = cmd_req->zcl_basic_cmd.dst_addr_u.addr_short;
+    }
+    data.zcl_basic_cmd.dst_endpoint = cmd_req->zcl_basic_cmd.dst_endpoint;
+    data.zcl_basic_cmd.src_endpoint = 1;
+
+    data.cluster_id = cmd_req->cluster_id;
+    data.manuf_specific = cmd_req->manuf_specific;
+    if (data.manuf_specific > 0) {data.manuf_code = cmd_req->manuf_code;} else data.manuf_code = 0x0000;
+    data.dis_defalut_resp = cmd_req->dis_defalut_resp;
+    data.direction = 0; // ESP_ZB_ZCL_CMD_DIRECTION_TO_SRV = 0
+    data.start_attr_id = cmd_req->start_attr_id;
+    data.max_attr_number = cmd_req->max_attr_number;
+    uint8_t output = 0;
+    uint16_t outlen = sizeof(uint8_t);
+    esp_err_t err = ESP_FAIL;
+    if (zigbee_ncp_module_state == WORKING)
+        {
+            err = esp_host_zb_output(ZB_MANAGER_DISCOVERY_ATTR_CMD, &data, sizeof(data), &output, &outlen);
+        }
+
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to send discovery_attr_cmd_req");
+        return 0xFF;
+    }
+    return output;
+}
+
 uint8_t zbm_to_ncp_req_send_zcl_cmd_to_cluster(zbm_send_zcl_cmd_to_cluster_cmd_t *cmd_req)
 {
     ESP_LOGI(TAG, "Try to Send Cluster CMD");
@@ -559,3 +605,4 @@ uint8_t zbm_to_ncp_req_send_zcl_cmd_from_ws_json(cJSON *req_json)
     ESP_LOGI(TAG, "ZCL cmd from JSON sent (TSN=%d) via GUID: %s", tsn, guid_obj->valuestring);
     return tsn;
 }
+

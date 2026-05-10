@@ -2,7 +2,7 @@
 import { useState, useEffect } from 'react';
 import { useDevices } from '../hooks/useDevices';
 import { useRules } from '../hooks/useRules';
-import { useVariables } from '../hooks/useVariables';
+import { useCoordinator } from '../hooks/useCoordinator';
 import {
   parseGuid,
   resolveGuidPath,
@@ -10,196 +10,172 @@ import {
   findDataTypeByGuid
 } from '../utils/guidUtils';
 
-import { formatDataType } from './variables';
-
 import RuleEditorBasics from './RuleEditorBasics';
 import RuleEditorCauseTrigger from './RuleEditorCauseTrigger';
 import RuleEditorAllowingTriggers from './RuleEditorAllowingTriggers';
 import RuleEditorActions from './RuleEditorActions';
 import RuleEditorTimeRange from './RuleEditorTimeRange';
 
+import { api } from '../api/httpClient';
+
 export default function RuleEditor({ ruleId, onDeviceRename }) {
   const { devices: allDevices } = useDevices({ onDeviceRename });
-  const { rules: allRules, reload: reloadRules } = useRules();
-  const { variables: realVariables } = useVariables();
+  const { rules: allRules, loading: rulesLoading } = useRules();
+  const { variables: realVariables } = useCoordinator();
 
   const [ruleData, setRuleData] = useState(null);
-  const getVariable = (guid) => realVariables.find(v => v.guid === guid) || null;
+  const [loading, setLoading] = useState(true);
 
-  // Логируем актуальное состояние
+  // === ОСНОВНОЙ ЭФФЕКТ: Загрузка правила по ID ===
   useEffect(() => {
-    console.log('🔄 [RuleEditor] Re-evaluating ruleData. ruleId:', ruleId);
-    console.log('🔍 Current rule time_range:', allRules.find(r => r.id === ruleId)?.time_range);
-  }, [ruleId, allRules]);
+    if (!ruleId || !allRules || !allDevices || !realVariables) return;
 
-  // === ОСНОВНОЙ ЭФФЕКТ: только при изменении ruleId или allRules ===
-  useEffect(() => {
-    if (!allRules || !ruleId) return;
-
+    // Ищем правило в уже загруженных
     const rule = allRules.find(r => r.id === ruleId);
 
-    if (rule) {
-      console.log('✅ [RuleEditor] Loading existing rule with time_range:', rule.time_range);
+    if (!rule) {
+      console.warn(`❌ Правило с ID ${ruleId} не найдено`);
+      setRuleData(null);
+      setLoading(false);
+      return;
+    }
 
-      const toTrigger = (t) => {
-        const path = t.guid ? resolveGuidPath(t.guid, allDevices) : null;
-        const isVar = t.guid?.startsWith('var_');
+    console.log('✅ [RuleEditor] Загружено правило:', rule.name);
 
-        return isVar
-          ? {
-              id: `t_${t.guid}`,
-              sourceType: 'variable',
-              var: t.guid,
-              guid: t.guid,
-              cond: ['eq', 'ne', 'gt', 'lt', 'gte', 'lte'][t.cond] || 'eq',
-              value: typeof t.value === 'undefined' ? '' : String(t.value),
-              dataType: realVariables.find(v => v.guid === t.guid)?.type ?? null
-            }
-          : path
-          ? {
-              id: `t_${t.guid}`,
-              sourceType: 'attr_rep',
-              guid: t.guid,
-              device: path.device.ieee_addr,
-              ep: path.ep.id,
-              cluster: path.cluster.id,
-              attrOrRep: path.attr.guid,
-              cond: ['eq', 'ne', 'gt', 'lt', 'gte', 'lte'][t.cond] || 'eq',
-              value: typeof t.value === 'undefined' ? '' : String(t.value),
-              dataType: path.attr.type ?? null
-            }
-          : null;
-      };
+    const toTrigger = (t) => {
+      const path = t.guid ? resolveGuidPath(t.guid, allDevices) : null;
+      const isVar = t.guid?.startsWith('var_');
 
-      const causePath = rule.cause_trigger?.guid
-        ? resolveGuidPath(rule.cause_trigger.guid, allDevices)
-        : null;
-      const causeIsVar = rule.cause_trigger?.guid?.startsWith('var_');
-
-      setRuleData({
-        id: rule.id,
-        name: rule.name,
-        enabled: rule.enabled,
-        priority: rule.priority,
-        execMode: rule.exec_mode === 1 ? 'all' : 'first',
-        logicOp: rule.allowing_logic_op === 1 ? 'and' : 'or',
-        cause: causeIsVar
-          ? {
-              sourceType: 'variable',
-              guid: rule.cause_trigger.guid,
-              var: rule.cause_trigger.guid,
-              cond: ['eq', 'ne', 'gt', 'lt', 'gte', 'lte'][rule.cause_trigger.cond] || 'eq',
-              value: typeof rule.cause_trigger.value === 'undefined' ? '' : String(rule.cause_trigger.value)
-            }
-          : causePath
-          ? {
-              sourceType: 'attr_rep',
-              guid: rule.cause_trigger.guid,
-              device: causePath.device.ieee_addr,
-              ep: causePath.ep.id,
-              cluster: causePath.cluster.id,
-              attrOrRep: causePath.attr.guid,
-              cond: ['eq', 'ne', 'gt', 'lt', 'gte', 'lte'][rule.cause_trigger.cond] || 'eq',
-              value: String(rule.cause_trigger.value || '')
-            }
-          : {
-              sourceType: 'attr_rep',
-              guid: '',
-              device: '',
-              ep: '',
-              cluster: '',
-              attrOrRep: '',
-              cond: 'eq',
-              value: '1'
-            },
-        allowingTriggers: (rule.allowing_triggers || []).map(toTrigger).filter(Boolean),
-        actions: (rule.actions || []).map((a, index) => {
-          if (a.type === 0) {
-            const cmdGuid = a.cmd_guid;
-            const cmdParsed = cmdGuid ? parseGuid(cmdGuid) : null;
-            const device = cmdParsed ? findDeviceByShort(allDevices, cmdParsed.short) : null;
-
-            return {
-              id: `a${index}`,
-              type: 'send_cmd_device',
-              device: device?.ieee_addr || '',
-              ep: cmdParsed?.epId || '',
-              cluster: cmdParsed?.clusterId || '',
-              cmd: cmdGuid,
-              params: a.params || {}
-            };
-          } else if (a.type === 1) {
-            const varIdx = a.var_idx;
-            const variable = realVariables.find(v => v.idx === varIdx);
-            const guid = variable ? variable.guid : `var_${varIdx}`;
-            const value = String(a.value);
-
-            return {
-              id: `a${index}`,
-              type: 'set_var',
-              target: guid,
-              value: value,
-              dataType: variable?.type ?? null,
-              varIdx: varIdx
-            };
+      return isVar
+        ? {
+            id: `t_${t.guid}`,
+            sourceType: 'variable',
+            var: t.guid,
+            guid: t.guid,
+            cond: ['eq', 'ne', 'gt', 'lt', 'gte', 'lte'][t.cond] || 'eq',
+            value: typeof t.value === 'undefined' ? '' : String(t.value),
+            dataType: realVariables.find(v => v.guid === t.guid)?.type ?? null
           }
+        : path
+        ? {
+            id: `t_${t.guid}`,
+            sourceType: 'attr_rep',
+            guid: t.guid,
+            device: path.device.ieee_addr,
+            ep: path.ep.id,
+            cluster: path.cluster.id,
+            attrOrRep: path.attr.guid,
+            cond: ['eq', 'ne', 'gt', 'lt', 'gte', 'lte'][t.cond] || 'eq',
+            value: typeof t.value === 'undefined' ? '' : String(t.value),
+            dataType: path.attr.type ?? null
+          }
+        : null;
+    };
+
+    const causePath = rule.cause_trigger?.guid
+      ? resolveGuidPath(rule.cause_trigger.guid, allDevices)
+      : null;
+    const causeIsVar = rule.cause_trigger?.guid?.startsWith('var_');
+
+    setRuleData({
+      id: rule.id,
+      name: rule.name,
+      enabled: rule.enabled,
+      priority: rule.priority,
+      execMode: rule.exec_mode === 1 ? 'all' : 'first',
+      logicOp: rule.allowing_logic_op === 1 ? 'and' : 'or',
+      cause: causeIsVar
+        ? {
+            sourceType: 'variable',
+            guid: rule.cause_trigger.guid,
+            var: rule.cause_trigger.guid,
+            cond: ['eq', 'ne', 'gt', 'lt', 'gte', 'lte'][rule.cause_trigger.cond] || 'eq',
+            value: typeof rule.cause_trigger.value === 'undefined' ? '' : String(rule.cause_trigger.value)
+          }
+        : causePath
+        ? {
+            sourceType: 'attr_rep',
+            guid: rule.cause_trigger.guid,
+            device: causePath.device.ieee_addr,
+            ep: causePath.ep.id,
+            cluster: causePath.cluster.id,
+            attrOrRep: causePath.attr.guid,
+            cond: ['eq', 'ne', 'gt', 'lt', 'gte', 'lte'][rule.cause_trigger.cond] || 'eq',
+            value: rule.cause_trigger.value !== undefined && rule.cause_trigger.value !== null
+              ? String(rule.cause_trigger.value)
+              : ''
+          }
+        : {
+            sourceType: 'attr_rep',
+            guid: '',
+            device: '',
+            ep: '',
+            cluster: '',
+            attrOrRep: '',
+            cond: 'eq',
+            value: '1'
+          },
+      allowingTriggers: (rule.allowing_triggers || []).map(toTrigger).filter(Boolean),
+      actions: (rule.actions || []).map((a, index) => {
+        if (a.type === 0) {
+          const cmdGuid = a.cmd_guid;
+          const cmdParsed = cmdGuid ? parseGuid(cmdGuid) : null;
+          const device = cmdParsed ? findDeviceByShort(allDevices, cmdParsed.short) : null;
 
           return {
             id: `a${index}`,
             type: 'send_cmd_device',
-            device: '',
-            ep: '',
-            cluster: '',
-            cmd: '',
-            params: {}
+            device: device?.ieee_addr || '',
+            ep: cmdParsed?.epId || '',
+            cluster: cmdParsed?.clusterId || '',
+            cmd: cmdGuid,
+            params: a.params || {}
           };
-        }),
-        time_range: rule.time_range
-          ? {
-              enabled: rule.time_range.enabled,
-              from: rule.time_range.from || '00:00',
-              to: rule.time_range.to || '23:59',
-              days: Array.isArray(rule.time_range.days) ? [...rule.time_range.days] : []
-            }
-          : {
-              enabled: false,
-              from: '00:00',
-              to: '23:59',
-              days: []
-            }
-      });
-    } else {
-      console.log('🆕 [RuleEditor] Creating new rule template');
-      setRuleData({
-        id: ruleId,
-        name: 'Новое правило',
-        enabled: true,
-        priority: 0,
-        execMode: 'first',
-        logicOp: 'or',
-        cause: {
-          sourceType: 'attr_rep',
-          guid: '',
+        } else if (a.type === 1) {
+          const varIdx = a.var_idx;
+          const variable = realVariables.find(v => v.idx === varIdx);
+          const guid = variable ? variable.guid : `var_${varIdx}`;
+          const value = String(a.value);
+
+          return {
+            id: `a${index}`,
+            type: 'set_var',
+            target: guid,
+            value: value,
+            dataType: variable?.type ?? null,
+            varIdx: varIdx
+          };
+        }
+
+        return {
+          id: `a${index}`,
+          type: 'send_cmd_device',
           device: '',
           ep: '',
           cluster: '',
-          attrOrRep: '',
-          cond: 'eq',
-          value: '1'
-        },
-        allowingTriggers: [],
-        actions: [],
-        time_range: {
-          enabled: false,
-          from: '00:00',
-          to: '23:59',
-          days: []
-        }
-      });
-    }
-  }, [ruleId, allRules]); // ⚠️ ВАЖНО: убрали allDevices и realVariables
+          cmd: '',
+          params: {}
+        };
+      }),
+      time_range: rule.time_range
+        ? {
+            enabled: rule.time_range.enabled,
+            from: rule.time_range.from || '00:00',
+            to: rule.time_range.to || '23:59',
+            days: Array.isArray(rule.time_range.days) ? [...rule.time_range.days] : []
+          }
+        : {
+            enabled: false,
+            from: '00:00',
+            to: '23:59',
+            days: []
+          }
+    });
 
-  // === ДОПОЛНИТЕЛЬНЫЙ ЭФФЕКТ: обновление dataType при изменении устройств или переменных ===
+    setLoading(false);
+  }, [ruleId, allRules, realVariables]);
+
+  // === Обновление dataType при изменении устройств или переменных ===
   useEffect(() => {
     if (!ruleData || !allDevices || !realVariables) return;
 
@@ -233,11 +209,31 @@ export default function RuleEditor({ ruleId, onDeviceRename }) {
     }));
   }, [ruleData, allDevices, realVariables]);
 
-  if (!ruleData) {
-    return <div>Загрузка правила...</div>;
+  // === Спиннер загрузки ===
+  if (loading || !ruleData) {
+    return (
+      <div className="flex justify-center items-center p-8">
+        <div className="animate-spin rounded-full h-6 w-6 border-t-2 border-b-2 border-blue-500"></div>
+        <span className="ml-3 text-gray-400">
+          {ruleId ? 'Загрузка правила...' : 'Загрузка...'}
+        </span>
+      </div>
+    );
   }
 
-  // === Сохранение ===
+  // === Если правило не найдено ===
+  if (!loading && !ruleData && ruleId) {
+    return (
+      <div className="p-6 text-center">
+        <h2 className="text-red-500">❌ Правило не найдено</h2>
+        <button onClick={() => window.history.back()} className="btn-secondary mt-4">
+          Назад к списку
+        </button>
+      </div>
+    );
+  }
+
+  // === Сохранение правила через api ===
   const saveRule = async () => {
     if (!ruleData.cause.guid || ruleData.cause.guid.trim() === '') {
       alert('❌ Не выбран побуждающий триггер (источник)');
@@ -245,7 +241,7 @@ export default function RuleEditor({ ruleId, onDeviceRename }) {
     }
 
     const causeValue = ruleData.cause.value;
-    if (causeValue === '' || isNaN(Number(causeValue))) {
+    if (causeValue === '' || isNaN(Number(causeValue)) || !isFinite(Number(causeValue))) {
       alert('❌ Укажите корректное значение для условия');
       return;
     }
@@ -330,31 +326,30 @@ export default function RuleEditor({ ruleId, onDeviceRename }) {
           params: a.params || {}
         });
       } else if (a.type === 'set_var') {
-        const varData = getVariable(a.target);
+        const varData = realVariables.find(v => v.guid === a.target);
         if (!varData) {
           const match = a.target.match(/^var_(\d+)$/);
           if (!match) continue;
           const idx = parseInt(match[1], 10);
           if (isNaN(idx) || idx < 0 || idx >= 32) continue;
 
-          const fakeVar = { idx, type: 0x20 };
           let actionValue = 0;
-          switch (fakeVar.type) {
+          switch (varData?.type || 0x20) {
             case 0x20: actionValue = Math.max(0, Math.min(255, parseInt(a.value, 10))) || 0; break;
             case 0x28: actionValue = Math.max(-128, Math.min(127, parseInt(a.value, 10))) || 0; break;
-            case 0x30: actionValue = Math.max(0, Math.min(65535, parseInt(a.value, 10))) || 0; break;
+            case 0x21: actionValue = Math.max(0, Math.min(65535, parseInt(a.value, 10))) || 0; break;
             case 0x42:
             case 0x43: actionValue = String(a.value); break;
             default: actionValue = 0; break;
           }
-          body.actions.push({ type: 1, var_idx: fakeVar.idx, value: actionValue });
+          body.actions.push({ type: 1, var_idx: idx, value: actionValue });
         } else {
           let actionValue = 0;
           const valStr = typeof a.value === 'undefined' ? '0' : String(a.value);
           switch (varData.type) {
             case 0x20: actionValue = Math.max(0, Math.min(255, parseInt(valStr, 10))) || 0; break;
             case 0x28: actionValue = Math.max(-128, Math.min(127, parseInt(valStr, 10))) || 0; break;
-            case 0x30: actionValue = Math.max(0, Math.min(65535, parseInt(valStr, 10))) || 0; break;
+            case 0x21: actionValue = Math.max(0, Math.min(65535, parseInt(valStr, 10))) || 0; break;
             case 0x42:
             case 0x43: actionValue = String(valStr); break;
             default: actionValue = 0; break;
@@ -365,23 +360,16 @@ export default function RuleEditor({ ruleId, onDeviceRename }) {
     }
 
     try {
-      const res = await fetch('/api/rule', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body)
-      });
+      await api.updateRule(ruleData.id, body);
+      alert('✅ Правило сохранено!');
+      // reloadRules(); — не нужен, т.к. мы обновляем через событие
 
-      if (res.ok) {
-        alert('✅ Правило сохранено!');
-        reloadRules();
-      } else {
-        const text = await res.text();
-        console.error('Ошибка сервера:', text);
-        alert('❌ Ошибка: ' + (res.status === 400 ? 'Некорректные данные' : 'Сервер вернул ошибку'));
-      }
+      window.dispatchEvent(new CustomEvent('rule_updated', {
+        detail: { rule: { ...body }, action: 'update' }
+      }));
     } catch (err) {
-      console.error('Сетевая ошибка:', err);
-      alert('❌ Ошибка сети: ' + err.message);
+      console.error('❌ Ошибка сохранения правила:', err);
+      alert('❌ Не удалось сохранить правило: ' + err.message);
     }
   };
 

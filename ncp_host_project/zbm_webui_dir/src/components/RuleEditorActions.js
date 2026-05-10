@@ -1,6 +1,6 @@
 // src/components/RuleEditorActions.js
 import { useEffect } from 'react';
-import { virtualVariables, getVariable, formatDataType } from './variables';
+import { formatDataType } from '../utils/variables';
 
 const actionTypes = [
   { value: 'send_cmd_device', label: 'Отправить команду устройству' },
@@ -19,13 +19,13 @@ function getCommandOptions(cluster) {
 }
 
 function getCommandById(device, epId, clusterId, cmdGuid) {
-  const ep = device?.endpoints.find(e => e.id === parseInt(epId));
+  //const ep = device?.endpoints.find(e => e.id === parseInt(epId));
   const cluster = getClusterOptions(device, epId).find(c => c.id === parseInt(clusterId));
   return cluster?.commands?.find(c => c.guid === cmdGuid) || null;
 }
 
 export default function RuleEditorActions({ devices, variables, actions, onChange, onParamChange, onRemove, onAdd }) {
-  // === Сброс ep при смене device ===
+  // Сброс ep при смене устройства
   useEffect(() => {
     actions.forEach(action => {
       if (action.type !== 'send_cmd_device') return;
@@ -41,18 +41,18 @@ export default function RuleEditorActions({ devices, variables, actions, onChang
   return (
     <div className="panel mb-6">
       <div className="panel-header">✅ Действия</div>
-      <div className="panel-body space-y-4">
+      <div className="panel-body">
         {actions.map((action) => {
           const device = devices.find(d => d.ieee_addr === action.device);
-          const ep = device?.endpoints.find(e => e.id === parseInt(action.ep));
+          //const ep = device?.endpoints.find(e => e.id === parseInt(action.ep));
           const cluster = getClusterOptions(device, action.ep).find(c => c.id === parseInt(action.cluster));
           const cmd = getCommandById(device, action.ep, cluster?.id, action.cmd);
 
           return (
-            <div key={action.id} className="bg-gray-800/40 p-4 rounded border border-gray-700 relative">
+            <div key={action.id} className="rule-action-item">
               {/* Тип действия */}
-              <div className="form-row mb-3">
-                <label className="form-label">Тип</label>
+              <div className="rule-action-header">
+                <label>Тип действия:</label>
                 <select
                   value={action.type}
                   onChange={(e) => {
@@ -65,7 +65,6 @@ export default function RuleEditorActions({ devices, variables, actions, onChang
                     }
                     onChange(action.id, 'type', newType);
                   }}
-                  className="form-input"
                 >
                   {actionTypes.map(act => (
                     <option key={act.value} value={act.value}>{act.label}</option>
@@ -73,22 +72,18 @@ export default function RuleEditorActions({ devices, variables, actions, onChang
                 </select>
               </div>
 
-              {/* Блок "Изменить переменную" */}
-              {/* Блок "Изменить переменную" */}
+              {/* Блок: Изменить переменную */}
               {action.type === 'set_var' && (
-                <div className="space-y-3 ml-4 border-l-2 border-gray-700 pl-4">
+                <div style={{ marginLeft: '20px', paddingLeft: '20px', borderLeft: '2px solid #333' }}>
                   <div className="form-row">
-                    <label className="form-label">Переменная</label>
+                    <label>Переменная</label>
                     <select
                       value={action.target || ''}
                       onChange={(e) => {
                         const guid = e.target.value;
-                        const variable = variables.find(v => v.guid === guid);
                         onChange(action.id, 'target', guid);
-                        // Автоматически сбрасываем значение при смене переменной
                         onChange(action.id, 'value', '');
                       }}
-                      className="form-input"
                     >
                       <option value="">Выберите</option>
                       {variables.map(v => (
@@ -98,62 +93,54 @@ export default function RuleEditorActions({ devices, variables, actions, onChang
                   </div>
 
                   {action.target && (() => {
-                  // Используем тип из действия (сохранённый), а не из текущей переменной
-                  const dataType = action.dataType !== undefined 
-                    ? action.dataType 
-                    : (variables.find(v => v.guid === action.target)?.type ?? 0x20);
-
-                  return (
-                    <>
-                      <div className="form-row">
-                        <label className="form-label">Тип</label>
-                        <div className="form-static-text font-mono text-green-400">
-                          {formatDataType(dataType)}
+                    const dataType = action.dataType ?? variables.find(v => v.guid === action.target)?.type ?? 0x20;
+                    return (
+                      <>
+                        <div className="form-row">
+                          <label>Тип</label>
+                          <span style={{ fontFamily: 'monospace', color: '#4ade80' }}>
+                            {formatDataType(dataType)}
+                          </span>
                         </div>
-                      </div>
-
-                      <div className="form-row">
-                        <label className="form-label">Значение</label>
-                        {dataType === 0x42 || dataType === 0x43 ? (
-                          <input
-                            type="text"
-                            value={action.value || ''}
-                            onChange={(e) => onChange(action.id, 'value', e.target.value)}
-                            placeholder="Введите строку"
-                            className="form-input"
-                          />
-                        ) : (
-                          <input
-                            type="number"
-                            value={action.value || ''}
-                            onChange={(e) => onChange(action.id, 'value', e.target.value)}
-                            placeholder="1, 255..."
-                            className="form-input"
-                            min="0"
-                            max="65535"
-                          />
-                        )}
-                      </div>
-                    </>
-                  );
-                })()}
+                        <div className="form-row">
+                          <label>Значение</label>
+                          {dataType === 0x42 || dataType === 0x43 ? (
+                            <input
+                              type="text"
+                              value={action.value || ''}
+                              onChange={(e) => onChange(action.id, 'value', e.target.value)}
+                              placeholder="Введите строку"
+                            />
+                          ) : (
+                            <input
+                              type="number"
+                              value={action.value || ''}
+                              onChange={(e) => onChange(action.id, 'value', e.target.value)}
+                              placeholder="1, 255..."
+                              min="0"
+                              max="65535"
+                            />
+                          )}
+                        </div>
+                      </>
+                    );
+                  })()}
                 </div>
               )}
 
-              {/* Блок "Отправить команду устройству" */}
+              {/* Блок: Отправить команду */}
               {action.type === 'send_cmd_device' && (
-                <div className="space-y-3 ml-4">
+                <div style={{ marginLeft: '20px' }}>
                   <div className="form-row">
-                    <label className="form-label">Устройство</label>
+                    <label>Устройство</label>
                     <select
-                      value={action.device}
+                      value={action.device || ''}
                       onChange={(e) => {
                         onChange(action.id, 'device', e.target.value);
                         onChange(action.id, 'ep', '');
                         onChange(action.id, 'cluster', '');
                         onChange(action.id, 'cmd', '');
                       }}
-                      className="form-input"
                     >
                       <option value="">Выберите</option>
                       {devices.map(d => (
@@ -165,16 +152,15 @@ export default function RuleEditorActions({ devices, variables, actions, onChang
                   </div>
 
                   <div className="form-row">
-                    <label className="form-label">Эндпоинт</label>
+                    <label>Эндпоинт</label>
                     <select
                       value={action.ep || ''}
+                      disabled={!action.device}
                       onChange={(e) => {
                         onChange(action.id, 'ep', e.target.value);
                         onChange(action.id, 'cluster', '');
                         onChange(action.id, 'cmd', '');
                       }}
-                      disabled={!action.device}
-                      className="form-input"
                     >
                       <option value="">EP</option>
                       {device?.endpoints.map(ep => (
@@ -184,15 +170,14 @@ export default function RuleEditorActions({ devices, variables, actions, onChang
                   </div>
 
                   <div className="form-row">
-                    <label className="form-label">Кластер</label>
+                    <label>Кластер</label>
                     <select
                       value={action.cluster || ''}
+                      disabled={!action.ep}
                       onChange={(e) => {
                         onChange(action.id, 'cluster', e.target.value);
                         onChange(action.id, 'cmd', '');
                       }}
-                      disabled={!action.ep}
-                      className="form-input"
                     >
                       <option value="">Кластер</option>
                       {getClusterOptions(device, action.ep).map(c => (
@@ -204,9 +189,10 @@ export default function RuleEditorActions({ devices, variables, actions, onChang
                   </div>
 
                   <div className="form-row">
-                    <label className="form-label">Команда</label>
+                    <label>Команда</label>
                     <select
                       value={action.cmd || ''}
+                      disabled={!action.cluster}
                       onChange={(e) => {
                         const newCmdGuid = e.target.value;
                         onChange(action.id, 'cmd', newCmdGuid);
@@ -219,8 +205,6 @@ export default function RuleEditorActions({ devices, variables, actions, onChang
                           onChange(action.id, 'params', emptyParams);
                         }
                       }}
-                      disabled={!action.cluster}
-                      className="form-input"
                     >
                       <option value="">Выберите команду</option>
                       {cluster && getCommandOptions(cluster).map(cmd => (
@@ -229,51 +213,51 @@ export default function RuleEditorActions({ devices, variables, actions, onChang
                     </select>
                   </div>
 
-                  {/* Параметры команды */}
+                  {/* Параметры */}
                   {action.cmd && cmd?.params?.length > 0 && (
-                    <div className="mt-2 ml-2">
-                      <table className="w-full text-xs border-collapse">
-                        <thead>
-                          <tr className="text-left text-gray-500">
-                            <th>Параметр</th>
-                            <th>Тип</th>
-                            <th>Ввод</th>
+                    <table style={{ width: '100%', marginTop: '8px', fontSize: '12px' }}>
+                      <thead>
+                        <tr style={{ color: '#999', textAlign: 'left' }}>
+                          <th>Параметр</th>
+                          <th>Тип</th>
+                          <th>Ввод</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {cmd.params.map((param, i) => (
+                          <tr key={i}>
+                            <td style={{ padding: '4px 0', color: '#ccc' }}>{param.name}</td>
+                            <td style={{ color: '#777' }}>{formatDataType(param.type)}</td>
+                            <td>
+                              <input
+                                type="text"
+                                value={action.params[param.name] || ''}
+                                onChange={(e) => onParamChange(action.id, param.name, e.target.value)}
+                                style={{ width: '100%', padding: '4px', fontSize: '12px' }}
+                              />
+                            </td>
                           </tr>
-                        </thead>
-                        <tbody>
-                          {cmd.params.map((param, i) => (
-                            <tr key={i}>
-                              <td className="py-1 text-gray-300">{param.name}</td>
-                              <td className="py-1 text-gray-500">{formatDataType(param.type)}</td>
-                              <td className="py-1">
-                                <input
-                                  type="text"
-                                  value={action.params[param.name] || ''}
-                                  onChange={(e) => onParamChange(action.id, param.name, e.target.value)}
-                                  className="form-input text-xs px-2 py-1 h-6"
-                                  style={{ fontSize: '11px' }}
-                                />
-                              </td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
+                        ))}
+                      </tbody>
+                    </table>
                   )}
                 </div>
               )}
 
+              {/* Кнопка удаления */}
               <button
+                type="button"
                 onClick={() => onRemove(action.id)}
-                className="absolute top-2 right-2 text-red-400 hover:text-red-300 text-lg"
+                aria-label="Удалить действие"
+                className="rule-action-remove"
               >
-                ✕
+                ×
               </button>
             </div>
           );
         })}
 
-        <button onClick={onAdd} className="btn-primary text-xs px-3 py-1">
+        <button onClick={onAdd} className="btn-add-action">
           + Добавить действие
         </button>
       </div>
